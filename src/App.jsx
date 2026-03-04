@@ -505,33 +505,33 @@ function ScannerModal({ productos, onClose, onDetect }) {
         setEstado("escaneando");
 
         await reader.decodeFromVideoDevice(
-  undefined, // CAMBIO 1: 'undefined' hace que el navegador gestione los permisos y elija la cámara trasera automáticamente
+  undefined, // CAMBIO 1: Usar 'undefined' permite que el navegador elija la cámara trasera automáticamente
   videoRef.current,
   (result, err) => {
     if (cancelled) return;
 
     if (result) {
-      // CAMBIO 2: En la librería @zxing/library se usa .text o .getText() dependiendo de la versión
-      // Usamos .text que es el estándar más moderno
-      const codigo = result.text || result.getText(); 
+      // CAMBIO 2: Accedemos directamente a la propiedad .text del resultado
+      const codigo = result.text; 
       
-      if (codigo === ultimoCod) return; // Evita que un mismo petardo se añada 50 veces por segundo
+      if (codigo === ultimoCod) return; // Evita duplicados rápidos
       setUltimoCod(codigo);
 
       // Buscar en catálogo
       const prod = productos.find(p => p.activo && p.codigo === codigo);
       
       if (prod) {
-        playBeep(); // Sonido de éxito
-        if (navigator.vibrate) navigator.vibrate(80); // Vibración en el móvil
-        onDetect(prod); // Lo añade al carrito
+        if (typeof playBeep === 'function') playBeep(); 
+        if (navigator.vibrate) navigator.vibrate(80); 
+        onDetect(prod); // Añade el petardo al ticket
       } else {
-        // Si el código no existe en tu lista de PRODUCTOS_INICIAL
+        // Si el código no está en la lista
         setManual(codigo);
-        setErrMsg("Código " + codigo + " no encontrado en el inventario.");
+        setErrMsg("Código " + codigo + " no encontrado.");
         setTimeout(() => setErrMsg(""), 3000);
       }
     }
+    // El error (err) lo ignoramos para que no ensucie la consola mientras busca
   }
 );
       } catch(e) {
