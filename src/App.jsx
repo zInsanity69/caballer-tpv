@@ -476,7 +476,7 @@ function ScannerModal({ productos, onClose, onDetect }) {
       try {
         const hints = new Map();
         // Formatos EAN-13, EAN-8, Code128, Code39
-        const { BarcodeFormat, BrowserMultiFormatReader } = window.ZXing;
+        const { BrowserMultiFormatReader } = window.ZXing;
         hints.set(2, [
           BarcodeFormat.EAN_13,
           BarcodeFormat.EAN_8,
@@ -505,30 +505,35 @@ function ScannerModal({ productos, onClose, onDetect }) {
         setEstado("escaneando");
 
         await reader.decodeFromVideoDevice(
-          camTrasera.deviceId,
-          videoRef.current,
-          (result, err) => {
-            if (cancelled) return;
-            if (result) {
-              const codigo = result.getText();
-              if (codigo === ultimoCod) return; // evitar duplicados
-              setUltimoCod(codigo);
+  undefined, // CAMBIO 1: 'undefined' hace que el navegador gestione los permisos y elija la cámara trasera automáticamente
+  videoRef.current,
+  (result, err) => {
+    if (cancelled) return;
 
-              // Buscar en catalogo
-              const prod = productos.find(p => p.activo && p.codigo === codigo);
-              if (prod) {
-                playBeep();
-                if (navigator.vibrate) navigator.vibrate(80);
-                onDetect(prod);
-              } else {
-                // Codigo leido pero no en catalogo — mostrar el codigo para busqueda manual
-                setManual(codigo);
-                setErrMsg("Codigo " + codigo + " no esta en el catalogo. Buscalo manualmente.");
-                setTimeout(() => setErrMsg(""), 4000);
-              }
-            }
-          }
-        );
+    if (result) {
+      // CAMBIO 2: En la librería @zxing/library se usa .text o .getText() dependiendo de la versión
+      // Usamos .text que es el estándar más moderno
+      const codigo = result.text || result.getText(); 
+      
+      if (codigo === ultimoCod) return; // Evita que un mismo petardo se añada 50 veces por segundo
+      setUltimoCod(codigo);
+
+      // Buscar en catálogo
+      const prod = productos.find(p => p.activo && p.codigo === codigo);
+      
+      if (prod) {
+        playBeep(); // Sonido de éxito
+        if (navigator.vibrate) navigator.vibrate(80); // Vibración en el móvil
+        onDetect(prod); // Lo añade al carrito
+      } else {
+        // Si el código no existe en tu lista de PRODUCTOS_INICIAL
+        setManual(codigo);
+        setErrMsg("Código " + codigo + " no encontrado en el inventario.");
+        setTimeout(() => setErrMsg(""), 3000);
+      }
+    }
+  }
+);
       } catch(e) {
         if (!cancelled) {
           setEstado("error");
