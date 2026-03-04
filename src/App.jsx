@@ -295,7 +295,9 @@ body{background:var(--bg);color:var(--tx);font-family:'DM Sans',sans-serif;min-h
 video{width:100%;height:100%;object-fit:cover;border-radius:calc(var(--r) - 2px)}
 .sf{position:absolute;inset:20%;border:3px solid var(--ac);border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.5)}
 .sl{position:absolute;top:0;left:0;right:0;height:3px;background:var(--ac);animation:sc 2s linear infinite}
-@keyframes sc{0%{top:20%}100%{top:80%}}
+@keyframes sc{0%{opacity:0;transform:translateX(-30%)}50%{opacity:1;transform:translateX(30%)}100%{opacity:0;transform:translateX(90%)}}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .mi{display:flex;gap:7px;margin-top:9px}
 .mi input{flex:1;background:var(--s2);border:1px solid var(--bd);border-radius:var(--rs);padding:9px 13px;color:var(--tx);font-size:.9rem;outline:none;font-family:'DM Sans',sans-serif}
 .mi input:focus{border-color:var(--ac)}
@@ -437,58 +439,186 @@ function AperturaCaja({ usuario, casetas, cajaExistente, onAbrir, onUnirse }) {
 }
 
 // ============================================================
-// SCANNER MODAL
+// SCANNER MODAL — usa @zxing/browser para lectura EAN real
+// Se carga dinamicamente desde CDN para no necesitar npm
 // ============================================================
 function ScannerModal({ productos, onClose, onDetect }) {
   const videoRef = useRef(null);
   const [manual, setManual] = useState("");
-  const [camErr, setCamErr] = useState("");
+  const [estado, setEstado] = useState("iniciando"); // iniciando | escaneando | error
+  const [errMsg, setErrMsg] = useState("");
+  const [ultimoCod, setUltimoCod] = useState("");
+  const readerRef = useRef(null);
   const streamRef = useRef(null);
 
   useEffect(() => {
-    let active = true;
-    navigator.mediaDevices?.getUserMedia({ video: { facingMode: "environment" } })
-      .then(s => {
-        if (!active) { s.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-      })
-      .catch(() => setCamErr("No se pudo acceder a la camara. Usa busqueda manual."));
-    return () => { active = false; streamRef.current?.getTracks().forEach(t => t.stop()); };
+    let cancelled = false;
+
+    const iniciarScanner = async () => {
+      // Cargar ZXing desde CDN si no esta disponible
+      if (!window.ZXingBrowser) {
+        try {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "https://unpkg.com/@zxing/browser@0.1.4/umd/index.min.js";
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        } catch(e) {
+          if (!cancelled) { setEstado("error"); setErrMsg("No se pudo cargar el lector. Usa busqueda manual."); }
+          return;
+        }
+      }
+
+      if (cancelled) return;
+
+      try {
+        const hints = new Map();
+        // Formatos EAN-13, EAN-8, Code128, Code39
+        const { BarcodeFormat, BrowserMultiFormatReader } = window.ZXingBrowser;
+        hints.set(2, [
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+        ]);
+
+        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 });
+        readerRef.current = reader;
+
+        // Obtener camara trasera
+        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+        const camTrasera = devices.find(d =>
+          d.label.toLowerCase().includes("back") ||
+          d.label.toLowerCase().includes("rear") ||
+          d.label.toLowerCase().includes("trasera") ||
+          d.label.toLowerCase().includes("environment")
+        ) || devices[devices.length - 1] || devices[0];
+
+        if (!camTrasera) {
+          setEstado("error"); setErrMsg("No se encontro camara disponible.");
+          return;
+        }
+
+        if (cancelled) return;
+        setEstado("escaneando");
+
+        await reader.decodeFromVideoDevice(
+          camTrasera.deviceId,
+          videoRef.current,
+          (result, err) => {
+            if (cancelled) return;
+            if (result) {
+              const codigo = result.getText();
+              if (codigo === ultimoCod) return; // evitar duplicados
+              setUltimoCod(codigo);
+
+              // Buscar en catalogo
+              const prod = productos.find(p => p.activo && p.codigo === codigo);
+              if (prod) {
+                playBeep();
+                if (navigator.vibrate) navigator.vibrate(80);
+                onDetect(prod);
+              } else {
+                // Codigo leido pero no en catalogo — mostrar el codigo para busqueda manual
+                setManual(codigo);
+                setErrMsg("Codigo " + codigo + " no esta en el catalogo. Buscalo manualmente.");
+                setTimeout(() => setErrMsg(""), 4000);
+              }
+            }
+          }
+        );
+      } catch(e) {
+        if (!cancelled) {
+          setEstado("error");
+          setErrMsg(e.message?.includes("Permission") || e.name === "NotAllowedError"
+            ? "Permiso de camara denegado. Activa la camara en los ajustes del navegador."
+            : "Error al iniciar la camara: " + (e.message || e.name));
+        }
+      }
+    };
+
+    iniciarScanner();
+
+    return () => {
+      cancelled = true;
+      try { readerRef.current?.reset(); } catch(e) {}
+      try { streamRef.current?.getTracks().forEach(t => t.stop()); } catch(e) {}
+    };
   }, []);
 
-  const find = (q) => {
-    const p = productos.find(p => p.activo && (p.codigo === q.trim() || p.nombre.toLowerCase().includes(q.toLowerCase().trim())));
+  const buscarManual = () => {
+    const q = manual.trim();
+    if (!q) return;
+    const p = productos.find(p => p.activo && (
+      p.codigo === q ||
+      p.nombre.toLowerCase().includes(q.toLowerCase())
+    ));
     if (p) { playBeep(); onDetect(p); }
-    else setCamErr("Producto no encontrado: " + q);
+    else setErrMsg("No encontrado: " + q);
   };
 
   return (
     <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="mc">
         <div className="mt">Escanear Producto</div>
-        <div className="scp">
-          {camErr ? <span style={{padding:14,textAlign:"center"}}>{camErr}</span> : (
-            <><video ref={videoRef} autoPlay playsInline muted/><div className="sf"><div className="sl"/></div></>
+
+        {/* Visor de camara */}
+        <div className="scp" style={{position:"relative",background:"#000"}}>
+          <video ref={videoRef} autoPlay playsInline muted style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:"calc(var(--r) - 2px)"}}/>
+
+          {/* Marco de escaneo */}
+          {estado === "escaneando" && (
+            <>
+              <div style={{position:"absolute",inset:"15%",border:"3px solid var(--ac)",borderRadius:12,boxShadow:"0 0 0 9999px rgba(0,0,0,.45)",pointerEvents:"none"}}/>
+              <div style={{position:"absolute",top:"15%",left:"15%",right:"15%",height:3,background:"linear-gradient(90deg,transparent,var(--ac),transparent)",animation:"sc 1.8s ease-in-out infinite",pointerEvents:"none"}}/>
+            </>
+          )}
+
+          {/* Estado iniciando */}
+          {estado === "iniciando" && (
+            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,.7)",gap:10}}>
+              <div style={{fontSize:"2rem",animation:"spin 1s linear infinite"}}>⟳</div>
+              <span style={{fontSize:".82rem",color:"var(--tx2)"}}>Iniciando camara...</span>
+            </div>
+          )}
+
+          {/* Error camara */}
+          {estado === "error" && (
+            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,.85)",gap:8,padding:16,textAlign:"center"}}>
+              <span style={{fontSize:"1.8rem"}}>📷</span>
+              <span style={{fontSize:".82rem",color:"var(--red)"}}>{errMsg}</span>
+            </div>
           )}
         </div>
-        <div style={{fontSize:".76rem",color:"var(--tx2)",textAlign:"center",margin:"5px 0"}}>Apunta la camara al codigo EAN</div>
-        <div className="mi">
-          <input placeholder="Codigo EAN o nombre..." value={manual} onChange={e=>setManual(e.target.value)} onKeyDown={e=>e.key==="Enter"&&find(manual)} autoFocus/>
-          <button className="bm" onClick={()=>find(manual)}>Buscar</button>
-        </div>
-        {camErr && camErr.startsWith("Producto") && <div className="err-box" style={{marginTop:10}}>{camErr}</div>}
-        <div style={{marginTop:12}}>
-          <div style={{fontSize:".7rem",color:"var(--tx2)",marginBottom:6}}>Simulacion rapida:</div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-            {productos.filter(p=>p.activo).slice(0,8).map(p=>(
-              <button key={p.id} onClick={()=>{playBeep();onDetect(p);}} style={{background:"var(--s2)",border:"1px solid var(--bd)",borderRadius:6,padding:"3px 8px",color:"var(--tx)",fontSize:".7rem",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
-                {p.nombre.split(" ").slice(0,2).join(" ")}
-              </button>
-            ))}
+
+        {/* Indicador estado */}
+        {estado === "escaneando" && (
+          <div style={{textAlign:"center",fontSize:".75rem",color:"var(--green)",margin:"6px 0",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            <span style={{width:7,height:7,borderRadius:"50%",background:"var(--green)",display:"inline-block",animation:"pulse 1s ease-in-out infinite"}}/>
+            Leyendo codigos EAN en tiempo real...
           </div>
+        )}
+
+        {/* Error de producto no encontrado */}
+        {errMsg && estado !== "error" && (
+          <div className="err-box" style={{marginTop:6,marginBottom:0}}>{errMsg}</div>
+        )}
+
+        {/* Busqueda manual */}
+        <div style={{marginTop:10,fontSize:".75rem",color:"var(--tx2)",marginBottom:5}}>O introduce el codigo / nombre manualmente:</div>
+        <div className="mi">
+          <input
+            placeholder="Codigo EAN o nombre del producto..."
+            value={manual}
+            onChange={e=>setManual(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&buscarManual()}
+          />
+          <button className="bm" onClick={buscarManual}>Buscar</button>
         </div>
-        <button className="bs" onClick={onClose}>Cancelar</button>
+
+        <button className="bs" style={{marginTop:12}} onClick={onClose}>Cerrar escaner</button>
       </div>
     </div>
   );
