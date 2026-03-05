@@ -6,6 +6,7 @@ import {
   getPerfiles, updatePerfil,
   getStatsAdmin, getTicketsAdmin,
   setStock, getStockCaseta,
+  crearUsuario,
 } from '../lib/api.js'
 import { fmt } from '../lib/precios.js'
 
@@ -357,6 +358,7 @@ function GestionOfertas() {
 function GestionUsuarios({ casetas }) {
   const [perfiles, setPerfiles] = useState([])
   const [loading,  setLoading]  = useState(true)
+  const [saving,   setSaving]   = useState(false)
   const [toast,    setToast]    = useState(null)
   const [editId,   setEditId]   = useState(null)
   const F0 = { nombre: '', email: '', password: '', rol: 'EMPLEADO', caseta_id: '' }
@@ -364,7 +366,7 @@ function GestionUsuarios({ casetas }) {
   const [msg,  setMsg]  = useState(null)
 
   const showToast = (txt, type = 'ok') => { setToast({ msg: txt, type }); setTimeout(() => setToast(null), 3000) }
-  const showMsg   = (txt, ok = true)   => { setMsg({ txt, ok }); setTimeout(() => setMsg(null), 3000) }
+  const showMsg   = (txt, ok = true)   => { setMsg({ txt, ok }); setTimeout(() => setMsg(null), 4000) }
 
   useEffect(() => {
     getPerfiles().then(setPerfiles).finally(() => setLoading(false))
@@ -372,26 +374,32 @@ function GestionUsuarios({ casetas }) {
 
   const guardar = async () => {
     if (!form.nombre.trim() || !form.email.trim()) { showMsg('Nombre y email son obligatorios', false); return }
-    if (!editId && !form.password.trim()) { showMsg('La contraseña es obligatoria para nuevos usuarios', false); return }
+    if (!editId && !form.password.trim()) { showMsg('La contraseña es obligatoria', false); return }
     if (form.rol === 'EMPLEADO' && !form.caseta_id) { showMsg('El empleado necesita una caseta asignada', false); return }
-
+    setSaving(true)
     try {
       if (editId) {
         const cambios = { nombre: form.nombre, rol: form.rol, caseta_id: form.caseta_id || null }
         await updatePerfil(editId, cambios)
-        setPerfiles(prev => prev.map(p => p.id === editId ? { ...p, ...cambios, casetas: casetas.find(c => c.id === form.caseta_id) } : p))
-        showMsg('Usuario actualizado')
+        setPerfiles(prev => prev.map(p => p.id === editId
+          ? { ...p, ...cambios, casetas: casetas.find(c => c.id === form.caseta_id) }
+          : p
+        ))
+        showMsg('Usuario actualizado correctamente ✓')
       } else {
-        // Crear usuario en Supabase Auth
-        // NOTA: Para crear usuarios desde el frontend se necesita
-        // que el usuario se registre, o usar una Edge Function con service_role.
-        // Aquí mostramos las instrucciones.
-        showMsg('Para crear usuarios: ve a Supabase Dashboard > Authentication > Users > Add user. Luego añade el perfil desde SQL.', false)
-        return
+        const nuevo = await crearUsuario(form)
+        setPerfiles(prev => [...prev, {
+          ...nuevo,
+          activo: true,
+          casetas: casetas.find(c => c.id === nuevo.caseta_id),
+        }])
+        showMsg('Usuario creado correctamente ✓')
       }
       setForm(F0); setEditId(null)
     } catch (e) {
       showMsg(e.message, false)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -406,50 +414,59 @@ function GestionUsuarios({ casetas }) {
     setEditId(p.id)
   }
 
+  const cancelar = () => { setEditId(null); setForm(F0); setMsg(null) }
+
   if (loading) return <div className="loading-row"><div className="spin-sm" />Cargando...</div>
 
   return (
     <>
       {toast && <Toast msg={toast.msg} type={toast.type} />}
-      <div className="stit">{editId ? '✏️ Editar Usuario' : '👤 Gestión de Usuarios'}</div>
+      <div className="stit">{editId ? '✏️ Editar Usuario' : '➕ Nuevo Usuario'}</div>
 
-      <div className="info-box">
-        <strong style={{ color: 'var(--gold)' }}>Para crear nuevos usuarios:</strong><br />
-        Ve a <strong>Supabase Dashboard → Authentication → Users → Add user</strong>. Crea el usuario con email y contraseña.<br />
-        Luego ve a <strong>SQL Editor</strong> y ejecuta:<br />
-        <code style={{ background: 'var(--s3)', padding: '4px 8px', borderRadius: 4, fontSize: '.78rem', display: 'block', marginTop: 6 }}>
-          INSERT INTO perfiles (id, nombre, rol, caseta_id) VALUES ('UUID-del-usuario', 'Nombre', 'EMPLEADO', 'UUID-caseta');
-        </code>
-      </div>
+      {msg && <div className={msg.ok ? 'ok-box' : 'err-box'}>{msg.txt}</div>}
 
-      {editId && (
-        <>
-          {msg && <div className={msg.ok ? 'ok-box' : 'err-box'}>{msg.txt}</div>}
-          <div className="iform">
-            <div className="frow">
-              <div className="fg"><label>Nombre</label><input value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })} /></div>
-              <div className="fg"><label>Rol</label>
-                <select value={form.rol} onChange={e => setForm({ ...form, rol: e.target.value, caseta_id: e.target.value === 'ADMIN' ? '' : form.caseta_id })}>
-                  <option value="EMPLEADO">Empleado</option>
-                  <option value="ADMIN">Administrador</option>
-                </select>
-              </div>
-              {form.rol === 'EMPLEADO' && (
-                <div className="fg"><label>Caseta</label>
-                  <select value={form.caseta_id} onChange={e => setForm({ ...form, caseta_id: e.target.value })}>
-                    <option value="">-- Seleccionar --</option>
-                    {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                  </select>
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 9 }}>
-              <button className="btn-add" onClick={guardar}>Guardar cambios</button>
-              <button className="btn-s" style={{ width: 'auto', marginTop: 0 }} onClick={() => { setEditId(null); setForm(F0) }}>Cancelar</button>
-            </div>
+      <div className="iform">
+        <div className="frow">
+          <div className="fg">
+            <label>Nombre completo</label>
+            <input value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })} placeholder="María García" />
           </div>
-        </>
-      )}
+          {!editId && (
+            <div className="fg">
+              <label>Email</label>
+              <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="maria@lapetarderia.es" />
+            </div>
+          )}
+          {!editId && (
+            <div className="fg">
+              <label>Contraseña</label>
+              <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="Mínimo 6 caracteres" />
+            </div>
+          )}
+          <div className="fg">
+            <label>Rol</label>
+            <select value={form.rol} onChange={e => setForm({ ...form, rol: e.target.value, caseta_id: e.target.value === 'ADMIN' ? '' : form.caseta_id })}>
+              <option value="EMPLEADO">Empleado — acceso solo al TPV</option>
+              <option value="ADMIN">Administrador — acceso completo</option>
+            </select>
+          </div>
+          {form.rol === 'EMPLEADO' && (
+            <div className="fg">
+              <label>Caseta asignada</label>
+              <select value={form.caseta_id} onChange={e => setForm({ ...form, caseta_id: e.target.value })}>
+                <option value="">-- Seleccionar caseta --</option>
+                {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 9 }}>
+          <button className="btn-add" onClick={guardar} disabled={saving}>
+            {saving ? 'Guardando...' : editId ? 'Guardar cambios' : 'Crear usuario'}
+          </button>
+          {editId && <button className="btn-s" style={{ width: 'auto', marginTop: 0 }} onClick={cancelar}>Cancelar</button>}
+        </div>
+      </div>
 
       <div className="stit">Usuarios del sistema ({perfiles.length})</div>
       <div className="tw">
@@ -465,7 +482,8 @@ function GestionUsuarios({ casetas }) {
                 <td>
                   <div className="acell">
                     <button className="btn-edit" onClick={() => editar(p)}>Editar</button>
-                    <button className="btn-tog" style={{ color: p.activo ? 'var(--gold)' : 'var(--green)' }} onClick={() => toggleActivo(p.id, p.activo)}>
+                    <button className="btn-tog" style={{ color: p.activo ? 'var(--gold)' : 'var(--green)' }}
+                      onClick={() => toggleActivo(p.id, p.activo)}>
                       {p.activo ? 'Desact.' : 'Activar'}
                     </button>
                   </div>

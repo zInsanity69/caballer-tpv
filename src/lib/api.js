@@ -129,20 +129,23 @@ export async function getPerfiles() {
   return data
 }
 
-export async function crearUsuario(email, password, perfil) {
-  // Crear usuario en Auth (solo admins via service role, aquí usamos signUp con confirmación)
-  const { data: authData, error: authError } = await supabase.auth.admin
-    ? await supabase.auth.admin.createUser({ email, password, email_confirm: true })
-    : { data: null, error: new Error('Necesitas service_role key para crear usuarios') }
-
-  if (authError) throw authError
-
-  const userId = authData.user.id
-  const { error: perfilError } = await supabase
-    .from('perfiles')
-    .insert({ id: userId, ...perfil })
-  if (perfilError) throw perfilError
-  return userId
+export async function crearUsuario({ nombre, email, password, rol, caseta_id }) {
+  // Llama a la Edge Function que usa service_role internamente
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/crear-usuario`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ nombre, email, password, rol, caseta_id }),
+    }
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Error creando usuario')
+  return data
 }
 
 export async function updatePerfil(id, cambios) {
