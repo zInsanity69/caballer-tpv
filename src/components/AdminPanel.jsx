@@ -13,6 +13,7 @@ import { fmt } from '../lib/precios.js'
 const TABS = [
   ['dashboard',  '📊 Dashboard'],
   ['productos',  '📦 Productos'],
+  ['stock',      '📋 Stock'],
   ['ofertas',    '🏷 Ofertas'],
   ['usuarios',   '👥 Usuarios'],
 ]
@@ -354,6 +355,169 @@ function GestionOfertas() {
   )
 }
 
+// ─── GESTIÓN STOCK ───────────────────────────────────────────
+function GestionStock({ casetas }) {
+  const [productos,  setProductos]  = useState([])
+  const [stockData,  setStockData]  = useState({}) // { caseta_id: { producto_id: cantidad } }
+  const [casetaSel,  setCasetaSel]  = useState('')
+  const [loading,    setLoading]    = useState(true)
+  const [saving,     setSaving]     = useState(null) // producto_id que se está guardando
+  const [editVals,   setEditVals]   = useState({})   // { producto_id: valor_editado }
+  const [busq,       setBusq]       = useState('')
+  const [toast,      setToast]      = useState(null)
+
+  const showToast = (txt, type = 'ok') => { setToast({ msg: txt, type }); setTimeout(() => setToast(null), 2500) }
+
+  useEffect(() => {
+    getProductos().then(p => {
+      setProductos(p)
+      if (casetas.length) setCasetaSel(casetas[0].id)
+    }).finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    if (!casetaSel) return
+    setLoading(true)
+    getStockCaseta(casetaSel).then(stk => {
+      setStockData(prev => ({ ...prev, [casetaSel]: stk }))
+      setEditVals({})
+    }).finally(() => setLoading(false))
+  }, [casetaSel])
+
+  const stockActual = stockData[casetaSel] || {}
+
+  const guardarStock = async (productoId) => {
+    const val = editVals[productoId]
+    if (val === undefined || val === '') return
+    const cantidad = parseInt(val)
+    if (isNaN(cantidad) || cantidad < 0) { showToast('Cantidad no válida', 'error'); return }
+    setSaving(productoId)
+    try {
+      await setStock(productoId, casetaSel, cantidad)
+      setStockData(prev => ({
+        ...prev,
+        [casetaSel]: { ...prev[casetaSel], [productoId]: cantidad }
+      }))
+      setEditVals(prev => { const n = {...prev}; delete n[productoId]; return n })
+      showToast('Stock actualizado ✓')
+    } catch(e) {
+      showToast(e.message, 'error')
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const prods = productos.filter(p =>
+    !busq || p.nombre.toLowerCase().includes(busq.toLowerCase()) || p.codigo_ean?.includes(busq)
+  )
+
+  const stockColor = (n) => n === 0 ? 'var(--red)' : n < 10 ? 'var(--gold)' : 'var(--green)'
+
+  if (loading && !productos.length) return <div className="loading-row"><div className="spin-sm" />Cargando...</div>
+
+  return (
+    <>
+      {toast && <Toast msg={toast.msg} type={toast.type} />}
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: '.73rem', color: 'var(--tx2)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 5 }}>Caseta</div>
+          <div style={{ display: 'flex', gap: 7 }}>
+            {casetas.map(c => (
+              <button key={c.id}
+                onClick={() => setCasetaSel(c.id)}
+                style={{
+                  padding: '7px 14px', borderRadius: 'var(--rs)', border: '1px solid',
+                  borderColor: casetaSel === c.id ? 'var(--ac)' : 'var(--bd)',
+                  background: casetaSel === c.id ? 'rgba(255,77,28,.1)' : 'transparent',
+                  color: casetaSel === c.id ? 'var(--ac)' : 'var(--tx2)',
+                  fontSize: '.82rem', fontWeight: 600, cursor: 'pointer',
+                  fontFamily: "'DM Sans',sans-serif",
+                }}
+              >{c.nombre.replace('La Petardería ', '')}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ marginLeft: 'auto' }}>
+          <input className="si" style={{ width: 240 }} placeholder="Buscar producto..."
+            value={busq} onChange={e => setBusq(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="info-box" style={{ marginBottom: 14 }}>
+        Haz clic en la cantidad para editarla y pulsa <strong>Enter</strong> o el botón <strong>✓</strong> para guardar. Los cambios se aplican inmediatamente en el TPV.
+      </div>
+
+      {loading && <div className="loading-row"><div className="spin-sm" />Actualizando...</div>}
+
+      <div className="tw">
+        <table>
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th>Categoría</th>
+              <th>EAN</th>
+              <th style={{ textAlign: 'center' }}>Stock actual</th>
+              <th style={{ textAlign: 'center' }}>Nuevo stock</th>
+            </tr>
+          </thead>
+          <tbody>
+            {prods.map(p => {
+              const cant = stockActual[p.id] ?? 0
+              const editando = editVals[p.id] !== undefined
+              const guardando = saving === p.id
+              return (
+                <tr key={p.id}>
+                  <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                  <td style={{ color: 'var(--tx2)', fontSize: '.78rem' }}>{p.categoria}</td>
+                  <td style={{ color: 'var(--tx2)', fontSize: '.74rem', fontFamily: 'monospace' }}>{p.codigo_ean}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <span style={{
+                      fontFamily: "'Bebas Neue',sans-serif", fontSize: '1.2rem',
+                      color: stockColor(cant), minWidth: 40, display: 'inline-block'
+                    }}>{cant}</span>
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      <input
+                        type="number" min="0"
+                        value={editVals[p.id] ?? ''}
+                        placeholder={String(cant)}
+                        onChange={e => setEditVals(prev => ({ ...prev, [p.id]: e.target.value }))}
+                        onKeyDown={e => e.key === 'Enter' && guardarStock(p.id)}
+                        style={{
+                          width: 75, background: 'var(--s2)', border: '1px solid',
+                          borderColor: editando ? 'var(--ac)' : 'var(--bd)',
+                          borderRadius: 'var(--rs)', padding: '6px 9px',
+                          color: 'var(--tx)', fontSize: '.88rem', outline: 'none',
+                          fontFamily: "'DM Sans',sans-serif", textAlign: 'center',
+                        }}
+                        inputMode="numeric"
+                      />
+                      {editando && (
+                        <button
+                          onClick={() => guardarStock(p.id)}
+                          disabled={guardando}
+                          style={{
+                            width: 30, height: 30, borderRadius: '50%', border: 'none',
+                            background: 'var(--green)', color: 'white', cursor: 'pointer',
+                            fontSize: '.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            opacity: guardando ? .5 : 1,
+                          }}
+                        >{guardando ? '…' : '✓'}</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
 // ─── GESTIÓN USUARIOS ─────────────────────────────────────────
 function GestionUsuarios({ casetas }) {
   const [perfiles, setPerfiles] = useState([])
@@ -373,8 +537,9 @@ function GestionUsuarios({ casetas }) {
   }, [])
 
   const guardar = async () => {
-    if (!form.nombre.trim() || !form.email.trim()) { showMsg('Nombre y email son obligatorios', false); return }
-    if (!editId && !form.password.trim()) { showMsg('La contraseña es obligatoria', false); return }
+    if (!form.nombre.trim()) { showMsg('El nombre es obligatorio', false); return }
+    if (!editId && !form.email.trim()) { showMsg('El email es obligatorio', false); return }
+    if (!editId && !form.password.trim()) { showMsg('La contrasena es obligatoria (minimo 6 caracteres)', false); return }
     if (form.rol === 'EMPLEADO' && !form.caseta_id) { showMsg('El empleado necesita una caseta asignada', false); return }
     setSaving(true)
     try {
@@ -519,6 +684,7 @@ export default function AdminPanel({ perfil, casetas }) {
       <div className="cnt">
         {tab === 'dashboard' && <Dashboard casetas={casetas} />}
         {tab === 'productos' && <GestionProductos casetas={casetas} />}
+        {tab === 'stock'     && <GestionStock casetas={casetas} />}
         {tab === 'ofertas'   && <GestionOfertas />}
         {tab === 'usuarios'  && <GestionUsuarios casetas={casetas} />}
       </div>
