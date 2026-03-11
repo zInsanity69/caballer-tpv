@@ -648,7 +648,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               {[
                 ['todos',     'Todos',                     'var(--ac)'],
                 ['favoritos', `⭐ Favs (${favoritos.length})`, 'var(--gold)'],
-                ['ofertas',   `🏷 Ofertas (${ofertas.length})`, 'var(--green)'],
+                ['ofertas',   `🏷️ Ofertas (${ofertas.length})`, 'var(--green)'],
               ].map(([k, l, color]) => (
                 <button key={k} onClick={() => setTabTPV(k)} style={{
                   flex: 1, padding: '9px 4px', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer',

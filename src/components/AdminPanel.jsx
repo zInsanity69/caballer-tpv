@@ -17,7 +17,7 @@ const TABS = [
   ['tickets',   '🧾 Tickets'],
   ['productos', '📦 Productos'],
   ['stock',     '📋 Stock'],
-  ['ofertas',   '🏷 Ofertas'],
+  ['ofertas',   '🏷️ Ofertas'],
   ['casetas',   '🏪 Casetas'],
   ['usuarios',  '👥 Usuarios'],
 ]
@@ -574,7 +574,7 @@ function GestionStock({ casetas }) {
     return true
   })
 
-  const colStock = n => n === 0 ? 'var(--red)' : n < 10 ? 'var(--gold)' : 'var(--green)'
+  const colStock = n => n === 0 ? 'var(--red)' : n < 50 ? 'var(--gold)' : 'var(--green)'
   if (loading && !productos.length) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
   return (
