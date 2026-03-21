@@ -344,10 +344,14 @@ export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibido
       .eq('id', item.id)
   }
 
-  const hayIncidencia = itemsRecibidos.some(i =>
-    (i.notas_item && i.notas_item.trim() !== '') ||
-    i.cantidad_recibida !== i.cantidad
-  )
+  // Hay incidencia si: alguna línea tiene nota, cantidad distinta,
+  // O si hay notas generales de recepción
+  const hayIncidencia =
+    (notas && notas.trim() !== '') ||
+    itemsRecibidos.some(i =>
+      (i.notas_item && i.notas_item.trim() !== '') ||
+      (i.cantidad_recibida !== undefined && i.cantidad_recibida !== i.cantidad)
+    )
 
   await supabase.from('pedidos').update({
     estado: hayIncidencia ? 'INCIDENCIA' : 'RECIBIDO',

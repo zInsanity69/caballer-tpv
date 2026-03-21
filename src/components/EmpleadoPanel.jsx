@@ -330,7 +330,7 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
 }
 
 // ─── MODAL HISTORIAL + EDICIÓN TICKETS ───────────────────────
-function ModalHistorial({ cajaId, perfil, productos, ofertas, onClose }) {
+function ModalHistorial({ cajaId, perfil, productos, ofertas, onStockChange, onClose }) {
   const [tickets, setTickets]       = useState([])
   const [loading, setLoading]       = useState(true)
   const [expanded, setExpanded]     = useState(null)
@@ -378,6 +378,21 @@ function ModalHistorial({ cajaId, perfil, productos, ofertas, onClose }) {
     try {
       const nuevoTotal = editItems.reduce((s, i) => s + i.total_linea, 0)
       await updateTicket(editando.id, nuevoTotal, editItems)
+
+      // Ajustar stock: calcular diferencia entre items originales y nuevos
+      const itemsOriginales = editando.ticket_items || []
+      const stockDelta = {}
+      // Devolver stock de lo que había antes
+      itemsOriginales.forEach(i => {
+        stockDelta[i.producto_id] = (stockDelta[i.producto_id] || 0) + i.cantidad
+      })
+      // Restar stock de lo que queda ahora
+      editItems.forEach(i => {
+        stockDelta[i.producto_id] = (stockDelta[i.producto_id] || 0) - i.cantidad
+      })
+      // Aplicar delta al stock local (positivo = devuelto, negativo = añadido)
+      onStockChange && onStockChange(stockDelta)
+
       setTickets(prev => prev.map(t => t.id === editando.id
         ? { ...t, total: nuevoTotal, ticket_items: editItems.map(i => ({ ...i, nombre_producto: i.nombre, precio_unitario: i.precio })) }
         : t))
@@ -547,32 +562,42 @@ function ModalHistorial({ cajaId, perfil, productos, ofertas, onClose }) {
 }
 
 // ─── MODAL PEDIDO ─────────────────────────────────────────────
-function ModalPedido({ caseta, perfil, productos, onClose, onCreado, showToast }) {
-  const [items, setItems]  = useState([])
-  const [notas, setNotas]  = useState('')
-  const [busq, setBusq]    = useState('')
-  const [loading, setLoading] = useState(false)
+function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, showToast }) {
+  // Vista doble: catálogo con stock actual + lista del pedido
+  const [items, setItems]       = useState([])
+  const [notas, setNotas]       = useState('')
+  const [busq, setBusq]         = useState('')
+  const [catFiltro, setCatFiltro] = useState('Todos')
+  const [vista, setVista]       = useState('catalogo') // 'catalogo' | 'pedido'
+  const [loading, setLoading]   = useState(false)
 
-  const prodsFiltrados = productos.filter(p =>
-    busq.length > 1
-      ? p.nombre.toLowerCase().includes(busq.toLowerCase())
-      : false
-  ).slice(0, 20)
+  const cats = ['Todos', ...new Set(productos.map(p => p.categoria))]
 
-  const addItem = (p) => {
+  const prodsFiltrados = productos.filter(p => {
+    const bOk = !busq || p.nombre.toLowerCase().includes(busq.toLowerCase())
+    const cOk = catFiltro === 'Todos' || p.categoria === catFiltro
+    return bOk && cOk
+  })
+
+  const cantidadPedida = (productoId) => items.find(i => i.producto_id === productoId)?.cantidad || 0
+
+  const addItem = (p, delta = 1) => {
     setItems(prev => {
       const idx = prev.findIndex(i => i.producto_id === p.id)
       if (idx >= 0) {
-        const n = [...prev]; n[idx] = { ...n[idx], cantidad: n[idx].cantidad + 1 }; return n
+        const nuevaCant = prev[idx].cantidad + delta
+        if (nuevaCant <= 0) return prev.filter(i => i.producto_id !== p.id)
+        const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
       }
-      return [...prev, { producto_id: p.id, nombre: p.nombre, cantidad: 1 }]
+      if (delta <= 0) return prev
+      return [...prev, { producto_id: p.id, nombre: p.nombre, cantidad: delta }]
     })
-    setBusq('')
   }
 
   const setQty = (id, val) => {
-    const q = Math.max(1, parseInt(val) || 1)
-    setItems(prev => prev.map(i => i.producto_id === id ? { ...i, cantidad: q } : i))
+    const q = Math.max(0, parseInt(val) || 0)
+    if (q === 0) setItems(prev => prev.filter(i => i.producto_id !== id))
+    else setItems(prev => prev.map(i => i.producto_id === id ? { ...i, cantidad: q } : i))
   }
 
   const del = (id) => setItems(prev => prev.filter(i => i.producto_id !== id))
@@ -590,64 +615,145 @@ function ModalPedido({ caseta, perfil, productos, onClose, onCreado, showToast }
 
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
         <div className="mt-modal">📦 Nuevo Pedido</div>
-        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 14 }}>
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
           {caseta.nombre} · {perfil.nombre}
         </div>
 
-        {/* Buscador de productos */}
-        <div style={{ position: 'relative', marginBottom: 10 }}>
-          <input className="si" placeholder="Buscar producto para añadir..."
-            value={busq} onChange={e => setBusq(e.target.value)} />
-          {prodsFiltrados.length > 0 && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', maxHeight: 200, overflowY: 'auto' }}>
-              {prodsFiltrados.map(p => (
-                <div key={p.id} onClick={() => addItem(p)} style={{
-                  padding: '9px 13px', cursor: 'pointer', fontSize: '.85rem',
-                  borderBottom: '1px solid var(--bd)',
-                }} onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
-                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  {p.nombre} <span style={{ color: 'var(--tx2)', fontSize: '.75rem' }}>({p.categoria})</span>
+        {/* Tabs catálogo / resumen pedido */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--bd)', marginBottom: 10 }}>
+          <button onClick={() => setVista('catalogo')} style={{
+            flex: 1, padding: '9px 4px', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer',
+            background: 'transparent', border: 'none', fontFamily: "'DM Sans',sans-serif",
+            borderBottom: `2px solid ${vista === 'catalogo' ? 'var(--ac)' : 'transparent'}`,
+            color: vista === 'catalogo' ? 'var(--ac)' : 'var(--tx2)',
+          }}>📋 Ver productos y stock</button>
+          <button onClick={() => setVista('pedido')} style={{
+            flex: 1, padding: '9px 4px', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer',
+            background: 'transparent', border: 'none', fontFamily: "'DM Sans',sans-serif",
+            borderBottom: `2px solid ${vista === 'pedido' ? 'var(--ac)' : 'transparent'}`,
+            color: vista === 'pedido' ? 'var(--ac)' : 'var(--tx2)',
+          }}>
+            📤 Mi pedido {items.length > 0 && <span style={{ background: 'var(--ac)', color: 'white', borderRadius: 10, padding: '1px 7px', fontSize: '.7rem', marginLeft: 4 }}>{items.reduce((s, i) => s + i.cantidad, 0)}</span>}
+          </button>
+        </div>
+
+        {/* ── VISTA CATÁLOGO ── */}
+        {vista === 'catalogo' && (
+          <>
+            {/* Buscador */}
+            <input className="si" placeholder="Buscar producto..."
+              value={busq} onChange={e => setBusq(e.target.value)} style={{ marginBottom: 8 }} />
+
+            {/* Filtro categorías — scroll horizontal, no comprimido */}
+            <div style={{ overflowX: 'auto', display: 'flex', gap: 6, paddingBottom: 8, marginBottom: 6, flexShrink: 0 }}>
+              {cats.map(c => (
+                <button key={c} onClick={() => setCatFiltro(c)} style={{
+                  flexShrink: 0, padding: '5px 12px', borderRadius: 20, fontSize: '.75rem',
+                  fontWeight: 600, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                  background: catFiltro === c ? 'var(--ac)' : 'var(--s2)',
+                  border: `1px solid ${catFiltro === c ? 'var(--ac)' : 'var(--bd)'}`,
+                  color: catFiltro === c ? 'white' : 'var(--tx2)',
+                  whiteSpace: 'nowrap',
+                }}>{c}</button>
+              ))}
+            </div>
+
+            {/* Lista productos con stock */}
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {prodsFiltrados.map(p => {
+                const stockDisp = stock[p.id] ?? 0
+                const enPedido  = cantidadPedida(p.id)
+                return (
+                  <div key={p.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0',
+                    borderBottom: '1px solid var(--bd)',
+                    opacity: stockDisp === 0 ? .6 : 1,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nombre}</div>
+                      <div style={{ fontSize: '.72rem', display: 'flex', gap: 10, marginTop: 2 }}>
+                        <span style={{ color: stockDisp === 0 ? 'var(--red)' : stockDisp < 10 ? 'var(--gold)' : 'var(--green)', fontWeight: 700 }}>
+                          Stock: {stockDisp}
+                        </span>
+                        <span style={{ color: 'var(--tx2)' }}>{p.categoria}</span>
+                        <span style={{ color: 'var(--ac)' }}>{fmt(p.precio)}</span>
+                      </div>
+                    </div>
+                    {/* Controles cantidad a pedir */}
+                    {enPedido > 0 ? (
+                      <>
+                        <button className="qb" onClick={() => addItem(p, -1)}>−</button>
+                        <span style={{ minWidth: 24, textAlign: 'center', fontWeight: 700, color: 'var(--ac)', fontSize: '.9rem' }}>{enPedido}</span>
+                        <button className="qb" onClick={() => addItem(p, +1)}>+</button>
+                      </>
+                    ) : (
+                      <button onClick={() => addItem(p, 1)} style={{
+                        padding: '6px 14px', borderRadius: 'var(--rs)',
+                        background: 'rgba(255,77,28,.12)', border: '1px solid var(--ac)',
+                        color: 'var(--ac)', fontWeight: 700, cursor: 'pointer',
+                        fontSize: '.78rem', fontFamily: "'DM Sans',sans-serif",
+                        whiteSpace: 'nowrap',
+                      }}>+ Pedir</button>
+                    )}
+                  </div>
+                )
+              })}
+              {prodsFiltrados.length === 0 && (
+                <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>Sin resultados</div>
+              )}
+            </div>
+
+            {/* Botón ir al pedido */}
+            {items.length > 0 && (
+              <button className="btn-p" style={{ marginTop: 10 }} onClick={() => setVista('pedido')}>
+                Ver mi pedido ({items.length} producto{items.length !== 1 ? 's' : ''}) →
+              </button>
+            )}
+          </>
+        )}
+
+        {/* ── VISTA PEDIDO ── */}
+        {vista === 'pedido' && (
+          <>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {items.length === 0 ? (
+                <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
+                  El pedido está vacío.<br/>
+                  <span style={{ fontSize: '.78rem' }}>Vuelve al catálogo y añade productos.</span>
+                </div>
+              ) : items.map(item => (
+                <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--bd)' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '.85rem', fontWeight: 600 }}>{item.nombre}</div>
+                    <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>
+                      Stock actual: {stock[item.producto_id] ?? 0}
+                    </div>
+                  </div>
+                  <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad - 1)}>−</button>
+                  <input type="number" value={item.cantidad} min="1"
+                    onChange={e => setQty(item.producto_id, e.target.value)}
+                    style={{ width: 52, textAlign: 'center', background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '4px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
+                    inputMode="numeric" />
+                  <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad + 1)}>+</button>
+                  <button onClick={() => del(item.producto_id)} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)', background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer' }}>✕</button>
                 </div>
               ))}
             </div>
-          )}
-        </div>
 
-        {/* Lista de items */}
-        <div style={{ overflowY: 'auto', flex: 1, marginBottom: 10 }}>
-          {items.length === 0 && (
-            <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
-              Busca productos arriba para añadirlos al pedido
+            <div className="fg" style={{ marginBottom: 10, marginTop: 8 }}>
+              <label>Notas / Observaciones (opcional)</label>
+              <input className="bi" style={{ marginBottom: 0 }} value={notas} onChange={e => setNotas(e.target.value)}
+                placeholder="Ej: urgente, revisar stock de tracas..." />
             </div>
-          )}
-          {items.map(item => (
-            <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--bd)' }}>
-              <div style={{ flex: 1, fontSize: '.85rem', fontWeight: 600 }}>{item.nombre}</div>
-              <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad - 1)}>−</button>
-              <input type="number" value={item.cantidad} min="1"
-                onChange={e => setQty(item.producto_id, e.target.value)}
-                style={{ width: 52, textAlign: 'center', background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '4px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
-                inputMode="numeric" />
-              <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad + 1)}>+</button>
-              <button onClick={() => del(item.producto_id)} style={{
-                width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)',
-                background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer',
-              }}>✕</button>
-            </div>
-          ))}
-        </div>
 
-        <div className="fg" style={{ marginBottom: 10 }}>
-          <label>Notas / Observaciones (opcional)</label>
-          <input className="bi" style={{ marginBottom: 0 }} value={notas} onChange={e => setNotas(e.target.value)}
-            placeholder="Ej: urgente, faltan chispitas..." />
-        </div>
+            <button className="btn-p" disabled={loading || items.length === 0} onClick={enviar}>
+              {loading ? 'Enviando...' : `📤 Enviar pedido (${items.reduce((s,i)=>s+i.cantidad,0)} uds)`}
+            </button>
+          </>
+        )}
 
-        <button className="btn-p" disabled={loading || items.length === 0} onClick={enviar}>
-          {loading ? 'Enviando...' : `📤 Enviar pedido (${items.length} producto${items.length !== 1 ? 's' : ''})`}
-        </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
     </div>
@@ -670,12 +776,13 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
   const abrirRecepcion = (pedido) => {
     setRecibiendo(pedido)
     setRecItems(pedido.pedido_items.map(i => ({
-      id:               i.id,
-      producto_id:      i.producto_id,
-      nombre:           i.productos?.nombre || '?',
-      cantidad:         i.cantidad,
+      id:                i.id,
+      producto_id:       i.producto_id,
+      nombre:            i.productos?.nombre || '?',
+      cantidad:          i.cantidad,
       cantidad_recibida: i.cantidad,   // por defecto = lo pedido
-      notas_item:       '',
+      notas_item:        '',
+      estado:            'pendiente',  // pendiente | ok | diferencia | no_llegado
     })))
     setNotasRec('')
   }
@@ -684,9 +791,11 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
     setSaving(true)
     try {
       await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec)
-      showToast('✓ Recepción confirmada, stock actualizado')
+      const hayIncidencia = notasRec?.trim() ||
+        recItems.some(i => i.estado === 'no_llegado' || i.estado === 'diferencia' || i.notas_item?.trim())
+      showToast(hayIncidencia ? '⚠️ Recepción con incidencias — stock actualizado' : '✓ Recepción confirmada, stock actualizado')
       setPedidos(prev => prev.map(p => p.id === recibiendo.id
-        ? { ...p, estado: recItems.some(i => i.notas_item?.trim() || i.cantidad_recibida !== i.cantidad) ? 'INCIDENCIA' : 'RECIBIDO' }
+        ? { ...p, estado: hayIncidencia ? 'INCIDENCIA' : 'RECIBIDO' }
         : p))
       setRecibiendo(null)
     } catch (e) { showToast('Error: ' + e.message, 'error') }
@@ -755,45 +864,134 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
         <button className="btn-s" style={{ marginTop: 12 }} onClick={onClose}>Cerrar</button>
       </div>
 
-      {/* Modal confirmar recepción */}
+      {/* Modal confirmar recepción — rediseñado con estado por producto */}
       {recibiendo && (
         <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setRecibiendo(null)}>
-          <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+          <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
             <div className="mt-modal">📦 Confirmar Recepción</div>
-            <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
-              Anota lo que ha llegado realmente. Si hay diferencias, indícalas.
+            <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 4 }}>
+              Revisa cada producto. Confirma lo que ha llegado o marca lo que no vino.
             </div>
+            {/* Resumen rápido */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '.75rem', background: 'rgba(34,197,94,.12)', color: 'var(--green)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+                ✓ {recItems.filter(i => i.estado === 'ok').length} OK
+              </span>
+              <span style={{ fontSize: '.75rem', background: 'rgba(245,200,66,.12)', color: 'var(--gold)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+                ± {recItems.filter(i => i.estado === 'diferencia').length} con diferencia
+              </span>
+              <span style={{ fontSize: '.75rem', background: 'rgba(239,68,68,.12)', color: 'var(--red)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+                ✕ {recItems.filter(i => i.estado === 'no_llegado').length} no llegó
+              </span>
+              <span style={{ fontSize: '.75rem', background: 'var(--s2)', color: 'var(--tx2)', padding: '3px 10px', borderRadius: 20 }}>
+                ⏳ {recItems.filter(i => i.estado === 'pendiente').length} pendiente
+              </span>
+            </div>
+
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {recItems.map((item, idx) => (
-                <div key={item.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 12px', marginBottom: 8 }}>
-                  <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 6 }}>{item.nombre}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Pedido: <strong>{item.cantidad}</strong></span>
-                    <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Recibido:</span>
-                    <input type="number" value={item.cantidad_recibida} min="0"
-                      onChange={e => setRecItems(prev => prev.map((r, i) => i === idx ? { ...r, cantidad_recibida: parseInt(e.target.value) || 0 } : r))}
-                      style={{ width: 60, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '4px 8px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
-                      inputMode="numeric" />
-                    {item.cantidad_recibida !== item.cantidad && (
-                      <span style={{ fontSize: '.75rem', color: item.cantidad_recibida < item.cantidad ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>
-                        {item.cantidad_recibida > item.cantidad ? '+' : ''}{item.cantidad_recibida - item.cantidad}
-                      </span>
+              {recItems.map((item, idx) => {
+                const setBand = (estado) => setRecItems(prev => prev.map((r, i) => {
+                  if (i !== idx) return r
+                  const cantidad_recibida = estado === 'no_llegado' ? 0 : estado === 'ok' ? r.cantidad : r.cantidad_recibida
+                  return { ...r, estado, cantidad_recibida }
+                }))
+                const setQtyRec = (val) => setRecItems(prev => prev.map((r, i) => {
+                  if (i !== idx) return r
+                  const cantidad_recibida = Math.max(0, parseInt(val) || 0)
+                  const estado = cantidad_recibida === 0 ? 'no_llegado' : cantidad_recibida === r.cantidad ? 'ok' : 'diferencia'
+                  return { ...r, cantidad_recibida, estado }
+                }))
+                const setNota = (val) => setRecItems(prev => prev.map((r, i) => i !== idx ? r : { ...r, notas_item: val }))
+
+                const borderCol = item.estado === 'ok' ? 'rgba(34,197,94,.4)'
+                  : item.estado === 'diferencia' ? 'rgba(245,200,66,.4)'
+                  : item.estado === 'no_llegado' ? 'rgba(239,68,68,.4)'
+                  : 'var(--bd)'
+                const bgCol = item.estado === 'ok' ? 'rgba(34,197,94,.06)'
+                  : item.estado === 'diferencia' ? 'rgba(245,200,66,.06)'
+                  : item.estado === 'no_llegado' ? 'rgba(239,68,68,.06)'
+                  : 'var(--s2)'
+
+                return (
+                  <div key={item.id} style={{ background: bgCol, border: `1px solid ${borderCol}`, borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10 }}>
+                    {/* Nombre + cantidad pedida */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <div style={{ fontWeight: 700, fontSize: '.9rem' }}>{item.nombre}</div>
+                      <div style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>Pedido: <strong style={{ color: 'var(--tx)' }}>{item.cantidad}</strong></div>
+                    </div>
+
+                    {/* Botones de estado rápido */}
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                      <button onClick={() => setBand('ok')} style={{
+                        flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
+                        cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                        background: item.estado === 'ok' ? 'var(--green)' : 'transparent',
+                        border: `1px solid ${item.estado === 'ok' ? 'var(--green)' : 'rgba(34,197,94,.4)'}`,
+                        color: item.estado === 'ok' ? 'white' : 'var(--green)',
+                      }}>✓ Todo llegó</button>
+                      <button onClick={() => { setBand('diferencia'); }} style={{
+                        flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
+                        cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                        background: item.estado === 'diferencia' ? 'var(--gold)' : 'transparent',
+                        border: `1px solid ${item.estado === 'diferencia' ? 'var(--gold)' : 'rgba(245,200,66,.4)'}`,
+                        color: item.estado === 'diferencia' ? '#000' : 'var(--gold)',
+                      }}>± Diferencia</button>
+                      <button onClick={() => setBand('no_llegado')} style={{
+                        flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
+                        cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                        background: item.estado === 'no_llegado' ? 'var(--red)' : 'transparent',
+                        border: `1px solid ${item.estado === 'no_llegado' ? 'var(--red)' : 'rgba(239,68,68,.4)'}`,
+                        color: item.estado === 'no_llegado' ? 'white' : 'var(--red)',
+                      }}>✕ No llegó</button>
+                    </div>
+
+                    {/* Input cantidad si hay diferencia */}
+                    {item.estado === 'diferencia' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                        <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Cantidad recibida:</span>
+                        <button className="qb" onClick={() => setQtyRec(item.cantidad_recibida - 1)}>−</button>
+                        <input type="number" value={item.cantidad_recibida} min="0" max={item.cantidad * 2}
+                          onChange={e => setQtyRec(e.target.value)}
+                          style={{ width: 60, background: 'var(--s1)', border: '2px solid var(--gold)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '5px 8px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700, textAlign: 'center' }}
+                          inputMode="numeric" />
+                        <button className="qb" onClick={() => setQtyRec(item.cantidad_recibida + 1)}>+</button>
+                        <span style={{ fontSize: '.78rem', fontWeight: 700, color: item.cantidad_recibida < item.cantidad ? 'var(--red)' : 'var(--green)' }}>
+                          {item.cantidad_recibida > item.cantidad ? '+' : ''}{item.cantidad_recibida - item.cantidad}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Nota de incidencia — aparece si no es "ok" */}
+                    {item.estado !== 'ok' && item.estado !== 'pendiente' && (
+                      <input placeholder={item.estado === 'no_llegado' ? 'Ej: no venía en el pedido, pendiente de próximo envío...' : 'Ej: solo llegaron 3 de 5...'}
+                        value={item.notas_item || ''}
+                        onChange={e => setNota(e.target.value)}
+                        style={{ width: '100%', background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '7px 10px', fontSize: '.78rem', fontFamily: "'DM Sans',sans-serif", boxSizing: 'border-box' }} />
                     )}
                   </div>
-                  <input placeholder="Incidencia (opcional): faltó esto, llegó roto..."
-                    value={item.notas_item}
-                    onChange={e => setRecItems(prev => prev.map((r, i) => i === idx ? { ...r, notas_item: e.target.value } : r))}
-                    style={{ width: '100%', background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '6px 10px', fontSize: '.78rem', fontFamily: "'DM Sans',sans-serif" }} />
-                </div>
-              ))}
+                )
+              })}
             </div>
+
+            {/* Notas generales */}
             <div className="fg" style={{ marginTop: 8 }}>
-              <label>Notas generales de la recepción</label>
+              <label>Notas generales (opcional)</label>
               <input className="bi" style={{ marginBottom: 0 }} value={notasRec}
-                onChange={e => setNotasRec(e.target.value)} placeholder="Observaciones generales..." />
+                onChange={e => setNotasRec(e.target.value)} placeholder="Observaciones generales del envío..." />
             </div>
-            <button className="btn-p" style={{ marginTop: 12 }} disabled={saving} onClick={confirmarRec}>
-              {saving ? 'Guardando...' : '✓ Confirmar y actualizar stock'}
+
+            {/* Aviso si hay pendientes */}
+            {recItems.some(i => i.estado === 'pendiente') && (
+              <div style={{ fontSize: '.75rem', color: 'var(--gold)', marginTop: 8, padding: '6px 10px', background: 'rgba(245,200,66,.1)', borderRadius: 'var(--rs)' }}>
+                ⚠️ Quedan {recItems.filter(i => i.estado === 'pendiente').length} productos sin revisar. Márcalos antes de confirmar.
+              </div>
+            )}
+
+            <button className="btn-p" style={{ marginTop: 10 }} disabled={saving || recItems.some(i => i.estado === 'pendiente')}
+              onClick={confirmarRec}>
+              {saving ? 'Guardando...' : recItems.some(i => i.estado === 'pendiente')
+                ? `⏳ Revisa los ${recItems.filter(i=>i.estado==='pendiente').length} productos pendientes`
+                : '✓ Confirmar recepción y actualizar stock'}
             </button>
             <button className="btn-s" onClick={() => setRecibiendo(null)}>Cancelar</button>
           </div>
@@ -860,9 +1058,17 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
         <input className="si" placeholder="Buscar producto..."
           value={busq} onChange={e => setBusq(e.target.value)} style={{ marginBottom: 8 }} />
 
-        <div className="catbar" style={{ marginBottom: 8 }}>
+        {/* Fix: scroll horizontal en lugar de catbar comprimido */}
+        <div style={{ overflowX: 'auto', display: 'flex', gap: 6, paddingBottom: 6, marginBottom: 6, flexShrink: 0 }}>
           {cats.map(c => (
-            <button key={c} className={`ct ${catFiltro === c ? 'on' : ''}`} onClick={() => setCatFiltro(c)}>{c}</button>
+            <button key={c} onClick={() => setCatFiltro(c)} style={{
+              flexShrink: 0, padding: '5px 12px', borderRadius: 20, fontSize: '.75rem',
+              fontWeight: 600, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+              background: catFiltro === c ? 'var(--ac)' : 'var(--s2)',
+              border: `1px solid ${catFiltro === c ? 'var(--ac)' : 'var(--bd)'}`,
+              color: catFiltro === c ? 'white' : 'var(--tx2)',
+              whiteSpace: 'nowrap',
+            }}>{c}</button>
           ))}
         </div>
 
@@ -1367,13 +1573,20 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       )}
       {showHistorial && (
         <ModalHistorial cajaId={caja.id} perfil={perfil} productos={productos} ofertas={ofertas}
+          onStockChange={(delta) => setStock(prev => {
+            const next = { ...prev }
+            Object.entries(delta).forEach(([id, diff]) => {
+              if (next[id] !== undefined) next[id] = Math.max(0, (next[id] || 0) + diff)
+            })
+            return next
+          })}
           onClose={() => setShowHistorial(false)} />
       )}
       {showPedido && (
-        <ModalPedido caseta={caseta} perfil={perfil} productos={productos}
+        <ModalPedido caseta={caseta} perfil={perfil} productos={productos} stock={stock}
           showToast={showToast}
           onClose={() => setShowPedido(false)}
-          onCreado={() => { setShowPedido(false); setPedidosPend(n => n + 0) }} />
+          onCreado={() => { setShowPedido(false) }} />
       )}
       {showMisPedidos && (
         <ModalMisPedidos caseta={caseta} perfil={perfil} productos={productos}

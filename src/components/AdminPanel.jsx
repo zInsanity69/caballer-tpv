@@ -260,9 +260,25 @@ function PanelTickets({ casetas, filtroInicial }) {
   const eliminar=async id=>{ if(!window.confirm('¿Eliminar ticket?')) return; try{await deleteTicket(id);setTickets(p=>p.filter(t=>t.id!==id));showToast('Eliminado')}catch(e){showToast(e.message,'error')} }
 
   const handleSave=async(id,nuevoTotal,nuevosItems)=>{
+    // Calcular delta de stock y actualizar antes de guardar el ticket
+    const ticketOriginal = tickets.find(t=>t.id===id)
+    const casetaId = ticketOriginal?.caseta_id
+    if(casetaId) {
+      const itemsOrig = ticketOriginal?.ticket_items || []
+      const delta = {}
+      itemsOrig.forEach(i=>{ delta[i.producto_id]=(delta[i.producto_id]||0)+i.cantidad })  // devolver
+      nuevosItems.forEach(i=>{ delta[i.producto_id]=(delta[i.producto_id]||0)-i.cantidad }) // restar
+      for(const [prodId, diff] of Object.entries(delta)) {
+        if(diff===0) continue
+        try {
+          const { data: st } = await supabase.from('stock').select('cantidad').eq('producto_id',prodId).eq('caseta_id',casetaId).maybeSingle()
+          if(st) await supabase.from('stock').update({cantidad:Math.max(0,(st.cantidad||0)+diff)}).eq('producto_id',prodId).eq('caseta_id',casetaId)
+        } catch(_) {}
+      }
+    }
     await updateTicket(id,nuevoTotal,nuevosItems)
     setTickets(prev=>prev.map(t=>t.id===id?{...t,total:nuevoTotal,ticket_items:nuevosItems.map(i=>({...i,nombre_producto:i.nombre,precio_unitario:i.precio}))}:t))
-    setEditando(null); showToast('Ticket actualizado ✓')
+    setEditando(null); showToast('Ticket actualizado y stock ajustado ✓')
   }
 
   const filtrados=busqInline?tickets.filter(t=>{
