@@ -1,84 +1,112 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { BrowserMultiFormatReader, BarcodeFormat } from '@zxing/browser'
 import { getProductoByEan } from '../lib/api.js'
 
 export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} }) {
-  const videoRef   = useRef(null)
-  const readerRef  = useRef(null)
-  const lastCode   = useRef('')
-  const lastTime   = useRef(0)
+  const videoRef  = useRef(null)
+  const readerRef = useRef(null)
+  const lastCode  = useRef('')
+  const lastTime  = useRef(0)
+  const mountedRef = useRef(true)   // ← para no actualizar estado tras desmontar
 
-  const [estado,    setEstado]    = useState('iniciando')
-  const [msg,       setMsg]       = useState('')
-  const [manual,    setManual]    = useState('')
-  const [buscando,  setBuscando]  = useState(false)
-  // producto encontrado → esperando confirmar cantidad
+  const [estado,        setEstado]        = useState('iniciando')
+  const [msg,           setMsg]           = useState('')
+  const [manual,        setManual]        = useState('')
+  const [buscando,      setBuscando]      = useState(false)
   const [prodPendiente, setProdPendiente] = useState(null)
-  const [qty,       setQty]       = useState(1)
+  const [qty,           setQty]           = useState(1)
 
-  useEffect(() => {
-    let cancelled = false
+  // ── Iniciar / reiniciar cámara ─────────────────────────────
+  // Bug fix: "volver a escanear" mostraba negro porque el stream
+  // anterior no se liberaba bien. Ahora resetamos el reader antes
+  // de re-iniciar y usamos una key para forzar remount del video.
+  const [camKey, setCamKey] = useState(0)   // cambiar key fuerza nuevo <video>
 
-    const iniciar = async () => {
-      try {
-        const hints = new Map()
-        hints.set(2, [
-          BarcodeFormat.EAN_13, BarcodeFormat.EAN_8,
-          BarcodeFormat.CODE_128, BarcodeFormat.CODE_39,
-          BarcodeFormat.UPC_A, BarcodeFormat.UPC_E,
-        ])
-        const reader = new BrowserMultiFormatReader(hints, {
-          delayBetweenScanAttempts: 100,
-          delayBetweenScanSuccess: 1500,
-        })
-        readerRef.current = reader
+  const iniciarCamara = useCallback(async () => {
+    if (!mountedRef.current) return
 
-        const devices = await BrowserMultiFormatReader.listVideoInputDevices()
-        if (!devices.length) throw new Error('No se encontró ninguna cámara')
-        const trasera = devices.find(d => /back|rear|trasera|environment/i.test(d.label)) || devices[devices.length - 1]
-        if (cancelled) return
-        setEstado('activo')
+    // Liberar reader anterior si existe
+    try { readerRef.current?.reset() } catch (_) {}
+    readerRef.current = null
 
-        await reader.decodeFromVideoDevice(trasera.deviceId, videoRef.current, async (result, err) => {
-          if (cancelled || !result) return
-          const codigo = result.getText()
-          const now = Date.now()
-          if (codigo === lastCode.current && now - lastTime.current < 2000) return
-          lastCode.current = codigo
-          lastTime.current = now
-          if (navigator.vibrate) navigator.vibrate([80])
-          setMsg(`Leyendo: ${codigo}...`)
-          const prod = await getProductoByEan(codigo)
-          if (prod) {
-            setProdPendiente(prod)
-            setQty(1)
-            setMsg('')
-          } else {
-            setMsg(`Código ${codigo} no encontrado`)
-            setManual(codigo)
-            setTimeout(() => setMsg(''), 3000)
-          }
-        })
-      } catch (e) {
-        if (cancelled) return
-        setEstado('error')
-        if (e.name === 'NotAllowedError' || /permission/i.test(e.message)) {
-          setMsg('Permiso de cámara denegado. Actívalo en los ajustes del navegador.')
-        } else if (e.name === 'NotFoundError') {
-          setMsg('No se encontró cámara disponible en este dispositivo.')
+    setEstado('iniciando')
+    setMsg('')
+
+    try {
+      const hints = new Map()
+      hints.set(2, [
+        BarcodeFormat.EAN_13, BarcodeFormat.EAN_8,
+        BarcodeFormat.CODE_128, BarcodeFormat.CODE_39,
+        BarcodeFormat.UPC_A, BarcodeFormat.UPC_E,
+      ])
+      const reader = new BrowserMultiFormatReader(hints, {
+        delayBetweenScanAttempts: 100,
+        delayBetweenScanSuccess: 1500,
+      })
+      readerRef.current = reader
+
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices()
+      if (!devices.length) throw new Error('No se encontró ninguna cámara')
+      const trasera = devices.find(d => /back|rear|trasera|environment/i.test(d.label)) || devices[devices.length - 1]
+      if (!mountedRef.current) return
+
+      // Asegurarnos de que el elemento video existe y es el correcto
+      if (!videoRef.current) return
+
+      await reader.decodeFromVideoDevice(trasera.deviceId, videoRef.current, async (result, err) => {
+        if (!mountedRef.current || !result) return
+        const codigo = result.getText()
+        const now = Date.now()
+        if (codigo === lastCode.current && now - lastTime.current < 2000) return
+        lastCode.current = codigo
+        lastTime.current = now
+        if (navigator.vibrate) navigator.vibrate([80])
+        setMsg(`Leyendo: ${codigo}...`)
+        const prod = await getProductoByEan(codigo)
+        if (!mountedRef.current) return
+        if (prod) {
+          setProdPendiente(prod); setQty(1); setMsg('')
         } else {
-          setMsg('Error al iniciar la cámara: ' + e.message)
+          setMsg(`Código ${codigo} no encontrado`)
+          setManual(codigo)
+          setTimeout(() => { if (mountedRef.current) setMsg('') }, 3000)
         }
+      })
+
+      if (mountedRef.current) setEstado('activo')
+    } catch (e) {
+      if (!mountedRef.current) return
+      setEstado('error')
+      if (e.name === 'NotAllowedError' || /permission/i.test(e.message)) {
+        setMsg('Permiso de cámara denegado. Actívalo en los ajustes del navegador.')
+      } else if (e.name === 'NotFoundError') {
+        setMsg('No se encontró cámara en este dispositivo.')
+      } else {
+        setMsg('Error al iniciar la cámara: ' + e.message)
       }
     }
-
-    iniciar()
-    return () => { cancelled = true; try { readerRef.current?.reset() } catch (e) {} }
   }, [])
 
+  useEffect(() => {
+    mountedRef.current = true
+    iniciarCamara()
+    return () => {
+      mountedRef.current = false
+      try { readerRef.current?.reset() } catch (_) {}
+    }
+  }, [camKey])   // ← se re-ejecuta cuando camKey cambia (al pulsar "volver a escanear")
+
+  const volverAEscanear = () => {
+    setProdPendiente(null)
+    setQty(1)
+    lastCode.current = ''
+    // Incrementar camKey fuerza desmontaje+remontaje del <video>
+    // y re-ejecuta el useEffect → nueva inicialización limpia
+    setCamKey(k => k + 1)
+  }
+
   const buscarManual = async () => {
-    const q = manual.trim()
-    if (!q) return
+    const q = manual.trim(); if (!q) return
     setBuscando(true); setMsg('')
     try {
       const prod = await getProductoByEan(q)
@@ -91,9 +119,7 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
   const confirmar = () => {
     if (!prodPendiente) return
     onDetect(prodPendiente, qty)
-    setProdPendiente(null)
-    setQty(1)
-    lastCode.current = '' // permitir escanear mismo producto otra vez
+    setProdPendiente(null); setQty(1); lastCode.current = ''
   }
 
   const stockDisp = prodPendiente ? (stock[prodPendiente.id] ?? 0) : 0
@@ -104,17 +130,14 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
       <div className="mc">
         <div className="mt-modal">📷 Escanear Producto</div>
 
-        {/* Si hay producto pendiente mostramos selector de cantidad */}
         {prodPendiente ? (
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: 4 }}>{prodPendiente.nombre}</div>
             <div style={{ fontSize: '.82rem', color: 'var(--tx2)', marginBottom: 16 }}>
-              {fmt(prodPendiente.precio)}/u. · Stock disponible: {stockDisp}
+              {fmt(prodPendiente.precio)}/u. · Stock: {stockDisp}
             </div>
-
-            {/* Teclado rápido */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 6, marginBottom: 12 }}>
-              {[1,2,3,4,5,6,8,10,15,20].map(n => (
+              {[1, 2, 3, 4, 5, 6, 8, 10, 15, 20].map(n => (
                 <button key={n} onClick={() => setQty(n)} style={{
                   padding: '10px 4px', borderRadius: 'var(--rs)',
                   background: qty === n ? 'var(--ac)' : 'var(--s2)',
@@ -124,7 +147,6 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
                 }}>{n}</button>
               ))}
             </div>
-
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
               <button className="qb" style={{ width: 42, height: 42, fontSize: '1.2rem' }} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
               <input type="number" min="1" max={stockDisp} value={qty}
@@ -134,19 +156,19 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
                 inputMode="numeric" autoFocus />
               <button className="qb" style={{ width: 42, height: 42, fontSize: '1.2rem' }} onClick={() => setQty(q => Math.min(stockDisp, q + 1))}>+</button>
             </div>
-
             <button className="btn-p" onClick={confirmar}>
               Añadir {qty} × {prodPendiente.nombre} · {fmt(prodPendiente.precio * qty)}
             </button>
-            <button className="btn-s" onClick={() => { setProdPendiente(null); lastCode.current = '' }}>
-              ← Volver a escanear
-            </button>
+            {/* Bug fix: ahora volverAEscanear reinicia la cámara correctamente */}
+            <button className="btn-s" onClick={volverAEscanear}>← Volver a escanear</button>
           </div>
         ) : (
           <>
-            {/* Visor cámara */}
+            {/* Bug fix: key={camKey} fuerza remount del elemento video
+                cuando se reinicia la cámara → evita pantalla negra */}
             <div className="scp">
-              <video ref={videoRef} autoPlay playsInline muted />
+              <video key={camKey} ref={videoRef} autoPlay playsInline muted
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
               {estado === 'activo' && (
                 <>
                   <div style={{ position: 'absolute', inset: '12%', border: '3px solid var(--ac)', borderRadius: 12, boxShadow: '0 0 0 9999px rgba(0,0,0,.5)', pointerEvents: 'none' }} />

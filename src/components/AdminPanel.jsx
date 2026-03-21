@@ -5,54 +5,49 @@ import {
   getOfertas, upsertOferta, deleteOferta,
   getPerfiles, updatePerfil, crearUsuario,
   getCasetas, upsertCaseta, deleteCaseta,
-  getStatsAdmin, getTicketsAdmin, deleteTicket,
+  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket,
   setStock, getStockCaseta,
   getVentasPorDia,
+  getPedidos, updatePedido, updatePedidoItems,
+  getInventarios, confirmarInventario,
+  getKgPolvora,
 } from '../lib/api.js'
 import { fmt } from '../lib/precios.js'
 
 const TABS = [
-  ['dashboard', '📊 Dashboard'],
-  ['ventas',    '💰 Ventas'],
-  ['tickets',   '🧾 Tickets'],
-  ['productos', '📦 Productos'],
-  ['stock',     '📋 Stock'],
-  ['ofertas',   '🏷️ Ofertas'],
-  ['casetas',   '🏪 Casetas'],
-  ['usuarios',  '👥 Usuarios'],
+  ['dashboard',   '📊 Dashboard'],
+  ['ventas',      '💰 Ventas'],
+  ['tickets',     '🧾 Tickets'],
+  ['pedidos',     '📦 Pedidos'],
+  ['inventarios', '📋 Inventarios'],
+  ['productos',   '🛍 Productos'],
+  ['stock',       '📋 Stock'],
+  ['ofertas',     '🏷 Ofertas'],
+  ['casetas',     '🏪 Casetas'],
+  ['usuarios',    '👥 Usuarios'],
 ]
 
 function Toast({ msg, type }) {
   return <div className="twrap"><div className={`toast ${type === 'error' ? 'te2' : 'tok'}`}>{msg}</div></div>
 }
 
-// ─── DASHBOARD ───────────────────────────────────────────────
+// ─── DASHBOARD ────────────────────────────────────────────────
 function Dashboard({ casetas }) {
-  const [stats, setStats]     = useState(null)
+  const [stats, setStats] = useState(null)
   const [tickets, setTickets] = useState([])
   const [loading, setLoading] = useState(true)
-
   useEffect(() => {
     const hoy = new Date(); hoy.setHours(0,0,0,0)
     Promise.all([getStatsAdmin(), getTicketsAdmin(hoy.toISOString(), null, null)])
       .then(([s, t]) => { setStats(s); setTickets(t) })
       .finally(() => setLoading(false))
   }, [])
-
   if (loading) return <div className="loading-row"><div className="spin-sm" /> Cargando...</div>
-
-  const totalHoy    = stats.tickets.reduce((s, t) => s + t.total, 0)
-  const efectivoHoy = stats.tickets.filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + t.total, 0)
-  const tarjetaHoy  = stats.tickets.filter(t => t.metodo_pago === 'tarjeta').reduce((s, t) => s + t.total, 0)
-
-  // Ventas por caseta hoy
+  const totalHoy = stats.tickets.reduce((s,t) => s+t.total, 0)
+  const efectivoHoy = stats.tickets.filter(t=>t.metodo_pago==='efectivo').reduce((s,t)=>s+t.total,0)
+  const tarjetaHoy = stats.tickets.filter(t=>t.metodo_pago==='tarjeta').reduce((s,t)=>s+t.total,0)
   const porCaseta = {}
-  stats.tickets.forEach(t => {
-    const n = t.casetas?.nombre || '?'
-    if (!porCaseta[n]) porCaseta[n] = 0
-    porCaseta[n] += t.total
-  })
-
+  stats.tickets.forEach(t => { const n=t.casetas?.nombre||'?'; if(!porCaseta[n]) porCaseta[n]=0; porCaseta[n]+=t.total })
   return (
     <>
       <div className="ag">
@@ -60,44 +55,38 @@ function Dashboard({ casetas }) {
         <div className="sc"><div className="sv">{stats.tickets.length}</div><div className="sl2">Tickets hoy</div></div>
         <div className="sc"><div className="sv">{fmt(efectivoHoy)}</div><div className="sl2">Efectivo hoy</div></div>
         <div className="sc"><div className="sv">{fmt(tarjetaHoy)}</div><div className="sl2">Tarjeta hoy</div></div>
-        <div className="sc"><div className="sv" style={{ color: (stats.stockBajo.length + stats.stockCero.length) > 5 ? 'var(--red)' : 'var(--ac)' }}>{stats.stockBajo.length + stats.stockCero.length}</div><div className="sl2">Stock bajo/agotado</div></div>
+        <div className="sc"><div className="sv" style={{color:(stats.stockBajo.length+stats.stockCero.length)>5?'var(--red)':'var(--ac)'}}>{stats.stockBajo.length+stats.stockCero.length}</div><div className="sl2">Stock bajo/agotado</div></div>
         <div className="sc"><div className="sv">{casetas.length}</div><div className="sl2">Casetas</div></div>
       </div>
-
-      {Object.keys(porCaseta).length > 1 && (
-        <>
-          <div className="stit">Ventas por caseta hoy</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 10, marginBottom: 22 }}>
-            {Object.entries(porCaseta).sort((a,b) => b[1]-a[1]).map(([nombre, total]) => (
-              <div key={nombre} className="sc">
-                <div style={{ fontSize: '.72rem', color: 'var(--tx2)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '.5px' }}>{nombre.replace('Caballer ','')}</div>
-                <div className="sv" style={{ fontSize: '1.4rem' }}>{fmt(total)}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
+      {Object.keys(porCaseta).length>1&&(<>
+        <div className="stit">Ventas por caseta hoy</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10,marginBottom:22}}>
+          {Object.entries(porCaseta).sort((a,b)=>b[1]-a[1]).map(([nombre,total])=>(
+            <div key={nombre} className="sc">
+              <div style={{fontSize:'.72rem',color:'var(--tx2)',marginBottom:4,textTransform:'uppercase',letterSpacing:'.5px'}}>{nombre.replace('Caballer ','')}</div>
+              <div className="sv" style={{fontSize:'1.4rem'}}>{fmt(total)}</div>
+            </div>
+          ))}
+        </div>
+      </>)}
       <div className="stit">Últimos tickets</div>
       <div className="tw">
         <table>
           <thead><tr><th>Hora</th><th>Caseta</th><th>Empleado</th><th>Método</th><th>Total</th></tr></thead>
           <tbody>
-            {tickets.length === 0
-              ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--tx2)', padding: 20 }}>Sin ventas hoy</td></tr>
-              : tickets.slice(0, 25).map(t => (
-                <tr key={t.id}>
-                  <td style={{ color: 'var(--tx2)' }}>{new Date(t.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</td>
-                  <td style={{ color: 'var(--tx2)' }}>{t.casetas?.nombre}</td>
-                  <td>{t.perfiles?.nombre}</td>
-                  <td>{t.metodo_pago === 'efectivo' ? '💵' : '💳'} {t.metodo_pago}</td>
-                  <td style={{ fontWeight: 700, color: 'var(--ac)' }}>{fmt(t.total)}</td>
-                </tr>
-              ))}
+            {tickets.length===0?<tr><td colSpan={5} style={{textAlign:'center',color:'var(--tx2)',padding:20}}>Sin ventas hoy</td></tr>
+              :tickets.slice(0,25).map(t=>(
+              <tr key={t.id}>
+                <td style={{color:'var(--tx2)'}}>{new Date(t.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
+                <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
+                <td>{t.perfiles?.nombre}</td>
+                <td>{t.metodo_pago==='efectivo'?'💵':'💳'} {t.metodo_pago}</td>
+                <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
-
       <StockAlerta stockBajo={stats.stockBajo} stockCero={stats.stockCero} casetas={casetas} />
     </>
   )
@@ -105,61 +94,36 @@ function Dashboard({ casetas }) {
 
 function StockAlerta({ stockBajo, stockCero, casetas }) {
   const [casetaSel, setCasetaSel] = useState('')
-  const [vista, setVista]         = useState('critico') // 'critico' | 'agotado'
-
-  const filtrar = (lista) => casetaSel
-    ? lista.filter(s => s.casetas?.id === casetaSel)
-    : lista
-
+  const [vista, setVista] = useState('critico')
+  const filtrar = l => casetaSel ? l.filter(s=>s.casetas?.id===casetaSel) : l
   const listaCritico = filtrar(stockBajo)
   const listaAgotado = filtrar(stockCero)
-  const lista = vista === 'critico' ? listaCritico : listaAgotado
-
+  const lista = vista==='critico' ? listaCritico : listaAgotado
   return (
     <>
-      <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:10 }}>
-        <div className="stit" style={{ margin:0 }}>Stock</div>
-        {/* Toggle crítico / agotado */}
-        <div style={{ display:'flex', gap:0, background:'var(--s2)', borderRadius:'var(--rs)', padding:3 }}>
-          <button onClick={() => setVista('critico')} style={{
-            padding:'5px 14px', borderRadius:'var(--rs)', border:'none', cursor:'pointer',
-            fontFamily:"'DM Sans',sans-serif", fontWeight:600, fontSize:'.76rem',
-            background: vista==='critico' ? 'var(--gold)' : 'transparent',
-            color: vista==='critico' ? '#000' : 'var(--tx2)',
-          }}>⚠️ Crítico ({listaCritico.length})</button>
-          <button onClick={() => setVista('agotado')} style={{
-            padding:'5px 14px', borderRadius:'var(--rs)', border:'none', cursor:'pointer',
-            fontFamily:"'DM Sans',sans-serif", fontWeight:600, fontSize:'.76rem',
-            background: vista==='agotado' ? 'var(--red)' : 'transparent',
-            color: vista==='agotado' ? 'white' : 'var(--tx2)',
-          }}>❌ Agotado ({listaAgotado.length})</button>
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10}}>
+        <div className="stit" style={{margin:0}}>Stock</div>
+        <div style={{display:'flex',gap:0,background:'var(--s2)',borderRadius:'var(--rs)',padding:3}}>
+          <button onClick={()=>setVista('critico')} style={{padding:'5px 14px',borderRadius:'var(--rs)',border:'none',cursor:'pointer',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.76rem',background:vista==='critico'?'var(--gold)':'transparent',color:vista==='critico'?'#000':'var(--tx2)'}}>⚠️ Crítico ({listaCritico.length})</button>
+          <button onClick={()=>setVista('agotado')} style={{padding:'5px 14px',borderRadius:'var(--rs)',border:'none',cursor:'pointer',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.76rem',background:vista==='agotado'?'var(--red)':'transparent',color:vista==='agotado'?'white':'var(--tx2)'}}>❌ Agotado ({listaAgotado.length})</button>
         </div>
-        {/* Filtro caseta */}
-        <select value={casetaSel} onChange={e => setCasetaSel(e.target.value)}
-          style={{ background:'var(--s2)', border:'1px solid var(--bd)', borderRadius:'var(--rs)', padding:'6px 10px', color:'var(--tx)', fontFamily:"'DM Sans',sans-serif", fontSize:'.8rem' }}>
+        <select value={casetaSel} onChange={e=>setCasetaSel(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'6px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",fontSize:'.8rem'}}>
           <option value="">Todas las casetas</option>
-          {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
       </div>
-
-      <div className="tw" style={{ marginBottom:22 }}>
+      <div className="tw" style={{marginBottom:22}}>
         <table>
           <thead><tr><th>Producto</th><th>Caseta</th><th>Stock</th></tr></thead>
           <tbody>
-            {lista.length === 0
-              ? <tr><td colSpan={3} style={{ textAlign:'center', color:'var(--tx2)', padding:20 }}>
-                  {vista === 'critico' ? '✓ Sin productos en stock crítico' : '✓ Sin productos agotados'}
-                </td></tr>
-              : lista.map((s, i) => (
-                <tr key={i}>
-                  <td>{s.productos?.nombre}</td>
-                  <td style={{ color:'var(--tx2)' }}>{s.casetas?.nombre}</td>
-                  <td style={{ color: s.cantidad === 0 ? 'var(--red)' : 'var(--gold)', fontWeight:700 }}>
-                    {s.cantidad === 0 ? 'Agotado' : s.cantidad}
-                  </td>
-                </tr>
-              ))
-            }
+            {lista.length===0?<tr><td colSpan={3} style={{textAlign:'center',color:'var(--tx2)',padding:20}}>{vista==='critico'?'✓ Sin productos críticos':'✓ Sin productos agotados'}</td></tr>
+              :lista.map((s,i)=>(
+              <tr key={i}>
+                <td>{s.productos?.nombre}</td>
+                <td style={{color:'var(--tx2)'}}>{s.casetas?.nombre}</td>
+                <td style={{color:s.cantidad===0?'var(--red)':'var(--gold)',fontWeight:700}}>{s.cantidad===0?'Agotado':s.cantidad}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -167,131 +131,72 @@ function StockAlerta({ stockBajo, stockCero, casetas }) {
   )
 }
 
-// ─── PANEL VENTAS ────────────────────────────────────────────
+// ─── PANEL VENTAS ─────────────────────────────────────────────
 function PanelVentas({ casetas, onVerDia }) {
-  const hoy     = new Date()
-  const [año,   setAño]     = useState(hoy.getFullYear())
-  const [mes,   setMes]     = useState(hoy.getMonth() + 1)
+  const hoy = new Date()
+  const [año, setAño] = useState(hoy.getFullYear())
+  const [mes, setMes] = useState(hoy.getMonth()+1)
   const [casetaSel, setCasetaSel] = useState('')
-  const [datos, setDatos]   = useState({})
+  const [datos, setDatos] = useState({})
   const [loading, setLoading] = useState(false)
-
-  const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-
-  useEffect(() => {
-    setLoading(true)
-    getVentasPorDia(casetaSel || null, año, mes)
-      .then(setDatos)
-      .finally(() => setLoading(false))
-  }, [año, mes, casetaSel])
-
-  // Días del mes
-  const diasEnMes = new Date(año, mes, 0).getDate()
-  const primerDia = new Date(año, mes - 1, 1).getDay()
-  const ajuste    = (primerDia + 6) % 7 // lunes = 0
-
-  const totalMes    = Object.values(datos).reduce((s, d) => s + d.efectivo + d.tarjeta, 0)
-  const ticketsMes  = Object.values(datos).reduce((s, d) => s + d.tickets, 0)
-  const diasConVenta = Object.keys(datos).length
-  const maxDia      = Math.max(...Object.values(datos).map(d => d.efectivo + d.tarjeta), 1)
-
-  const diaStr = (d) => `${año}-${String(mes).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-
+  const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+  useEffect(()=>{ setLoading(true); getVentasPorDia(casetaSel||null,año,mes).then(setDatos).finally(()=>setLoading(false)) },[año,mes,casetaSel])
+  const diasEnMes=new Date(año,mes,0).getDate(), primerDia=new Date(año,mes-1,1).getDay(), ajuste=(primerDia+6)%7
+  const totalMes=Object.values(datos).reduce((s,d)=>s+d.efectivo+d.tarjeta,0)
+  const ticketsMes=Object.values(datos).reduce((s,d)=>s+d.tickets,0)
+  const diasConVenta=Object.keys(datos).length
+  const maxDia=Math.max(...Object.values(datos).map(d=>d.efectivo+d.tarjeta),1)
+  const diaStr=d=>`${año}-${String(mes).padStart(2,'0')}-${String(d).padStart(2,'0')}`
   return (
     <>
-      {/* Controles */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
-        <select value={mes} onChange={e => setMes(Number(e.target.value))} style={{ background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '8px 12px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif" }}>
-          {MESES.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
-        </select>
-        <select value={año} onChange={e => setAño(Number(e.target.value))} style={{ background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '8px 12px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif" }}>
-          {[2024,2025,2026,2027].map(y => <option key={y}>{y}</option>)}
-        </select>
-        <select value={casetaSel} onChange={e => setCasetaSel(e.target.value)} style={{ background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '8px 12px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif" }}>
-          <option value="">Todas las casetas</option>
-          {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-        </select>
+      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}>
+        <select value={mes} onChange={e=>setMes(Number(e.target.value))} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{MESES.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select>
+        <select value={año} onChange={e=>setAño(Number(e.target.value))} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{[2024,2025,2026,2027].map(y=><option key={y}>{y}</option>)}</select>
+        <select value={casetaSel} onChange={e=>setCasetaSel(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}><option value="">Todas</option>{casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select>
       </div>
-
-      {/* Stats del mes */}
-      <div className="ag" style={{ marginBottom: 20 }}>
+      <div className="ag" style={{marginBottom:20}}>
         <div className="sc"><div className="sv">{fmt(totalMes)}</div><div className="sl2">Total {MESES[mes-1]}</div></div>
         <div className="sc"><div className="sv">{ticketsMes}</div><div className="sl2">Tickets</div></div>
         <div className="sc"><div className="sv">{diasConVenta}</div><div className="sl2">Días con venta</div></div>
-        <div className="sc"><div className="sv">{diasConVenta ? fmt(totalMes / diasConVenta) : '—'}</div><div className="sl2">Media/día</div></div>
+        <div className="sc"><div className="sv">{diasConVenta?fmt(totalMes/diasConVenta):'—'}</div><div className="sl2">Media/día</div></div>
       </div>
-
-      {/* Calendario */}
-      {loading
-        ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
-        : (
-          <div style={{ background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--r)', padding: 16, marginBottom: 20 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4, marginBottom: 6 }}>
-              {['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map(d => (
-                <div key={d} style={{ textAlign: 'center', fontSize: '.68rem', color: 'var(--tx2)', fontWeight: 700, padding: '4px 0' }}>{d}</div>
-              ))}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4 }}>
-              {Array(ajuste).fill(null).map((_, i) => <div key={`e${i}`} />)}
-              {Array(diasEnMes).fill(null).map((_, i) => {
-                const dia = i + 1
-                const key = diaStr(dia)
-                const d   = datos[key]
-                const tot = d ? d.efectivo + d.tarjeta : 0
-                const esHoy = key === hoy.toISOString().slice(0, 10)
-                const intensidad = tot > 0 ? Math.max(0.12, tot / maxDia) : 0
-                const esMayor = tot === maxDia && tot > 0
-                const textoColor = esMayor ? 'white' : (tot > 0 ? 'var(--tx)' : 'var(--tx2)')
-                const textoSub   = esMayor ? 'rgba(255,255,255,.8)' : 'var(--tx2)'
-                return (
-                  <div key={dia}
-                    onClick={() => tot > 0 && onVerDia(key)}
-                    style={{
-                      borderRadius: 8, padding: '6px 4px', textAlign: 'center',
-                      background: tot > 0 ? `rgba(255,77,28,${intensidad})` : 'var(--s2)',
-                      border: `2px solid ${esHoy ? 'var(--ac)' : 'transparent'}`,
-                      minHeight: 54,
-                      cursor: tot > 0 ? 'pointer' : 'default',
-                      transition: 'filter .15s',
-                    }}
-                    onMouseEnter={e => { if (tot > 0) e.currentTarget.style.filter = 'brightness(1.15)' }}
-                    onMouseLeave={e => { e.currentTarget.style.filter = 'none' }}
-                  >
-                    <div style={{ fontSize: '.7rem', color: textoColor, fontWeight: 700 }}>{dia}</div>
-                    {tot > 0 && (
-                      <>
-                        <div style={{ fontSize: '.62rem', color: textoColor, fontWeight: 800, marginTop: 2 }}>{fmt(tot)}</div>
-                        <div style={{ fontSize: '.56rem', color: textoSub }}>{d.tickets}t</div>
-                      </>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+      {loading?<div className="loading-row"><div className="spin-sm"/>Cargando...</div>:(
+        <div style={{background:'var(--s1)',border:'1px solid var(--bd)',borderRadius:'var(--r)',padding:16,marginBottom:20}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4,marginBottom:6}}>
+            {['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map(d=><div key={d} style={{textAlign:'center',fontSize:'.68rem',color:'var(--tx2)',fontWeight:700,padding:'4px 0'}}>{d}</div>)}
           </div>
-        )
-      }
-
-      {/* Lista días con venta */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4}}>
+            {Array(ajuste).fill(null).map((_,i)=><div key={`e${i}`}/>)}
+            {Array(diasEnMes).fill(null).map((_,i)=>{
+              const dia=i+1,key=diaStr(dia),d=datos[key],tot=d?d.efectivo+d.tarjeta:0
+              const esHoy=key===hoy.toISOString().slice(0,10),intensidad=tot>0?Math.max(0.12,tot/maxDia):0,esMayor=tot===maxDia&&tot>0
+              const txCol=esMayor?'white':(tot>0?'var(--tx)':'var(--tx2)')
+              return(
+                <div key={dia} onClick={()=>tot>0&&onVerDia(key)} style={{borderRadius:8,padding:'6px 4px',textAlign:'center',background:tot>0?`rgba(255,77,28,${intensidad})`:'var(--s2)',border:`2px solid ${esHoy?'var(--ac)':'transparent'}`,minHeight:54,cursor:tot>0?'pointer':'default'}}
+                  onMouseEnter={e=>{if(tot>0)e.currentTarget.style.filter='brightness(1.15)'}} onMouseLeave={e=>{e.currentTarget.style.filter='none'}}>
+                  <div style={{fontSize:'.7rem',color:txCol,fontWeight:700}}>{dia}</div>
+                  {tot>0&&<><div style={{fontSize:'.62rem',color:txCol,fontWeight:800,marginTop:2}}>{fmt(tot)}</div><div style={{fontSize:'.56rem',color:esMayor?'rgba(255,255,255,.8)':'var(--tx2)'}}>{d.tickets}t</div></>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
       <div className="stit">Detalle por día</div>
       <div className="tw">
         <table>
           <thead><tr><th>Día</th><th>Tickets</th><th>Efectivo</th><th>Tarjeta</th><th>Total</th></tr></thead>
           <tbody>
-            {Object.entries(datos).length === 0
-              ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--tx2)', padding: 20 }}>Sin ventas este mes</td></tr>
-              : Object.entries(datos).sort((a,b) => b[0].localeCompare(a[0])).map(([dia, d]) => (
-                <tr key={dia} onClick={() => onVerDia(dia)}
-                  style={{ cursor: 'pointer' }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
-                  onMouseLeave={e => e.currentTarget.style.background = ''}>
-                  <td style={{ fontWeight: 600 }}>{new Date(dia + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })} <span style={{fontSize:'.68rem',color:'var(--tx2)'}}>→ ver tickets</span></td>
-                  <td style={{ color: 'var(--tx2)' }}>{d.tickets}</td>
-                  <td style={{ color: 'var(--green)' }}>{fmt(d.efectivo)}</td>
-                  <td style={{ color: 'var(--blue)' }}>{fmt(d.tarjeta)}</td>
-                  <td style={{ fontWeight: 700, color: 'var(--ac)' }}>{fmt(d.efectivo + d.tarjeta)}</td>
-                </tr>
-              ))}
+            {Object.entries(datos).length===0?<tr><td colSpan={5} style={{textAlign:'center',color:'var(--tx2)',padding:20}}>Sin ventas</td></tr>
+              :Object.entries(datos).sort((a,b)=>b[0].localeCompare(a[0])).map(([dia,d])=>(
+              <tr key={dia} onClick={()=>onVerDia(dia)} style={{cursor:'pointer'}} onMouseEnter={e=>e.currentTarget.style.background='var(--s2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
+                <td style={{fontWeight:600}}>{new Date(dia+'T12:00:00').toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'})} <span style={{fontSize:'.68rem',color:'var(--tx2)'}}>→ ver</span></td>
+                <td style={{color:'var(--tx2)'}}>{d.tickets}</td>
+                <td style={{color:'var(--green)'}}>{fmt(d.efectivo)}</td>
+                <td style={{color:'var(--blue)'}}>{fmt(d.tarjeta)}</td>
+                <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(d.efectivo+d.tarjeta)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -300,805 +205,837 @@ function PanelVentas({ casetas, onVerDia }) {
 }
 
 // ─── PANEL TICKETS ────────────────────────────────────────────
+function ModalEditTicket({ ticket: t, onClose, onSave }) {
+  const [items, setItems] = useState(t.ticket_items.map(i=>({producto_id:i.producto_id,nombre:i.nombre_producto,precio:i.precio_unitario,cantidad:i.cantidad,total_linea:i.total_linea,con_oferta:i.con_oferta||false})))
+  const [saving, setSaving] = useState(false)
+  const editQty=(idx,delta)=>setItems(prev=>prev.map((it,i)=>i!==idx?it:{...it,cantidad:Math.max(1,it.cantidad+delta),total_linea:+((Math.max(1,it.cantidad+delta))*it.precio).toFixed(2)}))
+  const editDel=idx=>setItems(prev=>prev.filter((_,i)=>i!==idx))
+  const nuevoTotal=items.reduce((s,i)=>s+i.total_linea,0)
+  const guardar=async()=>{ setSaving(true); try{ await onSave(t.id,nuevoTotal,items); onClose() }catch(e){alert(e.message)} setSaving(false) }
+  return(
+    <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="mc wide" style={{maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
+        <div className="mt-modal">✏️ Editar Ticket</div>
+        <div style={{fontSize:'.78rem',color:'var(--tx2)',marginBottom:12}}>{new Date(t.creado_en).toLocaleString('es-ES')} · {t.perfiles?.nombre} · {t.casetas?.nombre}</div>
+        <div style={{overflowY:'auto',flex:1}}>
+          {items.map((item,idx)=>(
+            <div key={idx} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid var(--bd)'}}>
+              <div style={{flex:1,fontSize:'.85rem'}}>{item.nombre}</div>
+              <button className="qb" onClick={()=>editQty(idx,-1)}>−</button>
+              <span style={{minWidth:26,textAlign:'center',fontWeight:700}}>{item.cantidad}</span>
+              <button className="qb" onClick={()=>editQty(idx,+1)}>+</button>
+              <span style={{minWidth:55,textAlign:'right',fontSize:'.85rem',color:'var(--ac)'}}>{fmt(item.total_linea)}</span>
+              <button onClick={()=>editDel(idx)} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem'}}>✕</button>
+            </div>
+          ))}
+          {items.length===0&&<div style={{textAlign:'center',color:'var(--tx2)',padding:20,fontSize:'.85rem'}}>Ticket vacío</div>}
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',fontWeight:700,padding:'10px 0'}}><span>Nuevo total</span><span style={{color:'var(--ac)'}}>{fmt(nuevoTotal)}</span></div>
+        <button className="btn-p" disabled={saving} onClick={guardar}>{saving?'Guardando...':'✓ Guardar cambios'}</button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
 function PanelTickets({ casetas, filtroInicial }) {
-  const hoy = new Date(); hoy.setHours(0,0,0,0)
-  const [desde, setDesde]       = useState(filtroInicial?.desde || hoy.toISOString().slice(0,10))
-  const [hasta, setHasta]       = useState(filtroInicial?.hasta || new Date().toISOString().slice(0,10))
-  const [casetaSel, setCasetaSel] = useState('')
-  const [tickets, setTickets]   = useState([])
-  const [loading, setLoading]   = useState(false)
-  const [expanded, setExpanded] = useState(null)
-  const [toast, setToast]       = useState(null)
+  const hoy=new Date(); hoy.setHours(0,0,0,0)
+  const [desde,setDesde]=useState(filtroInicial?.desde||hoy.toISOString().slice(0,10))
+  const [hasta,setHasta]=useState(filtroInicial?.hasta||new Date().toISOString().slice(0,10))
+  const [casetaSel,setCasetaSel]=useState('')
+  const [busqInline,setBusqInline]=useState('')
+  const [tickets,setTickets]=useState([])
+  const [loading,setLoading]=useState(false)
+  const [expanded,setExpanded]=useState(null)
+  const [editando,setEditando]=useState(null)
+  const [toast,setToast]=useState(null)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
 
-  const showToast = (msg, type='ok') => { setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
-
-  const buscar = (d = desde, h = hasta, c = casetaSel) => {
+  const buscar=(d=desde,h=hasta,c=casetaSel)=>{
     setLoading(true)
-    getTicketsAdmin(d + 'T00:00:00', h + 'T23:59:59', c || null)
-      .then(setTickets).finally(() => setLoading(false))
+    getTicketsAdmin(d+'T00:00:00',h+'T23:59:59',c||null).then(setTickets).finally(()=>setLoading(false))
+  }
+  useEffect(()=>{ buscar() },[])
+
+  const eliminar=async id=>{ if(!window.confirm('¿Eliminar ticket?')) return; try{await deleteTicket(id);setTickets(p=>p.filter(t=>t.id!==id));showToast('Eliminado')}catch(e){showToast(e.message,'error')} }
+
+  const handleSave=async(id,nuevoTotal,nuevosItems)=>{
+    await updateTicket(id,nuevoTotal,nuevosItems)
+    setTickets(prev=>prev.map(t=>t.id===id?{...t,total:nuevoTotal,ticket_items:nuevosItems.map(i=>({...i,nombre_producto:i.nombre,precio_unitario:i.precio}))}:t))
+    setEditando(null); showToast('Ticket actualizado ✓')
   }
 
-  useEffect(() => { buscar() }, [])
+  const filtrados=busqInline?tickets.filter(t=>{
+    const b=busqInline.toLowerCase()
+    return t.perfiles?.nombre?.toLowerCase().includes(b)||t.casetas?.nombre?.toLowerCase().includes(b)||fmt(t.total).includes(b)||t.ticket_items?.some(i=>i.nombre_producto?.toLowerCase().includes(b))
+  }):tickets
 
-  const eliminar = async (id) => {
-    if (!window.confirm('¿Eliminar este ticket? El stock NO se restaura.')) return
-    try {
-      await deleteTicket(id)
-      setTickets(prev => prev.filter(t => t.id !== id))
-      showToast('Ticket eliminado')
-    } catch (e) { showToast(e.message, 'error') }
-  }
-
-  const totalFiltrado = tickets.reduce((s, t) => s + t.total, 0)
-
-  return (
+  return(
     <>
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
-        <div className="fg" style={{ margin: 0 }}>
-          <label>Desde</label>
-          <input type="date" value={desde} onChange={e => setDesde(e.target.value)}
-            style={{ background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif" }} />
-        </div>
-        <div className="fg" style={{ margin: 0 }}>
-          <label>Hasta</label>
-          <input type="date" value={hasta} onChange={e => setHasta(e.target.value)}
-            style={{ background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif" }} />
-        </div>
-        <div className="fg" style={{ margin: 0 }}>
-          <label>Caseta</label>
-          <select value={casetaSel} onChange={e => setCasetaSel(e.target.value)}
-            style={{ background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif" }}>
-            <option value="">Todas</option>
-            {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-          </select>
-        </div>
-        <button className="btn-add" onClick={() => buscar()} style={{ height: 38 }}>Buscar</button>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      <div style={{display:'flex',gap:10,alignItems:'flex-end',marginBottom:16,flexWrap:'wrap'}}>
+        <div className="fg" style={{margin:0}}><label>Desde</label><input type="date" value={desde} onChange={e=>setDesde(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}/></div>
+        <div className="fg" style={{margin:0}}><label>Hasta</label><input type="date" value={hasta} onChange={e=>setHasta(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}/></div>
+        <div className="fg" style={{margin:0}}><label>Caseta</label><select value={casetaSel} onChange={e=>setCasetaSel(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}><option value="">Todas</option>{casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
+        <button className="btn-add" onClick={()=>buscar()} style={{height:38}}>Buscar</button>
       </div>
+      {tickets.length>0&&<input className="si" placeholder="Filtrar por empleado, producto, caseta, importe..." value={busqInline} onChange={e=>setBusqInline(e.target.value)} style={{marginBottom:12}}/>}
+      <div style={{marginBottom:14,fontSize:'.82rem',color:'var(--tx2)'}}>{filtrados.length} tickets · Total: <strong style={{color:'var(--ac)'}}>{fmt(filtrados.reduce((s,t)=>s+t.total,0))}</strong></div>
+      {loading?<div className="loading-row"><div className="spin-sm"/>Cargando...</div>:(
+        <div className="tw"><table>
+          <thead><tr><th>Fecha/Hora</th><th>Caseta</th><th>Empleado</th><th>Método</th><th>Total</th><th>Acciones</th></tr></thead>
+          <tbody>
+            {filtrados.length===0?<tr><td colSpan={6} style={{textAlign:'center',color:'var(--tx2)',padding:20}}>Sin tickets</td></tr>
+              :filtrados.map(t=>(
+              <>
+                <tr key={t.id}>
+                  <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{new Date(t.creado_en).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                  <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
+                  <td>{t.perfiles?.nombre}</td>
+                  <td>{t.metodo_pago==='efectivo'?'💵':'💳'}</td>
+                  <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
+                  <td><div className="acell">
+                    <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
+                    <button className="btn-edit" style={{color:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>setEditando(t)}>Editar</button>
+                    <button className="btn-del" onClick={()=>eliminar(t.id)}>Eliminar</button>
+                  </div></td>
+                </tr>
+                {expanded===t.id&&t.ticket_items&&(
+                  <tr key={`${t.id}-d`}><td colSpan={6} style={{background:'var(--s2)',padding:'8px 16px'}}>
+                    {t.ticket_items.map((li,i)=>(
+                      <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'.78rem',padding:'3px 0',borderBottom:'1px solid var(--bd)'}}>
+                        <span>{li.nombre_producto} × {li.cantidad}</span><span style={{color:'var(--ac)'}}>{fmt(li.total_linea)}</span>
+                      </div>
+                    ))}
+                  </td></tr>
+                )}
+              </>
+            ))}
+          </tbody>
+        </table></div>
+      )}
+      {editando&&<ModalEditTicket ticket={editando} onClose={()=>setEditando(null)} onSave={handleSave}/>}
+    </>
+  )
+}
 
-      <div style={{ marginBottom: 14, fontSize: '.82rem', color: 'var(--tx2)' }}>
-        {tickets.length} tickets · Total: <strong style={{ color: 'var(--ac)' }}>{fmt(totalFiltrado)}</strong>
+// ─── PANEL PEDIDOS ────────────────────────────────────────────
+function PanelPedidos({ casetas }) {
+  const [pedidos,setPedidos]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [estadoFiltro,setEstadoFiltro]=useState('')
+  const [casetaSel,setCasetaSel]=useState('')
+  const [expandido,setExpandido]=useState(null)
+  const [editando,setEditando]=useState(null)
+  const [editItems,setEditItems]=useState([])
+  const [notasAdmin,setNotasAdmin]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [toast,setToast]=useState(null)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
+
+  useEffect(()=>{ getPedidos({}).then(setPedidos).finally(()=>setLoading(false)) },[])
+
+  const ESTATE_COLOR={PENDIENTE:'var(--gold)',ACEPTADO:'var(--blue)',EN_CAMINO:'var(--ac)',RECIBIDO:'var(--green)',INCIDENCIA:'var(--red)'}
+  const ESTADO_LABEL={PENDIENTE:'⏳ Pendiente',ACEPTADO:'✅ Aceptado',EN_CAMINO:'🚚 En camino',RECIBIDO:'📦 Recibido',INCIDENCIA:'⚠️ Incidencia'}
+
+  const filtrados=pedidos.filter(p=>{
+    if(estadoFiltro&&p.estado!==estadoFiltro) return false
+    if(casetaSel&&p.caseta_id!==casetaSel) return false
+    return true
+  })
+
+  const abrirEdicion=p=>{ setEditando(p); setEditItems(p.pedido_items.map(i=>({producto_id:i.producto_id,nombre:i.productos?.nombre||'?',cantidad:i.cantidad}))); setNotasAdmin(p.notas_admin||'') }
+
+  const guardarEdicion=async()=>{
+    setSaving(true)
+    try{
+      await updatePedidoItems(editando.id,editItems)
+      await updatePedido(editando.id,{notas_admin:notasAdmin||null})
+      setPedidos(prev=>prev.map(p=>p.id===editando.id?{...p,notas_admin:notasAdmin,pedido_items:editItems.map(i=>({...i,productos:{nombre:i.nombre}}))}:p))
+      setEditando(null); showToast('Pedido actualizado ✓')
+    }catch(e){showToast('Error: '+e.message,'error')}
+    setSaving(false)
+  }
+
+  const cambiarEstado=async(id,estado)=>{
+    await updatePedido(id,{estado})
+    setPedidos(prev=>prev.map(p=>p.id===id?{...p,estado}:p))
+    showToast(`${ESTADO_LABEL[estado]}`)
+  }
+
+  if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
+
+  return(
+    <>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      <div style={{display:'flex',gap:10,marginBottom:18,flexWrap:'wrap',alignItems:'center'}}>
+        <select value={estadoFiltro} onChange={e=>setEstadoFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
+          <option value="">Todos los estados</option>
+          {Object.entries(ESTADO_LABEL).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+        </select>
+        <select value={casetaSel} onChange={e=>setCasetaSel(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <span style={{fontSize:'.82rem',color:'var(--tx2)'}}>{filtrados.length} pedidos</span>
       </div>
+      {filtrados.length===0?<div style={{textAlign:'center',color:'var(--tx2)',padding:40}}>Sin pedidos con estos filtros</div>
+        :filtrados.map(p=>(
+        <div key={p.id} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px 16px',marginBottom:12,border:'1px solid var(--bd)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+            <div style={{flex:1}}>
+              <span style={{fontWeight:700,fontSize:'.9rem'}}>{p.casetas?.nombre}</span>
+              <span style={{color:'var(--tx2)',fontSize:'.78rem',marginLeft:8}}>{p.perfiles?.nombre}</span>
+              <span style={{color:'var(--tx2)',fontSize:'.75rem',marginLeft:8}}>{new Date(p.creado_en).toLocaleDateString('es-ES',{day:'numeric',month:'short'})} {new Date(p.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
+            </div>
+            <span style={{fontWeight:700,fontSize:'.82rem',color:ESTATE_COLOR[p.estado]}}>{ESTADO_LABEL[p.estado]}</span>
+          </div>
+          <div style={{fontSize:'.82rem',color:'var(--tx2)',marginBottom:6}}>
+            {p.pedido_items?.map(i=>(
+              <span key={i.id} style={{marginRight:10}}>
+                {i.productos?.nombre} <strong style={{color:'var(--tx)'}}>×{i.cantidad}</strong>
+                {i.cantidad_recibida!=null&&i.cantidad_recibida!==i.cantidad&&<span style={{color:i.cantidad_recibida<i.cantidad?'var(--red)':'var(--green)',marginLeft:4}}>(rec:{i.cantidad_recibida})</span>}
+                {i.notas_item&&<span style={{color:'var(--red)',marginLeft:4}}>⚠️ {i.notas_item}</span>}
+              </span>
+            ))}
+          </div>
+          {p.notas&&<div style={{fontSize:'.78rem',color:'var(--tx2)',fontStyle:'italic',marginBottom:4}}>📝 {p.notas}</div>}
+          {p.notas_admin&&<div style={{fontSize:'.78rem',color:'var(--blue)',marginBottom:4}}>🔵 Admin: {p.notas_admin}</div>}
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8}}>
+            {p.estado==='PENDIENTE'&&(
+              <>
+                <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0}} onClick={()=>cambiarEstado(p.id,'ACEPTADO')}>✅ Aceptar</button>
+                <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar antes de aceptar</button>
+              </>
+            )}
+            {p.estado==='ACEPTADO'&&(
+              <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0,background:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>cambiarEstado(p.id,'EN_CAMINO')}>🚚 Marcar en camino</button>
+            )}
+            {(p.estado==='RECIBIDO'||p.estado==='INCIDENCIA')&&(
+              <button className="btn-edit" style={{fontSize:'.72rem'}} onClick={()=>setExpandido(expandido===p.id?null:p.id)}>{expandido===p.id?'Ocultar detalles':'Ver detalles recepción'}</button>
+            )}
+          </div>
+          {expandido===p.id&&(
+            <div style={{marginTop:10,borderTop:'1px solid var(--bd)',paddingTop:10,fontSize:'.8rem'}}>
+              <div style={{fontWeight:700,marginBottom:6,color:p.estado==='INCIDENCIA'?'var(--red)':'var(--green)'}}>Recepción {p.estado==='INCIDENCIA'?'— CON INCIDENCIAS':'— Sin incidencias'}</div>
+              {p.pedido_items?.map(i=>(
+                <div key={i.id} style={{padding:'4px 0',borderBottom:'1px solid var(--bd)',display:'flex',gap:12,flexWrap:'wrap'}}>
+                  <span style={{flex:1}}>{i.productos?.nombre}</span>
+                  <span>Pedido: <strong>{i.cantidad}</strong></span>
+                  <span>Recibido: <strong style={{color:i.cantidad_recibida!==i.cantidad?'var(--red)':'var(--green)'}}>{i.cantidad_recibida??'—'}</strong></span>
+                  {i.notas_item&&<span style={{color:'var(--red)'}}>⚠️ {i.notas_item}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
 
-      {loading
-        ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
-        : (
-          <div className="tw">
-            <table>
-              <thead><tr><th>Fecha/Hora</th><th>Caseta</th><th>Empleado</th><th>Método</th><th>Total</th><th>Acciones</th></tr></thead>
-              <tbody>
-                {tickets.length === 0
-                  ? <tr><td colSpan={6} style={{ textAlign:'center',color:'var(--tx2)',padding:20 }}>Sin tickets en este rango</td></tr>
-                  : tickets.map(t => (
-                    <>
-                      <tr key={t.id}>
-                        <td style={{ color:'var(--tx2)',fontSize:'.78rem' }}>{new Date(t.creado_en).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
-                        <td style={{ color:'var(--tx2)' }}>{t.casetas?.nombre}</td>
-                        <td>{t.perfiles?.nombre}</td>
-                        <td>{t.metodo_pago === 'efectivo' ? '💵' : '💳'}</td>
-                        <td style={{ fontWeight:700,color:'var(--ac)' }}>{fmt(t.total)}</td>
-                        <td>
-                          <div className="acell">
-                            <button className="btn-edit" onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
-                              {expanded === t.id ? 'Ocultar' : 'Ver líneas'}
-                            </button>
-                            <button className="btn-del" onClick={() => eliminar(t.id)}>Eliminar</button>
-                          </div>
-                        </td>
+      {editando&&(
+        <div className="mo" onClick={e=>e.target===e.currentTarget&&setEditando(null)}>
+          <div className="mc wide" style={{maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
+            <div className="mt-modal">✏️ Editar Pedido — {editando.casetas?.nombre}</div>
+            <div style={{overflowY:'auto',flex:1}}>
+              {editItems.map((item,idx)=>(
+                <div key={idx} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid var(--bd)'}}>
+                  <div style={{flex:1,fontSize:'.85rem'}}>{item.nombre}</div>
+                  <button className="qb" onClick={()=>setEditItems(prev=>prev.map((it,i)=>i!==idx?it:{...it,cantidad:Math.max(1,it.cantidad-1)}))}>−</button>
+                  <span style={{minWidth:26,textAlign:'center',fontWeight:700}}>{item.cantidad}</span>
+                  <button className="qb" onClick={()=>setEditItems(prev=>prev.map((it,i)=>i!==idx?it:{...it,cantidad:it.cantidad+1}))}>+</button>
+                  <button onClick={()=>setEditItems(prev=>prev.filter((_,i)=>i!==idx))} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem'}}>✕</button>
+                </div>
+              ))}
+            </div>
+            <div className="fg" style={{marginTop:10}}>
+              <label>Nota para el empleado</label>
+              <input className="bi" style={{marginBottom:0}} value={notasAdmin} onChange={e=>setNotasAdmin(e.target.value)} placeholder="Ej: cambiada cantidad por falta de stock..."/>
+            </div>
+            <button className="btn-p" style={{marginTop:12}} disabled={saving} onClick={guardarEdicion}>{saving?'Guardando...':'✓ Guardar y aceptar'}</button>
+            <button className="btn-s" onClick={()=>setEditando(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── PANEL INVENTARIOS ────────────────────────────────────────
+function PanelInventarios({ casetas }) {
+  const [inventarios,setInventarios]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [casetaSel,setCasetaSel]=useState('')
+  const [expandido,setExpandido]=useState(null)
+  const [confirmando,setConfirmando]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [toast,setToast]=useState(null)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
+
+  useEffect(()=>{ getInventarios(casetaSel||null).then(setInventarios).finally(()=>setLoading(false)) },[casetaSel])
+
+  const confirmar=async inv=>{
+    setSaving(true)
+    try{
+      await confirmarInventario(inv.id)
+      setInventarios(prev=>prev.map(i=>i.id===inv.id?{...i,estado:'CONFIRMADO'}:i))
+      setConfirmando(null); showToast('✓ Inventario confirmado — stock actualizado')
+    }catch(e){showToast('Error: '+e.message,'error')}
+    setSaving(false)
+  }
+
+  if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
+
+  return(
+    <>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      <div style={{display:'flex',gap:10,marginBottom:18,alignItems:'center',flexWrap:'wrap'}}>
+        <select value={casetaSel} onChange={e=>setCasetaSel(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <span style={{fontSize:'.82rem',color:'var(--tx2)'}}>{inventarios.length} inventarios</span>
+      </div>
+      {inventarios.length===0?<div style={{textAlign:'center',color:'var(--tx2)',padding:40}}>
+        Los empleados aún no han enviado ningún inventario.<br/>
+        <span style={{fontSize:'.82rem'}}>El inventario se hace desde el panel del empleado al cierre de temporada.</span>
+      </div>:inventarios.map(inv=>{
+        const difs=inv.inventario_items?.filter(i=>i.diferencia!==0).length||0
+        const pend=inv.estado==='BORRADOR'
+        const casetaNombre=inv.casetas?.nombre||casetas.find(c=>c.id===inv.caseta_id)?.nombre
+        return(
+          <div key={inv.id} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px 16px',marginBottom:12,border:`1px solid ${pend?'rgba(245,200,66,.4)':'var(--bd)'}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+              <div style={{flex:1}}>
+                <span style={{fontWeight:700,fontSize:'.9rem'}}>{casetaNombre}</span>
+                <span style={{color:'var(--tx2)',fontSize:'.78rem',marginLeft:8}}>{inv.perfiles?.nombre}</span>
+                <span style={{color:'var(--tx2)',fontSize:'.75rem',marginLeft:8}}>{new Date(inv.creado_en).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'})}</span>
+              </div>
+              <span style={{fontWeight:700,fontSize:'.82rem',color:pend?'var(--gold)':'var(--green)'}}>{pend?'⏳ Pendiente de confirmar':'✅ Confirmado'}</span>
+            </div>
+            <div style={{fontSize:'.8rem',color:'var(--tx2)',marginBottom:8}}>{inv.inventario_items?.length||0} productos · <span style={{color:difs>0?'var(--red)':'var(--green)'}}>{difs} diferencias</span></div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <button className="btn-edit" onClick={()=>setExpandido(expandido===inv.id?null:inv.id)}>{expandido===inv.id?'Ocultar':'Ver detalle'}</button>
+              {pend&&<button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0}} onClick={()=>setConfirmando(inv)}>✅ Confirmar y actualizar stock</button>}
+            </div>
+            {expandido===inv.id&&(
+              <div style={{marginTop:10,borderTop:'1px solid var(--bd)',paddingTop:10}}>
+                <div className="tw"><table>
+                  <thead><tr><th>Producto</th><th>Teórico</th><th>Real</th><th>Diferencia</th></tr></thead>
+                  <tbody>
+                    {(inv.inventario_items||[]).sort((a,b)=>Math.abs(b.diferencia||0)-Math.abs(a.diferencia||0)).map(item=>(
+                      <tr key={item.id} style={{background:item.diferencia!==0?'rgba(239,68,68,.05)':'transparent'}}>
+                        <td>{item.productos?.nombre}</td>
+                        <td style={{textAlign:'center',color:'var(--tx2)'}}>{item.cantidad_teorica}</td>
+                        <td style={{textAlign:'center',fontWeight:700}}>{item.cantidad_real}</td>
+                        <td style={{textAlign:'center',fontWeight:700,color:item.diferencia>0?'var(--green)':item.diferencia<0?'var(--red)':'var(--tx2)'}}>{item.diferencia>0?'+':''}{item.diferencia}</td>
                       </tr>
-                      {expanded === t.id && t.ticket_items && (
-                        <tr key={`${t.id}-detail`}>
-                          <td colSpan={6} style={{ background:'var(--s2)',padding:'8px 16px' }}>
-                            {t.ticket_items.map((li, i) => (
-                              <div key={i} style={{ display:'flex',justifyContent:'space-between',fontSize:'.78rem',padding:'3px 0',borderBottom:'1px solid var(--bd)' }}>
-                                <span>{li.nombre_producto} × {li.cantidad}</span>
-                                <span style={{ color:'var(--ac)' }}>{fmt(li.total_linea)}</span>
-                              </div>
-                            ))}
-                          </td>
-                        </tr>
-                      )}
-                    </>
-                  ))}
-              </tbody>
-            </table>
+                    ))}
+                  </tbody>
+                </table></div>
+              </div>
+            )}
           </div>
         )
-      }
+      })}
+
+      {confirmando&&(
+        <div className="mo" onClick={e=>e.target===e.currentTarget&&setConfirmando(null)}>
+          <div className="mc">
+            <div className="mt-modal">✅ Confirmar Inventario</div>
+            <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:16,lineHeight:1.6}}>
+              Esta acción <strong style={{color:'var(--tx)'}}>sobreescribirá el stock actual</strong> de <strong style={{color:'var(--ac)'}}>{casetas.find(c=>c.id===confirmando.caseta_id)?.nombre}</strong> con los valores contados.<br/><br/>Esta acción <strong>no se puede deshacer.</strong>
+            </div>
+            <div style={{background:'var(--s2)',borderRadius:'var(--rs)',padding:'10px 12px',marginBottom:16,fontSize:'.8rem'}}>{confirmando.inventario_items?.filter(i=>i.diferencia!==0).length||0} productos con diferencias serán ajustados.</div>
+            <button className="btn-p" disabled={saving} onClick={()=>confirmar(confirmando)}>{saving?'Aplicando...':'✅ Confirmar y actualizar stock'}</button>
+            <button className="btn-s" onClick={()=>setConfirmando(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
     </>
   )
 }
 
 // ─── GESTIÓN PRODUCTOS ────────────────────────────────────────
 function GestionProductos() {
-  const [productos, setProductos] = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [toast, setToast]         = useState(null)
-  const [editId, setEditId]       = useState(null)
-  const [busq, setBusq]           = useState('')
-  const [catFiltro, setCatFiltro] = useState('Todos')
-  const formRef = useRef(null)
+  const [productos,setProductos]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [toast,setToast]=useState(null)
+  const [editId,setEditId]=useState(null)
+  const [busq,setBusq]=useState('')
+  const [catFiltro,setCatFiltro]=useState('Todos')
+  const [soloActivos,setSoloActivos]=useState(true)
+  const formRef=useRef(null)
+  const CATS_FIJAS=['Petardos','Truenos','Bengalas','Cracker','Terrestres','Fuentes','Efectos','Packs','Accesorios']
+  const F0={nombre:'',precio:'',categoria:'Petardos',catNueva:'',edad_minima:'16',codigo_ean:'',gramos_polvora:'0'}
+  const [form,setForm]=useState(F0)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
+  useEffect(()=>{ getProductos(false).then(setProductos).finally(()=>setLoading(false)) },[])
+  const catsDinamicas=['Todos',...new Set([...CATS_FIJAS,...productos.map(p=>p.categoria)])]
 
-  const CATS_FIJAS = ['Petardos','Truenos','Bengalas','Cracker','Terrestres','Fuentes','Efectos','Packs','Accesorios']
-  const F0 = { nombre:'', precio:'', categoria:'Petardos', catNueva:'', edad_minima:'16', codigo_ean:'' }
-  const [form, setForm] = useState(F0)
-
-  const showToast = (msg, type='ok') => { setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
-
-  useEffect(() => { getProductos().then(setProductos).finally(()=>setLoading(false)) }, [])
-
-  const catsDinamicas = ['Todos', ...new Set([...CATS_FIJAS, ...productos.map(p=>p.categoria)])]
-
-  const guardar = async () => {
-    if (!form.nombre.trim() || !form.precio || !form.codigo_ean.trim()) {
-      showToast('Nombre, precio y EAN son obligatorios','error'); return
-    }
-    const categoria = form.categoria === '__nueva__' ? form.catNueva.trim() : form.categoria
-    if (!categoria) { showToast('Introduce el nombre de la nueva categoría','error'); return }
-    try {
-      const data = await upsertProducto({
-        ...(editId ? { id: editId } : {}),
-        nombre: form.nombre.trim(),
-        precio: parseFloat(form.precio),
-        categoria,
-        edad_minima: parseInt(form.edad_minima),
-        codigo_ean: form.codigo_ean.trim(),
-        activo: true,
-      })
-      if (editId) {
-        setProductos(prev => prev.map(p => p.id === editId ? data : p))
-        showToast('Producto actualizado ✓')
-      } else {
-        setProductos(prev => [...prev, data])
-        showToast('Producto añadido ✓')
-      }
-      setForm(F0); setEditId(null)
-    } catch(e) { showToast(e.message,'error') }
+  const guardar=async()=>{
+    if(!form.nombre.trim()||!form.precio||!form.codigo_ean.trim()){ showToast('Nombre, precio y EAN son obligatorios','error'); return }
+    const categoria=form.categoria==='__nueva__'?form.catNueva.trim():form.categoria
+    if(!categoria){ showToast('Introduce la categoría','error'); return }
+    try{
+      const data=await upsertProducto({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),precio:parseFloat(form.precio),categoria,edad_minima:parseInt(form.edad_minima),codigo_ean:form.codigo_ean.trim(),gramos_polvora:parseFloat(form.gramos_polvora)||0,activo:true})
+      if(editId){setProductos(prev=>prev.map(p=>p.id===editId?data:p));showToast('Producto actualizado ✓')}
+      else{setProductos(prev=>[...prev,data]);showToast('Producto añadido ✓')}
+      setForm(F0);setEditId(null)
+    }catch(e){showToast(e.message,'error')}
   }
-
-  const editar = p => {
-    setForm({ nombre:p.nombre, precio:String(p.precio), categoria:p.categoria, catNueva:'', edad_minima:String(p.edad_minima), codigo_ean:p.codigo_ean })
-    setEditId(p.id)
-    // Scroll automático al formulario
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
-  }
-
-  const toggle = async (id, activo) => {
-    await toggleProducto(id, !activo)
-    setProductos(prev => prev.map(p => p.id === id ? {...p, activo: !activo} : p))
-  }
-
-  const eliminar = async id => {
-    if (!window.confirm('¿Eliminar este producto? Si tiene ventas registradas se desactivará en lugar de eliminarse.')) return
-    try {
-      await deleteProducto(id)
-      setProductos(prev => prev.filter(p => p.id !== id))
-      showToast('Producto eliminado ✓')
-    } catch(e) {
-      // Tiene tickets asociados — desactivar en su lugar
-      if (e.message?.includes('foreign key') || e.message?.includes('violates') || e.message?.includes('ticket_items')) {
-        await toggleProducto(id, false)
-        setProductos(prev => prev.map(p => p.id === id ? {...p, activo: false} : p))
-        showToast('Tiene ventas registradas — se ha desactivado en lugar de eliminar', 'ok')
-      } else {
-        showToast(e.message, 'error')
-      }
+  const editar=p=>{ setForm({nombre:p.nombre,precio:String(p.precio),categoria:p.categoria,catNueva:'',edad_minima:String(p.edad_minima),codigo_ean:p.codigo_ean,gramos_polvora:String(p.gramos_polvora??0)}); setEditId(p.id); setTimeout(()=>formRef.current?.scrollIntoView({behavior:'smooth',block:'start'}),50) }
+  const toggle=async(id,activo)=>{ await toggleProducto(id,!activo); setProductos(prev=>prev.map(p=>p.id===id?{...p,activo:!activo}:p)); showToast(!activo?'Producto activado ✓':'Producto desactivado') }
+  const eliminar=async id=>{
+    if(!window.confirm('¿Eliminar? Si tiene ventas se desactivará.')) return
+    try{ await deleteProducto(id); setProductos(prev=>prev.filter(p=>p.id!==id)); showToast('Eliminado ✓') }
+    catch(e){
+      if(e.message?.includes('foreign key')||e.message?.includes('violates')){
+        await toggleProducto(id,false); setProductos(prev=>prev.map(p=>p.id===id?{...p,activo:false}:p))
+        showToast('Tiene ventas — desactivado','ok')
+      }else showToast(e.message,'error')
     }
   }
-
-  const eaCl  = m => m===0?'cp':m===12?'cg':m===16?'cb2':'cr'
-  const eaLbl = m => m===0?'T1':m+'+'
-
-  const prods = productos.filter(p => {
-    if (catFiltro !== 'Todos' && p.categoria !== catFiltro) return false
-    if (busq && !p.nombre.toLowerCase().includes(busq.toLowerCase()) && !p.codigo_ean?.includes(busq)) return false
+  const eaCl=m=>m===0?'cp':m===12?'cg':m===16?'cb2':'cr'
+  const eaLbl=m=>m===0?'T1':m+'+'
+  const prods=productos.filter(p=>{
+    if(soloActivos&&!p.activo) return false
+    if(catFiltro!=='Todos'&&p.categoria!==catFiltro) return false
+    if(busq&&!p.nombre.toLowerCase().includes(busq.toLowerCase())&&!p.codigo_ean?.includes(busq)) return false
     return true
   })
+  if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
-  if (loading) return <div className="loading-row"><div className="spin-sm" />Cargando...</div>
-
-  return (
+  return(
     <>
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
-      <div ref={formRef} className="stit">{editId ? '✏️ Editar Producto' : '➕ Nuevo Producto'}</div>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      <div ref={formRef} className="stit">{editId?'✏️ Editar Producto':'➕ Nuevo Producto'}</div>
       <div className="iform">
         <div className="frow">
-          <div className="fg"><label>Nombre</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Ej: Piratas 50u." /></div>
-          <div className="fg"><label>Precio (€)</label><input type="number" value={form.precio} onChange={e=>setForm({...form,precio:e.target.value})} placeholder="1.00" min="0" step=".01" /></div>
-          <div className="fg"><label>Código EAN</label><input value={form.codigo_ean} onChange={e=>setForm({...form,codigo_ean:e.target.value})} placeholder="8410278004" inputMode="numeric" /></div>
-          <div className="fg">
-            <label>Categoría</label>
+          <div className="fg"><label>Nombre</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Piratas 50u."/></div>
+          <div className="fg"><label>Precio (€)</label><input type="number" value={form.precio} onChange={e=>setForm({...form,precio:e.target.value})} placeholder="1.00" min="0" step=".01"/></div>
+          <div className="fg"><label>Código EAN</label><input value={form.codigo_ean} onChange={e=>setForm({...form,codigo_ean:e.target.value})} placeholder="8410278004" inputMode="numeric"/></div>
+          <div className="fg"><label>Categoría</label>
             <select value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})}>
               {CATS_FIJAS.map(c=><option key={c}>{c}</option>)}
-              <option value="__nueva__">+ Otra categoría...</option>
+              <option value="__nueva__">+ Nueva categoría...</option>
             </select>
           </div>
-          {form.categoria === '__nueva__' && (
-            <div className="fg"><label>Nueva categoría</label><input value={form.catNueva} onChange={e=>setForm({...form,catNueva:e.target.value})} placeholder="Nombre de la categoría" /></div>
-          )}
-          <div className="fg">
-            <label>Edad mínima</label>
+          {form.categoria==='__nueva__'&&<div className="fg"><label>Nueva categoría</label><input value={form.catNueva} onChange={e=>setForm({...form,catNueva:e.target.value})} placeholder="Nombre"/></div>}
+          <div className="fg"><label>Edad mínima</label>
             <select value={form.edad_minima} onChange={e=>setForm({...form,edad_minima:e.target.value})}>
-              <option value="0">T1 (requiere DNI)</option>
-              <option value="12">12+</option>
-              <option value="16">16+</option>
-              <option value="18">18+</option>
+              <option value="0">T1</option><option value="12">12+</option><option value="16">16+</option><option value="18">18+</option>
             </select>
           </div>
+          <div className="fg">
+            <label>Gramos pólvora NEC <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— según etiqueta del producto</span></label>
+            <input type="number" value={form.gramos_polvora} onChange={e=>setForm({...form,gramos_polvora:e.target.value})} placeholder="4.820" min="0" step=".001"/>
+          </div>
         </div>
-        <div style={{ display:'flex',gap:9 }}>
-          <button className="btn-add" onClick={guardar}>{editId ? 'Guardar cambios' : 'Añadir producto'}</button>
-          {editId && <button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
+        <div style={{display:'flex',gap:9}}>
+          <button className="btn-add" onClick={guardar}>{editId?'Guardar cambios':'Añadir producto'}</button>
+          {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
         </div>
       </div>
-
-      <div style={{ display:'flex',gap:10,alignItems:'center',marginBottom:10,flexWrap:'wrap' }}>
-        <div className="stit" style={{ margin:0 }}>Catálogo ({productos.length})</div>
-        <input className="si" style={{maxWidth:240}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)} />
-        <select value={catFiltro} onChange={e=>setCatFiltro(e.target.value)}
-          style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
-          {catsDinamicas.map(c=><option key={c}>{c}</option>)}
-        </select>
+      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:10,flexWrap:'wrap'}}>
+        <div className="stit" style={{margin:0}}>Catálogo ({prods.length}/{productos.length})</div>
+        <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
+        <select value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{catsDinamicas.map(c=><option key={c}>{c}</option>)}</select>
+        <div onClick={()=>setSoloActivos(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'6px 12px',borderRadius:'var(--rs)',border:'1px solid',borderColor:soloActivos?'var(--bd)':'var(--gold)',background:soloActivos?'transparent':'rgba(245,200,66,.1)'}}>
+          <div style={{width:32,height:18,borderRadius:9,background:soloActivos?'var(--s3)':'var(--gold)',position:'relative',transition:'background .2s'}}>
+            <div style={{position:'absolute',top:2,left:soloActivos?2:14,width:14,height:14,borderRadius:'50%',background:'white',transition:'left .2s'}}/>
+          </div>
+          <span style={{fontSize:'.78rem',color:soloActivos?'var(--tx2)':'var(--gold)',fontWeight:600}}>{soloActivos?'Solo activos':'Todos (inc. inactivos)'}</span>
+        </div>
       </div>
-      <div className="tw">
-        <table>
-          <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Precio</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>
-            {prods.map(p=>(
-              <tr key={p.id} style={{opacity:p.activo?1:.5}}>
-                <td style={{fontWeight:600}}>{p.nombre}</td>
-                <td style={{color:'var(--tx2)',fontSize:'.76rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
-                <td style={{color:'var(--tx2)'}}>{p.categoria}</td>
-                <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(p.precio)}</td>
-                <td><span className={`chip ${eaCl(p.edad_minima)}`}>{eaLbl(p.edad_minima)}</span></td>
-                <td><span className={`chip ${p.activo?'cg':'cr'}`}>{p.activo?'Activo':'Inactivo'}</span></td>
-                <td>
-                  <div className="acell">
-                    <button className="btn-edit" onClick={()=>editar(p)}>Editar</button>
-                    <button className="btn-tog" style={{color:p.activo?'var(--gold)':'var(--green)'}} onClick={()=>toggle(p.id,p.activo)}>{p.activo?'Desact.':'Activar'}</button>
-                    <button className="btn-del" onClick={()=>eliminar(p.id)}>Eliminar</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="tw"><table>
+        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Precio</th><th>Pólvora NEC</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {prods.map(p=>(
+            <tr key={p.id} style={{opacity:p.activo?1:.55}}>
+              <td style={{fontWeight:600}}>{p.nombre}{!p.activo&&<span style={{marginLeft:6,fontSize:'.7rem',color:'var(--red)',background:'rgba(239,68,68,.1)',padding:'1px 5px',borderRadius:4}}>inactivo</span>}</td>
+              <td style={{color:'var(--tx2)',fontSize:'.76rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
+              <td style={{color:'var(--tx2)'}}>{p.categoria}</td>
+              <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(p.precio)}</td>
+              <td style={{color:'var(--tx2)',fontSize:'.82rem',textAlign:'center'}}>{p.gramos_polvora>0?<span style={{color:'var(--gold)',fontWeight:600}}>{p.gramos_polvora}g</span>:<span style={{opacity:.3}}>—</span>}</td>
+              <td><span className={`chip ${eaCl(p.edad_minima)}`}>{eaLbl(p.edad_minima)}</span></td>
+              <td><span className={`chip ${p.activo?'cg':'cr'}`}>{p.activo?'Activo':'Inactivo'}</span></td>
+              <td><div className="acell">
+                <button className="btn-edit" onClick={()=>editar(p)}>Editar</button>
+                <button className="btn-tog" style={{color:p.activo?'var(--gold)':'var(--green)'}} onClick={()=>toggle(p.id,p.activo)}>{p.activo?'Desact.':'Activar'}</button>
+                {p.activo&&<button className="btn-del" onClick={()=>eliminar(p.id)}>Eliminar</button>}
+              </div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
     </>
   )
 }
 
 // ─── GESTIÓN STOCK ────────────────────────────────────────────
 function GestionStock({ casetas }) {
-  const [productos, setProductos] = useState([])
-  const [stockData, setStockData] = useState({})
-  const [casetaSel, setCasetaSel] = useState('')
-  const [loading, setLoading]     = useState(true)
-  const [saving, setSaving]       = useState(null)
-  const [editVals, setEditVals]   = useState({})
-  const [busq, setBusq]           = useState('')
-  const [catFiltro, setCatFiltro] = useState('Todos')
-  const [toast, setToast]         = useState(null)
+  const [productos,setProductos]=useState([])
+  const [stockData,setStockData]=useState({})
+  const [casetaSel,setCasetaSel]=useState('')
+  const [kgActual,setKgActual]=useState(0)
+  const [loading,setLoading]=useState(true)
+  const [saving,setSaving]=useState(null)
+  const [editVals,setEditVals]=useState({})
+  const [busq,setBusq]=useState('')
+  const [catFiltro,setCatFiltro]=useState('Todos')
+  const [toast,setToast]=useState(null)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
 
-  const showToast = (msg,type='ok') => { setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
-
-  useEffect(() => {
-    getProductos().then(p => {
-      setProductos(p)
-      if (casetas.length) setCasetaSel(casetas[0].id)
+  useEffect(()=>{ getProductos(true).then(p=>{setProductos(p);if(casetas.length)setCasetaSel(casetas[0].id)}).finally(()=>setLoading(false)) },[])
+  useEffect(()=>{
+    if(!casetaSel) return; setLoading(true)
+    Promise.all([getStockCaseta(casetaSel),getKgPolvora(casetaSel)]).then(([stk,kg])=>{
+      setStockData(prev=>({...prev,[casetaSel]:stk})); setKgActual(kg); setEditVals({})
     }).finally(()=>setLoading(false))
-  }, [])
+  },[casetaSel])
 
-  useEffect(() => {
-    if (!casetaSel) return
-    setLoading(true)
-    getStockCaseta(casetaSel).then(stk => {
-      setStockData(prev=>({...prev,[casetaSel]:stk}))
-      setEditVals({})
-    }).finally(()=>setLoading(false))
-  }, [casetaSel])
+  const stockActual=stockData[casetaSel]||{}
+  const CATS=['Todos',...new Set(productos.map(p=>p.categoria))]
+  const caseta=casetas.find(c=>c.id===casetaSel)
+  const limite=caseta?.limite_kg_polvora||10
+  const pctKg=limite>0?(kgActual/limite)*100:0
 
-  const stockActual = stockData[casetaSel] || {}
-  const CATS = ['Todos', ...new Set(productos.map(p=>p.categoria))]
-
-  const guardarStock = async (productoId) => {
-    const val = editVals[productoId]
-    if (val === undefined || val === '') return
-    const cantidad = parseInt(val)
-    if (isNaN(cantidad) || cantidad < 0) { showToast('Cantidad no válida','error'); return }
+  const guardarStock=async productoId=>{
+    const val=editVals[productoId]; if(val===undefined||val==='') return
+    const cantidad=parseInt(val); if(isNaN(cantidad)||cantidad<0){showToast('Cantidad no válida','error');return}
     setSaving(productoId)
-    try {
-      await setStock(productoId, casetaSel, cantidad)
-      setStockData(prev => ({...prev,[casetaSel]:{...prev[casetaSel],[productoId]:cantidad}}))
-      setEditVals(prev => { const n={...prev}; delete n[productoId]; return n })
+    try{
+      await setStock(productoId,casetaSel,cantidad)
+      setStockData(prev=>({...prev,[casetaSel]:{...prev[casetaSel],[productoId]:cantidad}}))
+      setEditVals(prev=>{const n={...prev};delete n[productoId];return n})
       showToast('Stock actualizado ✓')
-    } catch(e) { showToast(e.message,'error') }
-    finally { setSaving(null) }
+      getKgPolvora(casetaSel).then(setKgActual)
+    }catch(e){showToast(e.message,'error')}finally{setSaving(null)}
   }
 
-  const prods = productos.filter(p => {
-    if (catFiltro !== 'Todos' && p.categoria !== catFiltro) return false
-    if (busq && !p.nombre.toLowerCase().includes(busq.toLowerCase())) return false
+  const prods=productos.filter(p=>{
+    if(catFiltro!=='Todos'&&p.categoria!==catFiltro) return false
+    if(busq&&!p.nombre.toLowerCase().includes(busq.toLowerCase())) return false
     return true
   })
+  const colStock=n=>n===0?'var(--red)':n<10?'var(--gold)':'var(--green)'
+  if(loading&&!productos.length) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
-  const colStock = n => n === 0 ? 'var(--red)' : n < 10 ? 'var(--gold)' : 'var(--green)'
-  if (loading && !productos.length) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
-
-  return (
+  return(
     <>
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
-      <div style={{ display:'flex',gap:10,alignItems:'center',marginBottom:16,flexWrap:'wrap' }}>
-        <div style={{ display:'flex',gap:6,flexWrap:'wrap' }}>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:16,flexWrap:'wrap'}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           {casetas.map(c=>(
-            <button key={c.id} onClick={()=>setCasetaSel(c.id)} style={{
-              padding:'7px 13px',borderRadius:'var(--rs)',border:'1px solid',
-              borderColor:casetaSel===c.id?'var(--ac)':'var(--bd)',
-              background:casetaSel===c.id?'rgba(255,77,28,.1)':'transparent',
-              color:casetaSel===c.id?'var(--ac)':'var(--tx2)',
-              fontSize:'.82rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif",
-            }}>{c.nombre.replace('Caballer ','')}</button>
+            <button key={c.id} onClick={()=>setCasetaSel(c.id)} style={{padding:'7px 13px',borderRadius:'var(--rs)',border:'1px solid',borderColor:casetaSel===c.id?'var(--ac)':'var(--bd)',background:casetaSel===c.id?'rgba(255,77,28,.1)':'transparent',color:casetaSel===c.id?'var(--ac)':'var(--tx2)',fontSize:'.82rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif"}}>{c.nombre.replace('Caballer ','')}</button>
           ))}
         </div>
-        <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)} />
-        <select value={catFiltro} onChange={e=>setCatFiltro(e.target.value)}
-          style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
-          {CATS.map(c=><option key={c}>{c}</option>)}
-        </select>
+        <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
+        <select value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{CATS.map(c=><option key={c}>{c}</option>)}</select>
       </div>
-      <div className="info-box" style={{marginBottom:12}}>
-        Escribe la nueva cantidad y pulsa <strong>Enter</strong> o <strong>✓</strong> para guardar.
-      </div>
-      {loading && <div className="loading-row"><div className="spin-sm"/>Actualizando...</div>}
-      <div className="tw">
-        <table>
-          <thead><tr><th>Producto</th><th>Categoría</th><th>EAN</th><th style={{textAlign:'center'}}>Stock</th><th style={{textAlign:'center'}}>Nuevo</th></tr></thead>
-          <tbody>
-            {prods.map(p=>{
-              const cant = stockActual[p.id] ?? 0
-              const editando = editVals[p.id] !== undefined
-              const guardando = saving === p.id
-              return (
-                <tr key={p.id}>
-                  <td style={{fontWeight:600}}>{p.nombre}</td>
-                  <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{p.categoria}</td>
-                  <td style={{color:'var(--tx2)',fontSize:'.74rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
-                  <td style={{textAlign:'center'}}>
-                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.2rem',color:colStock(cant)}}>{cant}</span>
-                  </td>
-                  <td style={{textAlign:'center'}}>
-                    <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
-                      <input type="number" min="0" value={editVals[p.id]??''} placeholder={String(cant)}
-                        onChange={e=>setEditVals(prev=>({...prev,[p.id]:e.target.value}))}
-                        onKeyDown={e=>e.key==='Enter'&&guardarStock(p.id)}
-                        style={{width:70,background:'var(--s2)',border:'1px solid',borderColor:editando?'var(--ac)':'var(--bd)',borderRadius:'var(--rs)',padding:'6px 8px',color:'var(--tx)',fontSize:'.88rem',outline:'none',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}}
-                        inputMode="numeric"
-                      />
-                      {editando && (
-                        <button onClick={()=>guardarStock(p.id)} disabled={guardando} style={{width:28,height:28,borderRadius:'50%',border:'none',background:'var(--green)',color:'white',cursor:'pointer',fontSize:'.82rem',display:'flex',alignItems:'center',justifyContent:'center',opacity:guardando?.5:1}}>
-                          {guardando?'…':'✓'}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+
+      {casetaSel&&(
+        <div style={{background:pctKg>=90?'rgba(239,68,68,.1)':pctKg>=75?'rgba(245,200,66,.1)':'var(--s2)',borderRadius:'var(--rs)',padding:'10px 14px',marginBottom:14,border:`1px solid ${pctKg>=90?'var(--red)':pctKg>=75?'var(--gold)':'var(--bd)'}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+            <span style={{fontWeight:600,fontSize:'.83rem'}}>💥 Pólvora — {caseta?.nombre}</span>
+            <span style={{fontWeight:700,color:pctKg>=90?'var(--red)':pctKg>=75?'var(--gold)':'var(--green)'}}>{kgActual.toFixed(3)} kg / {limite} kg ({pctKg.toFixed(1)}%)</span>
+          </div>
+          <div style={{height:6,background:'var(--s3)',borderRadius:3,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${Math.min(100,pctKg)}%`,background:pctKg>=90?'var(--red)':pctKg>=75?'var(--gold)':'var(--green)',borderRadius:3,transition:'width .5s'}}/>
+          </div>
+          {pctKg>=80&&<div style={{fontSize:'.75rem',marginTop:5,color:pctKg>=90?'var(--red)':'var(--gold)',fontWeight:700}}>⚠️ {pctKg>=90?'ALERTA: Límite casi alcanzado. No añadir más stock.':'Advertencia: Stock al 80% del límite legal.'}</div>}
+        </div>
+      )}
+
+      <div className="info-box" style={{marginBottom:12}}>Escribe la nueva cantidad y pulsa <strong>Enter</strong> o <strong>✓</strong>. Solo se muestran productos activos.</div>
+      {loading&&<div className="loading-row"><div className="spin-sm"/>Actualizando...</div>}
+      <div className="tw"><table>
+        <thead><tr><th>Producto</th><th>Categoría</th><th>EAN</th><th style={{textAlign:'center'}}>Stock</th><th style={{textAlign:'center'}}>Nuevo</th></tr></thead>
+        <tbody>
+          {prods.map(p=>{
+            const cant=stockActual[p.id]??0; const editando=editVals[p.id]!==undefined; const guardando=saving===p.id
+            return(
+              <tr key={p.id}>
+                <td style={{fontWeight:600}}>{p.nombre}</td>
+                <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{p.categoria}</td>
+                <td style={{color:'var(--tx2)',fontSize:'.74rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
+                <td style={{textAlign:'center'}}><span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.2rem',color:colStock(cant)}}>{cant}</span></td>
+                <td style={{textAlign:'center'}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+                    <input type="number" min="0" value={editVals[p.id]??''} placeholder={String(cant)} onChange={e=>setEditVals(prev=>({...prev,[p.id]:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&guardarStock(p.id)}
+                      style={{width:70,background:'var(--s2)',border:'1px solid',borderColor:editando?'var(--ac)':'var(--bd)',borderRadius:'var(--rs)',padding:'6px 8px',color:'var(--tx)',fontSize:'.88rem',outline:'none',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}} inputMode="numeric"/>
+                    {editando&&<button onClick={()=>guardarStock(p.id)} disabled={guardando} style={{width:28,height:28,borderRadius:'50%',border:'none',background:'var(--green)',color:'white',cursor:'pointer',fontSize:'.82rem',display:'flex',alignItems:'center',justifyContent:'center',opacity:guardando?.5:1}}>{guardando?'…':'✓'}</button>}
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table></div>
     </>
   )
 }
 
 // ─── GESTIÓN OFERTAS ─────────────────────────────────────────
 function GestionOfertas() {
-  const [ofertas, setOfertas]     = useState([])
-  const [productos, setProductos] = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [toast, setToast]         = useState(null)
-  const [editId, setEditId]       = useState(null)
-  const [tipo, setTipo]           = useState('pack') // 'pack' | 'combinada'
+  const [ofertas,setOfertas]=useState([])
+  const [productos,setProductos]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [toast,setToast]=useState(null)
+  const [editId,setEditId]=useState(null)
+  const [tipo,setTipo]=useState('pack')
+  const F0pack={producto_id:'',etiqueta:'',cantidad_pack:'',precio_pack:''}
+  const [formPack,setFormPack]=useState(F0pack)
+  const F0comb={etiqueta:'',precio_pack:'',lineas:[{producto_id:'',cantidad:'1'},{producto_id:'',cantidad:'1'}]}
+  const [formComb,setFormComb]=useState(F0comb)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
 
-  // Formulario pack
-  const F0pack = { producto_id:'', etiqueta:'', cantidad_pack:'', precio_pack:'' }
-  const [formPack, setFormPack] = useState(F0pack)
+  useEffect(()=>{ Promise.all([getOfertas(),getProductos()]).then(([o,p])=>{setOfertas(o);setProductos(p)}).finally(()=>setLoading(false)) },[])
 
-  // Formulario combinada: lista de líneas {producto_id, cantidad}
-  const F0comb = { etiqueta:'', precio_pack:'', lineas:[{producto_id:'', cantidad:'1'},{producto_id:'', cantidad:'1'}] }
-  const [formComb, setFormComb] = useState(F0comb)
-
-  const showToast = (msg,type='ok') => { setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
-
-  useEffect(() => {
-    Promise.all([getOfertas(),getProductos()]).then(([o,p])=>{setOfertas(o);setProductos(p)}).finally(()=>setLoading(false))
-  },[])
-
-  // ── Guardar pack ──
-  const guardarPack = async () => {
-    const {producto_id,etiqueta,cantidad_pack,precio_pack} = formPack
-    if (!producto_id||!etiqueta||!cantidad_pack||!precio_pack) { showToast('Todos los campos son obligatorios','error'); return }
-    try {
-      const data = await upsertOferta({
-        ...(editId?{id:editId}:{}),
-        tipo:'pack', producto_id, etiqueta,
-        cantidad_pack:parseInt(cantidad_pack), precio_pack:parseFloat(precio_pack), activa:true,
-      })
-      if (editId) setOfertas(prev=>prev.map(o=>o.id===editId?data:o))
-      else setOfertas(prev=>[...prev,data])
-      showToast(editId?'Oferta actualizada ✓':'Oferta añadida ✓')
-      setFormPack(F0pack); setEditId(null)
-    } catch(e) { showToast(e.message,'error') }
+  const guardarPack=async()=>{
+    const {producto_id,etiqueta,cantidad_pack,precio_pack}=formPack
+    if(!producto_id||!etiqueta||!cantidad_pack||!precio_pack){showToast('Todos los campos obligatorios','error');return}
+    try{
+      const data=await upsertOferta({...(editId?{id:editId}:{}),tipo:'pack',producto_id,etiqueta,cantidad_pack:parseInt(cantidad_pack),precio_pack:parseFloat(precio_pack),activa:true})
+      if(editId)setOfertas(prev=>prev.map(o=>o.id===editId?data:o)); else setOfertas(prev=>[...prev,data])
+      showToast(editId?'Actualizada ✓':'Oferta añadida ✓'); setFormPack(F0pack); setEditId(null)
+    }catch(e){showToast(e.message,'error')}
   }
-
-  // ── Guardar combinada ──
-  const guardarCombinada = async () => {
-    const {etiqueta,precio_pack,lineas} = formComb
-    if (!etiqueta||!precio_pack) { showToast('Etiqueta y precio son obligatorios','error'); return }
-    const lineasVal = lineas.filter(l=>l.producto_id&&parseInt(l.cantidad)>0)
-    if (lineasVal.length < 2) { showToast('Una oferta combinada necesita al menos 2 productos','error'); return }
-    const productos_requeridos = lineasVal.map(l=>({
-      producto_id: l.producto_id,
-      cantidad: parseInt(l.cantidad),
-      nombre: productos.find(p=>p.id===l.producto_id)?.nombre||'',
-    }))
-    try {
-      const data = await upsertOferta({
-        ...(editId?{id:editId}:{}),
-        tipo:'combinada', producto_id:null, etiqueta,
-        cantidad_pack:lineasVal.reduce((s,l)=>s+parseInt(l.cantidad),0),
-        precio_pack:parseFloat(precio_pack),
-        productos_requeridos, activa:true,
-      })
-      if (editId) setOfertas(prev=>prev.map(o=>o.id===editId?data:o))
-      else setOfertas(prev=>[...prev,data])
-      showToast(editId?'Oferta actualizada ✓':'Oferta combinada añadida ✓')
-      setFormComb(F0comb); setEditId(null)
-    } catch(e) { showToast(e.message,'error') }
+  const guardarCombinada=async()=>{
+    const {etiqueta,precio_pack,lineas}=formComb
+    if(!etiqueta||!precio_pack){showToast('Etiqueta y precio obligatorios','error');return}
+    const lineasVal=lineas.filter(l=>l.producto_id&&parseInt(l.cantidad)>0)
+    if(lineasVal.length<2){showToast('Mínimo 2 productos','error');return}
+    const productos_requeridos=lineasVal.map(l=>({producto_id:l.producto_id,cantidad:parseInt(l.cantidad),nombre:productos.find(p=>p.id===l.producto_id)?.nombre||''}))
+    try{
+      const data=await upsertOferta({...(editId?{id:editId}:{}),tipo:'combinada',producto_id:null,etiqueta,cantidad_pack:lineasVal.reduce((s,l)=>s+parseInt(l.cantidad),0),precio_pack:parseFloat(precio_pack),productos_requeridos,activa:true})
+      if(editId)setOfertas(prev=>prev.map(o=>o.id===editId?data:o)); else setOfertas(prev=>[...prev,data])
+      showToast(editId?'Actualizada ✓':'Oferta combinada añadida ✓'); setFormComb(F0comb); setEditId(null)
+    }catch(e){showToast(e.message,'error')}
   }
-
-  const editar = o => {
+  const editar=o=>{
     setEditId(o.id)
-    if (!o.tipo || o.tipo==='pack') {
-      setTipo('pack')
-      setFormPack({producto_id:o.producto_id||'',etiqueta:o.etiqueta,cantidad_pack:String(o.cantidad_pack),precio_pack:String(o.precio_pack)})
-    } else {
-      setTipo('combinada')
-      setFormComb({etiqueta:o.etiqueta,precio_pack:String(o.precio_pack),lineas:(o.productos_requeridos||[]).map(r=>({producto_id:r.producto_id,cantidad:String(r.cantidad)}))})
-    }
+    if(!o.tipo||o.tipo==='pack'){setTipo('pack');setFormPack({producto_id:o.producto_id||'',etiqueta:o.etiqueta,cantidad_pack:String(o.cantidad_pack),precio_pack:String(o.precio_pack)})}
+    else{setTipo('combinada');setFormComb({etiqueta:o.etiqueta,precio_pack:String(o.precio_pack),lineas:(o.productos_requeridos||[]).map(r=>({producto_id:r.producto_id,cantidad:String(r.cantidad)}))})}
   }
+  const eliminar=async id=>{if(!window.confirm('¿Eliminar oferta?'))return; await deleteOferta(id); setOfertas(prev=>prev.filter(o=>o.id!==id)); showToast('Eliminada')}
+  const addLinea=()=>setFormComb(prev=>({...prev,lineas:[...prev.lineas,{producto_id:'',cantidad:'1'}]}))
+  const removeLinea=i=>setFormComb(prev=>({...prev,lineas:prev.lineas.filter((_,j)=>j!==i)}))
+  const setLinea=(i,campo,val)=>setFormComb(prev=>({...prev,lineas:prev.lineas.map((l,j)=>j===i?{...l,[campo]:val}:l)}))
+  const prodSel=productos.find(p=>p.id===formPack.producto_id)
+  const precioU=formPack.cantidad_pack&&formPack.precio_pack?parseFloat(formPack.precio_pack)/parseInt(formPack.cantidad_pack):0
+  if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
-  const eliminar = async id => {
-    if (!window.confirm('¿Eliminar esta oferta?')) return
-    await deleteOferta(id)
-    setOfertas(prev=>prev.filter(o=>o.id!==id))
-    showToast('Oferta eliminada')
-  }
-
-  const addLinea = () => setFormComb(prev=>({...prev,lineas:[...prev.lineas,{producto_id:'',cantidad:'1'}]}))
-  const removeLinea = i => setFormComb(prev=>({...prev,lineas:prev.lineas.filter((_,j)=>j!==i)}))
-  const setLinea = (i,campo,val) => setFormComb(prev=>({...prev,lineas:prev.lineas.map((l,j)=>j===i?{...l,[campo]:val}:l)}))
-
-  const prodSel = productos.find(p=>p.id===formPack.producto_id)
-  const precioU = formPack.cantidad_pack&&formPack.precio_pack ? parseFloat(formPack.precio_pack)/parseInt(formPack.cantidad_pack) : 0
-
-  if (loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
-
-  return (
+  return(
     <>
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
       <div className="stit">{editId?'✏️ Editar Oferta':'➕ Nueva Oferta'}</div>
-
-      {/* Selector tipo */}
-      {!editId && (
+      {!editId&&(
         <div style={{display:'flex',gap:0,marginBottom:14,background:'var(--s2)',borderRadius:'var(--rs)',padding:4,width:'fit-content'}}>
-          <button onClick={()=>setTipo('pack')} style={{padding:'7px 18px',borderRadius:'var(--rs)',border:'none',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.82rem',cursor:'pointer',background:tipo==='pack'?'var(--ac)':'transparent',color:tipo==='pack'?'white':'var(--tx2)'}}>
-            📦 Pack (un producto)
-          </button>
-          <button onClick={()=>setTipo('combinada')} style={{padding:'7px 18px',borderRadius:'var(--rs)',border:'none',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.82rem',cursor:'pointer',background:tipo==='combinada'?'var(--ac)':'transparent',color:tipo==='combinada'?'white':'var(--tx2)'}}>
-            🎁 Combinada (varios productos)
-          </button>
+          <button onClick={()=>setTipo('pack')} style={{padding:'7px 18px',borderRadius:'var(--rs)',border:'none',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.82rem',cursor:'pointer',background:tipo==='pack'?'var(--ac)':'transparent',color:tipo==='pack'?'white':'var(--tx2)'}}>📦 Pack</button>
+          <button onClick={()=>setTipo('combinada')} style={{padding:'7px 18px',borderRadius:'var(--rs)',border:'none',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.82rem',cursor:'pointer',background:tipo==='combinada'?'var(--ac)':'transparent',color:tipo==='combinada'?'white':'var(--tx2)'}}>🎁 Combinada</button>
         </div>
       )}
-
-      {/* Formulario pack */}
-      {tipo==='pack' && (
+      {tipo==='pack'&&(
         <div className="iform">
-          <div className="info-box" style={{marginBottom:12}}>
-            Pack de N unidades del mismo producto por X€. Se aplica automáticamente al añadir al ticket.
-          </div>
           <div className="frow">
-            <div className="fg"><label>Producto</label>
-              <select value={formPack.producto_id} onChange={e=>setFormPack({...formPack,producto_id:e.target.value})}>
-                <option value="">-- Seleccionar --</option>
-                {productos.filter(p=>p.activo).map(p=><option key={p.id} value={p.id}>{p.nombre} ({fmt(p.precio)})</option>)}
-              </select>
-            </div>
-            <div className="fg"><label>Etiqueta visible</label><input value={formPack.etiqueta} onChange={e=>setFormPack({...formPack,etiqueta:e.target.value})} placeholder="Ej: 4 x 5€" /></div>
-            <div className="fg"><label>Unidades del pack</label><input type="number" value={formPack.cantidad_pack} onChange={e=>setFormPack({...formPack,cantidad_pack:e.target.value})} placeholder="4" min="2" /></div>
-            <div className="fg"><label>Precio total (€)</label><input type="number" value={formPack.precio_pack} onChange={e=>setFormPack({...formPack,precio_pack:e.target.value})} placeholder="5.00" min="0" step=".01" /></div>
+            <div className="fg"><label>Producto</label><select value={formPack.producto_id} onChange={e=>setFormPack({...formPack,producto_id:e.target.value})}><option value="">-- Seleccionar --</option>{productos.filter(p=>p.activo).map(p=><option key={p.id} value={p.id}>{p.nombre} ({fmt(p.precio)})</option>)}</select></div>
+            <div className="fg"><label>Etiqueta</label><input value={formPack.etiqueta} onChange={e=>setFormPack({...formPack,etiqueta:e.target.value})} placeholder="4 x 5€"/></div>
+            <div className="fg"><label>Unidades</label><input type="number" value={formPack.cantidad_pack} onChange={e=>setFormPack({...formPack,cantidad_pack:e.target.value})} placeholder="4" min="2"/></div>
+            <div className="fg"><label>Precio (€)</label><input type="number" value={formPack.precio_pack} onChange={e=>setFormPack({...formPack,precio_pack:e.target.value})} placeholder="5.00" min="0" step=".01"/></div>
           </div>
-          {formPack.cantidad_pack&&formPack.precio_pack&&(
-            <div style={{fontSize:'.8rem',marginBottom:11,display:'flex',gap:18}}>
-              <span style={{color:'var(--gold)'}}>€/u.: <strong>{fmt(precioU)}</strong></span>
-              {prodSel&&<span style={{color:'var(--green)'}}>Ahorro: <strong>{fmt(prodSel.precio-precioU)}/u.</strong></span>}
-            </div>
-          )}
-          <div style={{display:'flex',gap:9}}>
-            <button className="btn-add" onClick={guardarPack}>{editId?'Guardar':'Añadir oferta'}</button>
-            {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setFormPack(F0pack)}}>Cancelar</button>}
-          </div>
+          {formPack.cantidad_pack&&formPack.precio_pack&&(<div style={{fontSize:'.8rem',marginBottom:11,display:'flex',gap:18}}><span style={{color:'var(--gold)'}}>€/u.: <strong>{fmt(precioU)}</strong></span>{prodSel&&<span style={{color:'var(--green)'}}>Ahorro: <strong>{fmt(prodSel.precio-precioU)}/u.</strong></span>}</div>)}
+          <div style={{display:'flex',gap:9}}><button className="btn-add" onClick={guardarPack}>{editId?'Guardar':'Añadir'}</button>{editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setFormPack(F0pack)}}>Cancelar</button>}</div>
         </div>
       )}
-
-      {/* Formulario combinada */}
-      {tipo==='combinada' && (
+      {tipo==='combinada'&&(
         <div className="iform">
-          <div className="info-box" style={{marginBottom:12}}>
-            Oferta con varios productos distintos. Aparecerá como botón en el TPV: al pulsarlo añade todos los productos al ticket de golpe.
-          </div>
           <div className="frow">
-            <div className="fg"><label>Etiqueta visible</label><input value={formComb.etiqueta} onChange={e=>setFormComb({...formComb,etiqueta:e.target.value})} placeholder="Ej: Mini fuente + Cracker 5€" /></div>
-            <div className="fg"><label>Precio total (€)</label><input type="number" value={formComb.precio_pack} onChange={e=>setFormComb({...formComb,precio_pack:e.target.value})} placeholder="5.00" min="0" step=".01" /></div>
+            <div className="fg"><label>Etiqueta</label><input value={formComb.etiqueta} onChange={e=>setFormComb({...formComb,etiqueta:e.target.value})} placeholder="Mini fuente + Cracker 5€"/></div>
+            <div className="fg"><label>Precio total (€)</label><input type="number" value={formComb.precio_pack} onChange={e=>setFormComb({...formComb,precio_pack:e.target.value})} placeholder="5.00" min="0" step=".01"/></div>
           </div>
-
           <div style={{marginBottom:12}}>
             <div style={{fontSize:'.73rem',color:'var(--tx2)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:8}}>Productos incluidos</div>
             {formComb.lineas.map((l,i)=>(
               <div key={i} style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
-                <select value={l.producto_id} onChange={e=>setLinea(i,'producto_id',e.target.value)}
-                  style={{flex:2,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
-                  <option value="">-- Producto --</option>
-                  {productos.filter(p=>p.activo).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-                </select>
-                <div style={{display:'flex',alignItems:'center',gap:6,flex:1}}>
-                  <label style={{fontSize:'.75rem',color:'var(--tx2)',whiteSpace:'nowrap'}}>Cant.</label>
-                  <input type="number" min="1" value={l.cantidad} onChange={e=>setLinea(i,'cantidad',e.target.value)}
-                    style={{width:60,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}}
-                    inputMode="numeric" />
-                </div>
-                {formComb.lineas.length>2&&(
-                  <button onClick={()=>removeLinea(i)} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.85rem',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
-                )}
+                <select value={l.producto_id} onChange={e=>setLinea(i,'producto_id',e.target.value)} style={{flex:2,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}><option value="">-- Producto --</option>{productos.filter(p=>p.activo).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
+                <div style={{display:'flex',alignItems:'center',gap:6,flex:1}}><label style={{fontSize:'.75rem',color:'var(--tx2)',whiteSpace:'nowrap'}}>Cant.</label><input type="number" min="1" value={l.cantidad} onChange={e=>setLinea(i,'cantidad',e.target.value)} style={{width:60,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}} inputMode="numeric"/></div>
+                {formComb.lineas.length>2&&<button onClick={()=>removeLinea(i)} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.85rem',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>}
               </div>
             ))}
-            <button onClick={addLinea} style={{background:'transparent',border:'1px dashed var(--bd)',borderRadius:'var(--rs)',padding:'6px 14px',color:'var(--tx2)',cursor:'pointer',fontSize:'.78rem',fontFamily:"'DM Sans',sans-serif"}}>
-              + Añadir otro producto
-            </button>
+            <button onClick={addLinea} style={{background:'transparent',border:'1px dashed var(--bd)',borderRadius:'var(--rs)',padding:'6px 14px',color:'var(--tx2)',cursor:'pointer',fontSize:'.78rem',fontFamily:"'DM Sans',sans-serif"}}>+ Añadir producto</button>
           </div>
-
-          <div style={{display:'flex',gap:9}}>
-            <button className="btn-add" onClick={guardarCombinada}>{editId?'Guardar':'Añadir oferta combinada'}</button>
-            {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setFormComb(F0comb)}}>Cancelar</button>}
-          </div>
+          <div style={{display:'flex',gap:9}}><button className="btn-add" onClick={guardarCombinada}>{editId?'Guardar':'Añadir combinada'}</button>{editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setFormComb(F0comb)}}>Cancelar</button>}</div>
         </div>
       )}
-
       <div className="stit">Ofertas activas ({ofertas.length})</div>
-      <div className="tw">
-        <table>
-          <thead><tr><th>Tipo</th><th>Descripción</th><th>Precio</th><th>Acciones</th></tr></thead>
-          <tbody>
-            {ofertas.length===0
-              ? <tr><td colSpan={4} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>Sin ofertas</td></tr>
-              : ofertas.map(o=>{
-                const esComb = o.tipo==='combinada'
-                const p = !esComb && productos.find(x=>x.id===o.producto_id)
-                return (
-                  <tr key={o.id}>
-                    <td><span className={`chip ${esComb?'cb2':'cy'}`}>{esComb?'Combinada':'Pack'}</span></td>
-                    <td style={{fontWeight:600}}>
-                      {esComb
-                        ? <>{o.etiqueta}<br/><span style={{fontWeight:400,fontSize:'.74rem',color:'var(--tx2)'}}>{(o.productos_requeridos||[]).map(r=>`${r.cantidad}× ${r.nombre}`).join(' + ')}</span></>
-                        : <>{p?p.nombre:<span style={{color:'var(--red)'}}>Eliminado</span>}<br/><span style={{fontWeight:400,fontSize:'.74rem',color:'var(--tx2)'}}>{o.etiqueta} · {o.cantidad_pack}u.</span></>
-                      }
-                    </td>
-                    <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(o.precio_pack)}</td>
-                    <td><div className="acell">
-                      <button className="btn-edit" onClick={()=>editar(o)}>Editar</button>
-                      <button className="btn-del" onClick={()=>eliminar(o.id)}>Eliminar</button>
-                    </div></td>
-                  </tr>
-                )
-              })
-            }
-          </tbody>
-        </table>
-      </div>
+      <div className="tw"><table>
+        <thead><tr><th>Tipo</th><th>Descripción</th><th>Precio</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {ofertas.length===0?<tr><td colSpan={4} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>Sin ofertas</td></tr>
+            :ofertas.map(o=>{
+            const esComb=o.tipo==='combinada'; const p=!esComb&&productos.find(x=>x.id===o.producto_id)
+            return(
+              <tr key={o.id}>
+                <td><span className={`chip ${esComb?'cb2':'cy'}`}>{esComb?'Combinada':'Pack'}</span></td>
+                <td style={{fontWeight:600}}>
+                  {esComb?<>{o.etiqueta}<br/><span style={{fontWeight:400,fontSize:'.74rem',color:'var(--tx2)'}}>{(o.productos_requeridos||[]).map(r=>`${r.cantidad}× ${r.nombre}`).join(' + ')}</span></>
+                    :<>{p?p.nombre:<span style={{color:'var(--red)'}}>Eliminado</span>}<br/><span style={{fontWeight:400,fontSize:'.74rem',color:'var(--tx2)'}}>{o.etiqueta} · {o.cantidad_pack}u.</span></>}
+                </td>
+                <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(o.precio_pack)}</td>
+                <td><div className="acell"><button className="btn-edit" onClick={()=>editar(o)}>Editar</button><button className="btn-del" onClick={()=>eliminar(o.id)}>Eliminar</button></div></td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table></div>
     </>
   )
 }
 
 // ─── GESTIÓN CASETAS ─────────────────────────────────────────
 function GestionCasetas({ casetas, setCasetas }) {
-  const [toast, setToast] = useState(null)
-  const [editId, setEditId] = useState(null)
-  const F0 = { nombre: '', direccion: '' }
-  const [form, setForm] = useState(F0)
-
-  const showToast = (msg,type='ok') => { setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
-
-  const guardar = async () => {
-    if (!form.nombre.trim()) { showToast('El nombre es obligatorio','error'); return }
-    try {
-      const data = await upsertCaseta({ ...(editId?{id:editId}:{}), nombre:form.nombre.trim(), direccion: form.direccion.trim() || null })
-      if (editId) { setCasetas(prev=>prev.map(c=>c.id===editId?data:c)); showToast('Caseta actualizada ✓') }
-      else { setCasetas(prev=>[...prev,data]); showToast('Caseta creada ✓') }
-      setForm(F0); setEditId(null)
-    } catch(e) { showToast(e.message,'error') }
+  const [toast,setToast]=useState(null)
+  const [editId,setEditId]=useState(null)
+  const F0={nombre:'',direccion:'',limite_kg_polvora:'10'}
+  const [form,setForm]=useState(F0)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
+  const guardar=async()=>{
+    if(!form.nombre.trim()){showToast('El nombre es obligatorio','error');return}
+    try{
+      const data=await upsertCaseta({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),direccion:form.direccion.trim()||null,limite_kg_polvora:parseFloat(form.limite_kg_polvora)||10})
+      if(editId){setCasetas(prev=>prev.map(c=>c.id===editId?data:c));showToast('Caseta actualizada ✓')}
+      else{setCasetas(prev=>[...prev,data]);showToast('Caseta creada ✓')}
+      setForm(F0);setEditId(null)
+    }catch(e){showToast(e.message,'error')}
   }
-
-  const eliminar = async id => {
-    if (!window.confirm('¿Eliminar esta caseta? Se eliminarán también sus cajas y tickets.')) return
-    try { await deleteCaseta(id); setCasetas(prev=>prev.filter(c=>c.id!==id)); showToast('Caseta eliminada') }
-    catch(e) { showToast(e.message,'error') }
+  const eliminar=async id=>{
+    if(!window.confirm('¿Eliminar caseta?')) return
+    try{await deleteCaseta(id);setCasetas(prev=>prev.filter(c=>c.id!==id));showToast('Caseta eliminada')}
+    catch(e){showToast(e.message,'error')}
   }
-
-  return (
+  return(
     <>
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
       <div className="stit">{editId?'✏️ Editar Caseta':'➕ Nueva Caseta'}</div>
       <div className="iform">
-        <div className="fg"><label>Nombre de la caseta</label>
-          <input value={form.nombre} onChange={e=>setForm({...form, nombre:e.target.value})} placeholder="Caballer Ruzafa" />
-        </div>
-        <div className="fg"><label>Dirección (opcional)</label>
-          <input value={form.direccion} onChange={e=>setForm({...form, direccion:e.target.value})} placeholder="Calle Mayor 12, Valencia" />
+        <div className="frow">
+          <div className="fg"><label>Nombre</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Caballer Ruzafa"/></div>
+          <div className="fg"><label>Dirección (opcional)</label><input value={form.direccion} onChange={e=>setForm({...form,direccion:e.target.value})} placeholder="Calle Mayor 12, Valencia"/></div>
+          <div className="fg">
+            <label>Límite pólvora (kg) <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— según licencia</span></label>
+            <input type="number" value={form.limite_kg_polvora} onChange={e=>setForm({...form,limite_kg_polvora:e.target.value})} placeholder="10" min="0" step=".001"/>
+          </div>
         </div>
         <div style={{display:'flex',gap:9}}>
           <button className="btn-add" onClick={guardar}>{editId?'Guardar':'Crear caseta'}</button>
           {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
         </div>
       </div>
-
       <div className="stit">Casetas ({casetas.length})</div>
-      <div className="tw">
-        <table>
-          <thead><tr><th>Nombre</th><th>Dirección</th><th>Acciones</th></tr></thead>
-          <tbody>
-            {casetas.map(c=>(
-              <tr key={c.id}>
-                <td style={{fontWeight:600}}>{c.nombre}</td>
-                <td style={{color:'var(--tx2)'}}>{c.direccion || <span style={{opacity:.4}}>—</span>}</td>
-                <td>
-                  <div className="acell">
-                    <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre, direccion: c.direccion||''})}}>Editar</button>
-                    <button className="btn-del" onClick={()=>eliminar(c.id)}>Eliminar</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="tw"><table>
+        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {casetas.map(c=>(
+            <tr key={c.id}>
+              <td style={{fontWeight:600}}>{c.nombre}</td>
+              <td style={{color:'var(--tx2)'}}>{c.direccion||<span style={{opacity:.4}}>—</span>}</td>
+              <td style={{color:'var(--gold)',fontWeight:700}}>{c.limite_kg_polvora||10} kg</td>
+              <td><div className="acell">
+                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10)})}}>Editar</button>
+                <button className="btn-del" onClick={()=>eliminar(c.id)}>Eliminar</button>
+              </div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
     </>
   )
 }
 
 // ─── GESTIÓN USUARIOS ─────────────────────────────────────────
 function GestionUsuarios({ casetas }) {
-  const [perfiles, setPerfiles] = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
-  const [toast, setToast]       = useState(null)
-  const [editId, setEditId]     = useState(null)
-  const F0 = { nombre:'', email:'', password:'', rol:'EMPLEADO', caseta_id:'' }
-  const [form, setForm]         = useState(F0)
-  const [msg, setMsg]           = useState(null)
+  const [perfiles,setPerfiles]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [saving,setSaving]=useState(false)
+  const [toast,setToast]=useState(null)
+  const [editId,setEditId]=useState(null)
+  const F0={nombre:'',email:'',password:'',rol:'EMPLEADO',caseta_id:''}
+  const [form,setForm]=useState(F0)
+  const [msg,setMsg]=useState(null)
+  const showToast=(txt,type='ok')=>{ setToast({msg:txt,type}); setTimeout(()=>setToast(null),3000) }
+  const showMsg=(txt,ok=true)=>{ setMsg({txt,ok}); setTimeout(()=>setMsg(null),4000) }
+  useEffect(()=>{ getPerfiles().then(setPerfiles).finally(()=>setLoading(false)) },[])
 
-  const showToast = (txt,type='ok') => { setToast({msg:txt,type}); setTimeout(()=>setToast(null),3000) }
-  const showMsg   = (txt,ok=true)   => { setMsg({txt,ok});          setTimeout(()=>setMsg(null),4000) }
-
-  useEffect(() => { getPerfiles().then(setPerfiles).finally(()=>setLoading(false)) }, [])
-
-  const guardar = async () => {
-    if (!form.nombre.trim()) { showMsg('El nombre es obligatorio',false); return }
-    if (!editId && !form.email.trim()) { showMsg('El email es obligatorio',false); return }
-    if (!editId && !form.password.trim()) { showMsg('La contraseña es obligatoria',false); return }
-    if (form.rol==='EMPLEADO' && !form.caseta_id) { showMsg('El empleado necesita una caseta asignada',false); return }
+  const guardar=async()=>{
+    if(!form.nombre.trim()){showMsg('Nombre obligatorio',false);return}
+    if(!editId&&!form.email.trim()){showMsg('Email obligatorio',false);return}
+    if(!editId&&!form.password.trim()){showMsg('Contraseña obligatoria',false);return}
+    if(form.rol==='EMPLEADO'&&!form.caseta_id){showMsg('Asigna una caseta al empleado',false);return}
     setSaving(true)
-    try {
-      if (editId) {
-        const cambios = { nombre:form.nombre, rol:form.rol, caseta_id:form.caseta_id||null }
-        await updatePerfil(editId, cambios)
+    try{
+      if(editId){
+        const cambios={nombre:form.nombre,rol:form.rol,caseta_id:form.caseta_id||null}
+        await updatePerfil(editId,cambios)
         setPerfiles(prev=>prev.map(p=>p.id===editId?{...p,...cambios,casetas:casetas.find(c=>c.id===form.caseta_id)}:p))
         showMsg('Usuario actualizado ✓')
-      } else {
-        const nuevo = await crearUsuario(form)
+      }else{
+        const nuevo=await crearUsuario(form)
         setPerfiles(prev=>[...prev,{...nuevo,activo:true,casetas:casetas.find(c=>c.id===nuevo.caseta_id)}])
         showMsg('Usuario creado ✓')
       }
-      setForm(F0); setEditId(null)
-    } catch(e) { showMsg(e.message,false) }
-    finally { setSaving(false) }
+      setForm(F0);setEditId(null)
+    }catch(e){showMsg(e.message,false)}finally{setSaving(false)}
   }
+  const toggleActivo=async(id,activo)=>{ await updatePerfil(id,{activo:!activo}); setPerfiles(prev=>prev.map(p=>p.id===id?{...p,activo:!activo}:p)); showToast(activo?'Desactivado':'Activado') }
+  const editar=p=>{ setForm({nombre:p.nombre,email:'',password:'',rol:p.rol,caseta_id:p.caseta_id||''}); setEditId(p.id) }
+  if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
-  const toggleActivo = async (id, activo) => {
-    await updatePerfil(id, {activo:!activo})
-    setPerfiles(prev=>prev.map(p=>p.id===id?{...p,activo:!activo}:p))
-    showToast(activo?'Usuario desactivado':'Usuario activado')
-  }
-
-  const editar = p => {
-    setForm({nombre:p.nombre,email:'',password:'',rol:p.rol,caseta_id:p.caseta_id||''})
-    setEditId(p.id)
-  }
-
-  if (loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
-
-  return (
+  return(
     <>
-      {toast && <Toast msg={toast.msg} type={toast.type} />}
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
       <div className="stit">{editId?'✏️ Editar Usuario':'➕ Nuevo Usuario'}</div>
-      {msg && <div className={msg.ok?'ok-box':'err-box'}>{msg.txt}</div>}
+      {msg&&<div className={msg.ok?'ok-box':'err-box'}>{msg.txt}</div>}
       <div className="iform">
         <div className="frow">
-          <div className="fg"><label>Nombre completo</label>
-            <input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="María García" />
-          </div>
-          {!editId&&<div className="fg"><label>Email</label>
-            <input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="maria@caballer.es" />
-          </div>}
-          {!editId&&<div className="fg"><label>Contraseña</label>
-            <input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres" />
-          </div>}
-          <div className="fg"><label>Rol</label>
-            <select value={form.rol} onChange={e=>setForm({...form,rol:e.target.value,caseta_id:e.target.value==='ADMIN'?'':form.caseta_id})}>
-              <option value="EMPLEADO">Empleado — solo TPV</option>
-              <option value="ADMIN">Administrador — acceso completo</option>
-            </select>
-          </div>
-          {form.rol==='EMPLEADO'&&<div className="fg"><label>Caseta asignada</label>
-            <select value={form.caseta_id} onChange={e=>setForm({...form,caseta_id:e.target.value})}>
-              <option value="">-- Seleccionar --</option>
-              {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select>
-          </div>}
+          <div className="fg"><label>Nombre completo</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="María García"/></div>
+          {!editId&&<div className="fg"><label>Email</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="maria@caballer.es"/></div>}
+          {!editId&&<div className="fg"><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>}
+          <div className="fg"><label>Rol</label><select value={form.rol} onChange={e=>setForm({...form,rol:e.target.value,caseta_id:e.target.value==='ADMIN'?'':form.caseta_id})}><option value="EMPLEADO">Empleado</option><option value="ADMIN">Administrador</option></select></div>
+          {form.rol==='EMPLEADO'&&<div className="fg"><label>Caseta asignada</label><select value={form.caseta_id} onChange={e=>setForm({...form,caseta_id:e.target.value})}><option value="">-- Seleccionar --</option>{casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>}
         </div>
-        <div style={{display:'flex',gap:9}}>
-          <button className="btn-add" onClick={guardar} disabled={saving}>{saving?'Guardando...':editId?'Guardar cambios':'Crear usuario'}</button>
-          {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0);setMsg(null)}}>Cancelar</button>}
-        </div>
+        <div style={{display:'flex',gap:9}}><button className="btn-add" onClick={guardar} disabled={saving}>{saving?'Guardando...':editId?'Guardar cambios':'Crear usuario'}</button>{editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0);setMsg(null)}}>Cancelar</button>}</div>
       </div>
-
       <div className="stit">Usuarios ({perfiles.length})</div>
-      <div className="tw">
-        <table>
-          <thead><tr><th>Nombre</th><th>Rol</th><th>Caseta</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>
-            {perfiles.map(p=>(
-              <tr key={p.id} style={{opacity:p.activo?1:.5}}>
-                <td style={{fontWeight:600}}>{p.nombre}</td>
-                <td><span className={`chip ${p.rol==='ADMIN'?'cy':'cb2'}`}>{p.rol}</span></td>
-                <td style={{color:'var(--tx2)'}}>{p.casetas?.nombre||'— Global —'}</td>
-                <td><span className={`chip ${p.activo?'cg':'cr'}`}>{p.activo?'Activo':'Inactivo'}</span></td>
-                <td><div className="acell">
-                  <button className="btn-edit" onClick={()=>editar(p)}>Editar</button>
-                  <button className="btn-tog" style={{color:p.activo?'var(--gold)':'var(--green)'}} onClick={()=>toggleActivo(p.id,p.activo)}>
-                    {p.activo?'Desact.':'Activar'}
-                  </button>
-                </div></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="tw"><table>
+        <thead><tr><th>Nombre</th><th>Rol</th><th>Caseta</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {perfiles.map(p=>(
+            <tr key={p.id} style={{opacity:p.activo?1:.5}}>
+              <td style={{fontWeight:600}}>{p.nombre}</td>
+              <td><span className={`chip ${p.rol==='ADMIN'?'cy':'cb2'}`}>{p.rol}</span></td>
+              <td style={{color:'var(--tx2)'}}>{p.casetas?.nombre||'— Global —'}</td>
+              <td><span className={`chip ${p.activo?'cg':'cr'}`}>{p.activo?'Activo':'Inactivo'}</span></td>
+              <td><div className="acell">
+                <button className="btn-edit" onClick={()=>editar(p)}>Editar</button>
+                <button className="btn-tog" style={{color:p.activo?'var(--gold)':'var(--green)'}} onClick={()=>toggleActivo(p.id,p.activo)}>{p.activo?'Desact.':'Activar'}</button>
+              </div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
     </>
   )
 }
 
-// ─── ADMIN PANEL ─────────────────────────────────────────────
+// ─── ADMIN PANEL (raíz) ───────────────────────────────────────
 export default function AdminPanel({ perfil, casetas: casetasInit }) {
-  const [tab, setTab]           = useState('dashboard')
-  const [casetas, setCasetas]   = useState(casetasInit)
-  const [ticketFiltro, setTicketFiltro] = useState(null) // { desde, hasta } al navegar desde ventas
+  const [tab,setTab]=useState('dashboard')
+  const [casetas,setCasetas]=useState(casetasInit)
+  const [ticketFiltro,setTicketFiltro]=useState(null)
 
-  const irATickets = (dia) => {
-    setTicketFiltro({ desde: dia, hasta: dia })
-    setTab('tickets')
-  }
+  const irATickets=dia=>{ setTicketFiltro({desde:dia,hasta:dia}); setTab('tickets') }
 
-  return (
+  return(
     <div className="app">
       <div className="topbar">
         <div className="tl">💥 Caballer TPV</div>
@@ -1109,19 +1046,19 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
         </div>
       </div>
       <div className="navtabs">
-        {TABS.map(([k,l])=>(
-          <button key={k} className={`ntab ${tab===k?'on':''}`} onClick={()=>setTab(k)}>{l}</button>
-        ))}
+        {TABS.map(([k,l])=><button key={k} className={`ntab ${tab===k?'on':''}`} onClick={()=>setTab(k)}>{l}</button>)}
       </div>
       <div className="cnt">
-        {tab==='dashboard' && <Dashboard casetas={casetas} />}
-        {tab==='ventas'    && <PanelVentas casetas={casetas} onVerDia={irATickets} />}
-        {tab==='tickets'   && <PanelTickets casetas={casetas} filtroInicial={ticketFiltro} />}
-        {tab==='productos' && <GestionProductos />}
-        {tab==='stock'     && <GestionStock casetas={casetas} />}
-        {tab==='ofertas'   && <GestionOfertas />}
-        {tab==='casetas'   && <GestionCasetas casetas={casetas} setCasetas={setCasetas} />}
-        {tab==='usuarios'  && <GestionUsuarios casetas={casetas} />}
+        {tab==='dashboard'   && <Dashboard casetas={casetas}/>}
+        {tab==='ventas'      && <PanelVentas casetas={casetas} onVerDia={irATickets}/>}
+        {tab==='tickets'     && <PanelTickets casetas={casetas} filtroInicial={ticketFiltro}/>}
+        {tab==='pedidos'     && <PanelPedidos casetas={casetas}/>}
+        {tab==='inventarios' && <PanelInventarios casetas={casetas}/>}
+        {tab==='productos'   && <GestionProductos/>}
+        {tab==='stock'       && <GestionStock casetas={casetas}/>}
+        {tab==='ofertas'     && <GestionOfertas/>}
+        {tab==='casetas'     && <GestionCasetas casetas={casetas} setCasetas={setCasetas}/>}
+        {tab==='usuarios'    && <GestionUsuarios casetas={casetas}/>}
       </div>
     </div>
   )

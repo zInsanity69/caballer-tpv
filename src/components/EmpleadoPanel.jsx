@@ -3,8 +3,11 @@ import { supabase } from '../lib/supabase.js'
 import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
-  getResumenCaja, crearTicket, getTicketsTurno, deleteTicket,
+  getResumenCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket,
   getFavoritos, toggleFavorito,
+  getPedidos, crearPedido, confirmarRecepcionPedido,
+  crearInventario, getInventarios, confirmarInventario,
+  getKgPolvora, getLimitePolvora,
 } from '../lib/api.js'
 import { calcularPrecio, calcularTotalTicket, detectarOfertasCombinadas, fmt } from '../lib/precios.js'
 import Scanner from './Scanner.jsx'
@@ -13,40 +16,79 @@ function Toast({ msg, type }) {
   return <div className="twrap"><div className={`toast ${type === 'error' ? 'te2' : 'tok'}`}>{msg}</div></div>
 }
 
-// Hook long press — funciona en móvil (touch) y escritorio (mouse)
-// tap rápido → onTap / pulsación larga → onLong
+// ─── LONG PRESS ──────────────────────────────────────────────
+// Bug fixes:
+//  1. onTouchMove cancela si hubo scroll
+//  2. En móvil un tap dispara touch Y mouse → ignoramos mouse si vino touch
 function useLongPress(onTap, onLong, ms = 500) {
-  const timer = useRef(null)
-  const fired = useRef(false)
+  const timer     = useRef(null)
+  const fired     = useRef(false)
+  const moved     = useRef(false)
+  const wasTouch  = useRef(false)   // ← si el gesto fue touch, ignoramos mouse
 
-  const start = (e) => {
-    // Ignorar si el click es sobre un botón hijo (ej. estrella favorito)
-    if (e.target.tagName === 'BUTTON') return
+  const startTouch = (e) => {
+    if (e.target.closest('button[data-nobubble]')) return
+    wasTouch.current = true
     fired.current = false
+    moved.current = false
+    timer.current = setTimeout(() => {
+      if (moved.current) return
+      fired.current = true
+      onLong()
+    }, ms)
+  }
+
+  const startMouse = (e) => {
+    if (wasTouch.current) return   // ya gestionado por touch
+    if (e.target.closest('button[data-nobubble]')) return
+    fired.current = false
+    moved.current = false
     timer.current = setTimeout(() => {
       fired.current = true
       onLong()
     }, ms)
   }
 
-  const cancel = () => {
+  const onMove = () => {
+    moved.current = true
     clearTimeout(timer.current)
   }
 
-  const end = (e) => {
-    if (e.target.tagName === 'BUTTON') return
+  const cancel = () => { clearTimeout(timer.current) }
+
+  const endTouch = (e) => {
+    if (e.target.closest('button[data-nobubble]')) return
     clearTimeout(timer.current)
-    if (!fired.current) onTap()
+    if (!fired.current && !moved.current) onTap()
+    // Resetear wasTouch después de un pequeño delay
+    // (los eventos mouse sintéticos llegan ~300ms después del touch)
+    setTimeout(() => { wasTouch.current = false }, 500)
+  }
+
+  const endMouse = (e) => {
+    if (wasTouch.current) return   // ignorar, ya procesado por touch
+    if (e.target.closest('button[data-nobubble]')) return
+    clearTimeout(timer.current)
+    if (!fired.current && !moved.current) onTap()
   }
 
   return {
-    onMouseDown:  start,
-    onMouseUp:    end,
-    onMouseLeave: cancel,
-    onTouchStart: start,
-    onTouchEnd:   end,
-    onContextMenu: (e) => e.preventDefault(), // evitar menú nativo en móvil al pulsar largo
+    onMouseDown:   startMouse,
+    onMouseUp:     endMouse,
+    onMouseLeave:  cancel,
+    onTouchStart:  startTouch,
+    onTouchMove:   onMove,
+    onTouchEnd:    endTouch,
+    onContextMenu: (e) => e.preventDefault(),
   }
+}
+
+// ─── BADGE EDAD ──────────────────────────────────────────────
+function EaBadge({ edad }) {
+  if (edad === 0)  return <span className="pea et1">T1</span>
+  if (edad === 12) return <span className="pea e12">12+</span>
+  if (edad === 16) return <span className="pea e16">16+</span>
+  return <span className="pea e18">18+</span>
 }
 
 // ─── TICKET ITEM ─────────────────────────────────────────────
@@ -54,7 +96,6 @@ function TicketItem({ item, ofertas, onQty, onDel }) {
   const [open, setOpen] = useState(false)
   const { total, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
   const hayOferta = !!desglose
-
   return (
     <div className="titem">
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -88,24 +129,48 @@ function TicketItem({ item, ofertas, onQty, onDel }) {
           </div>
         )}
       </div>
-      <button onClick={() => onDel(item.id)} style={{
+      <button data-nobubble="1" onClick={() => onDel(item.id)} style={{
         flexShrink: 0, width: 32, height: 32, borderRadius: '50%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.25)',
-        color: 'var(--red)', fontSize: '.95rem', cursor: 'pointer', transition: 'all .2s', alignSelf: 'center',
+        color: 'var(--red)', fontSize: '.95rem', cursor: 'pointer', alignSelf: 'center',
       }}>✕</button>
     </div>
   )
 }
 
-// ─── MODAL CANTIDAD AL AÑADIR ─────────────────────────────────
+// ─── TARJETA PRODUCTO ────────────────────────────────────────
+function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong, onFav }) {
+  const lp = useLongPress(onTap, onLong)
+  return (
+    <div
+      className="pc"
+      {...lp}
+      style={{ opacity: stockDisp === 0 ? .4 : 1, outline: enT ? '2px solid var(--ac)' : 'none', userSelect: 'none', touchAction: 'pan-y' }}
+    >
+      <EaBadge edad={p.edad_minima} />
+      <button data-nobubble="1" onClick={(e) => { e.stopPropagation(); onFav(p.id) }} style={{
+        position: 'absolute', top: 6, left: 6, background: 'transparent', border: 'none',
+        cursor: 'pointer', fontSize: '.8rem', opacity: esFav ? 1 : .25, padding: 0, lineHeight: 1,
+      }}>⭐</button>
+      <div className="pn" style={{ paddingLeft: 14 }}>{p.nombre}</div>
+      <div className="pp2">{fmt(p.precio)}</div>
+      <div className="pst">
+        {stockDisp === 0 ? 'Agotado' : `Stock: ${stockDisp}`}
+        {enT && <span style={{ color: 'var(--green)' }}> · {enT.cantidad}</span>}
+      </div>
+      {tieneOferta && <span className="ocbadge">OFERTA</span>}
+    </div>
+  )
+}
+
+// ─── MODAL CANTIDAD ──────────────────────────────────────────
 function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
   const [qty, setQty] = useState(1)
   const inputRef = useRef(null)
   useEffect(() => { setTimeout(() => inputRef.current?.select(), 50) }, [])
   const { total, desglose } = calcularPrecio(producto.id, qty, producto.precio, ofertas)
   const hayOferta = !!desglose
-
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="mc">
@@ -114,10 +179,8 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 16 }}>
           {fmt(producto.precio)}/u. · Stock: {stockDisp}
         </div>
-
-        {/* Teclado rápido */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 6, marginBottom: 12 }}>
-          {[1,2,3,4,5,6,8,10,15,20].map(n => (
+          {[1, 2, 3, 4, 5, 6, 8, 10, 15, 20].map(n => (
             <button key={n} onClick={() => setQty(n)} style={{
               padding: '8px 4px', borderRadius: 'var(--rs)',
               background: qty === n ? 'var(--ac)' : 'var(--s2)',
@@ -127,7 +190,6 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
             }}>{n}</button>
           ))}
         </div>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
           <input ref={inputRef} type="number" min="1" max={stockDisp} value={qty}
@@ -137,8 +199,6 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
             inputMode="numeric" />
           <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => Math.min(stockDisp, q + 1))}>+</button>
         </div>
-
-        {/* Preview precio */}
         <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.82rem' }}>
             <span style={{ color: 'var(--tx2)' }}>{qty} × {fmt(producto.precio)}</span>
@@ -146,13 +206,7 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
               ? <span style={{ color: 'var(--green)', fontWeight: 700 }}>Con oferta: {fmt(total)}</span>
               : <span style={{ fontWeight: 700 }}>{fmt(total)}</span>}
           </div>
-          {hayOferta && desglose.map((d, i) => (
-            <div key={i} style={{ fontSize: '.72rem', color: d.tipo === 'pack' ? 'var(--green)' : 'var(--tx2)', marginTop: 3 }}>
-              {d.tipo === 'pack' ? `✓ Pack ${d.etiqueta}` : `+ ${d.unidades}u. normal`}
-            </div>
-          ))}
         </div>
-
         <button className="btn-p" onClick={() => onConfirm(qty)}>
           Añadir {qty} unidad{qty !== 1 ? 'es' : ''} · {fmt(total)}
         </button>
@@ -170,20 +224,11 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }
   const cambio = metodo === 'efectivo' ? Math.max(0, (parseFloat(recibido) || 0) - total) : 0
   const puedeConfirmar = metodo && (metodo === 'tarjeta' || (parseFloat(recibido) || 0) >= total)
 
-  const confirmar = async () => {
-    setLoading(true)
-    await onConfirm({ metodo, dineroDado: parseFloat(recibido) || total, cambio })
-    setLoading(false)
-  }
-
   return (
     <div className="mo">
       <div className="mc">
         <div className="mt-modal">Finalizar Venta</div>
-        <div style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 8 }}>Total a cobrar:</div>
         <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '2.8rem', color: 'var(--ac)', marginBottom: 16 }}>{fmt(total)}</div>
-
-        <div style={{ fontSize: '.75rem', color: 'var(--tx2)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>Método de pago</div>
         <div className="mg2">
           <div className={`mb ${metodo === 'efectivo' ? 'on' : ''}`} onClick={() => setMetodo('efectivo')}>
             <div className="mi2">💵</div><div className="ml">Efectivo</div>
@@ -192,7 +237,6 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }
             <div className="mi2">💳</div><div className="ml">Tarjeta</div>
           </div>
         </div>
-
         {metodo === 'efectivo' && (
           <>
             <div className="fg">
@@ -202,13 +246,11 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }
                 placeholder="0,00" autoFocus min={total} step=".5" inputMode="decimal" />
             </div>
             <div className="cbox">
-              <div className="clbl">Cambio a devolver</div>
+              <div className="clbl">Cambio</div>
               <div className="camt">{fmt(cambio)}</div>
             </div>
           </>
         )}
-
-        {/* Toggle modo rápido */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', marginBottom: 4 }}>
           <div onClick={onToggleModoRapido} style={{
             width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all .2s',
@@ -219,12 +261,13 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }
               width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s',
             }} />
           </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
-            Venta rápida — nuevo ticket automático tras cobrar
-          </span>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Venta rápida — nuevo ticket automático</span>
         </div>
-
-        <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={confirmar}>
+        <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={async () => {
+          setLoading(true)
+          await onConfirm({ metodo, dineroDado: parseFloat(recibido) || total, cambio })
+          setLoading(false)
+        }}>
           {loading ? 'Procesando...' : '✓ Confirmar Venta'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
@@ -237,51 +280,14 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }
 function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
   const [contado, setContado] = useState('')
   const [loading, setLoading] = useState(false)
-
   const totalEfectivo = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + v.total, 0)
   const totalTarjeta  = ventas.filter(v => v.metodo_pago === 'tarjeta').reduce((s, v) => s + v.total, 0)
   const esperado      = (caja.apertura_dinero || 0) + totalEfectivo
   const diferencia    = (parseFloat(contado) || 0) - esperado
-
-  const porEmpleado = {}
-  ventas.forEach(v => {
-    const nombre = v.perfiles?.nombre || 'Desconocido'
-    if (!porEmpleado[nombre]) porEmpleado[nombre] = { efectivo: 0, tarjeta: 0, tickets: 0 }
-    porEmpleado[nombre].tickets++
-    if (v.metodo_pago === 'efectivo') porEmpleado[nombre].efectivo += v.total
-    else porEmpleado[nombre].tarjeta += v.total
-  })
-
   return (
     <div className="mo">
       <div className="mc wide">
         <div className="mt-modal">🏦 Cierre de Caja</div>
-        <div style={{ background: 'rgba(245,200,66,.06)', border: '1px solid rgba(245,200,66,.2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 14, fontSize: '.8rem' }}>
-          <div style={{ fontWeight: 700, color: 'var(--gold)', marginBottom: 3 }}>{caseta}</div>
-          <div style={{ color: 'var(--tx2)' }}>Abierta por <strong style={{ color: 'var(--tx)' }}>{caja.perfiles?.nombre}</strong></div>
-        </div>
-
-        {Object.keys(porEmpleado).length > 1 && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: '.73rem', color: 'var(--tx2)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 7 }}>Desglose por empleado</div>
-            <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', overflow: 'hidden' }}>
-              {Object.entries(porEmpleado).map(([nombre, d], i, arr) => (
-                <div key={nombre} style={{ padding: '9px 12px', borderBottom: i < arr.length - 1 ? '1px solid var(--bd)' : 'none', fontSize: '.82rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                    <span style={{ fontWeight: 600 }}>{nombre}</span>
-                    <span style={{ fontWeight: 700, color: 'var(--ac)' }}>{fmt(d.efectivo + d.tarjeta)}</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 14, color: 'var(--tx2)', fontSize: '.74rem' }}>
-                    <span>💵 {fmt(d.efectivo)}</span>
-                    <span>💳 {fmt(d.tarjeta)}</span>
-                    <span>{d.tickets} tickets</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 13, marginBottom: 16, fontSize: '.83rem' }}>
           {[
             ['Apertura', fmt(caja.apertura_dinero || 0), 'var(--tx)'],
@@ -299,14 +305,12 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
             <span style={{ color: 'var(--ac)' }}>{fmt(esperado)}</span>
           </div>
         </div>
-
         <div className="fg">
           <label>Dinero contado físicamente</label>
           <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }}
             value={contado} onChange={e => setContado(e.target.value)}
             placeholder="0,00" min="0" step=".01" autoFocus inputMode="decimal" />
         </div>
-
         {contado && (
           <div className="cbox">
             <div className="clbl">{diferencia >= 0 ? 'Sobra en caja' : 'Falta en caja'}</div>
@@ -315,9 +319,9 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
             </div>
           </div>
         )}
-
-        <button className="btn-p" onClick={async () => { setLoading(true); await onCerrar(parseFloat(contado)||0); setLoading(false) }} disabled={loading}>
-          {loading ? 'Cerrando...' : 'Confirmar cierre de caja'}
+        <button className="btn-p" disabled={loading}
+          onClick={async () => { setLoading(true); await onCerrar(parseFloat(contado) || 0); setLoading(false) }}>
+          {loading ? 'Cerrando...' : 'Confirmar cierre'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
@@ -325,15 +329,31 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
   )
 }
 
-// ─── MODAL HISTORIAL TICKETS ─────────────────────────────────
-function ModalHistorial({ cajaId, perfil, onClose }) {
-  const [tickets, setTickets] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState(null)
+// ─── MODAL HISTORIAL + EDICIÓN TICKETS ───────────────────────
+function ModalHistorial({ cajaId, perfil, productos, ofertas, onClose }) {
+  const [tickets, setTickets]       = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [expanded, setExpanded]     = useState(null)
+  const [editando, setEditando]     = useState(null)
+  const [editItems, setEditItems]   = useState([])
+  const [editBusq, setEditBusq]     = useState('')   // buscador añadir producto
+  const [busq, setBusq]             = useState('')
+  const [saving, setSaving]         = useState(false)
 
   useEffect(() => {
     getTicketsTurno(cajaId).then(setTickets).finally(() => setLoading(false))
   }, [cajaId])
+
+  const ticketsFiltrados = tickets.filter(t => {
+    if (!busq) return true
+    const b = busq.toLowerCase()
+    return (
+      t.perfiles?.nombre?.toLowerCase().includes(b) ||
+      fmt(t.total).includes(b) ||
+      t.ticket_items?.some(i => i.nombre_producto?.toLowerCase().includes(b)) ||
+      new Date(t.creado_en).toLocaleTimeString('es-ES').includes(b)
+    )
+  })
 
   const eliminar = async (id) => {
     if (!window.confirm('¿Eliminar este ticket? El stock NO se restaura automáticamente.')) return
@@ -341,24 +361,85 @@ function ModalHistorial({ cajaId, perfil, onClose }) {
     setTickets(prev => prev.filter(t => t.id !== id))
   }
 
+  const abrirEdicion = (t) => {
+    setEditando(t)
+    setEditItems(t.ticket_items.map(i => ({
+      producto_id:    i.producto_id,
+      nombre:         i.nombre_producto,
+      precio:         i.precio_unitario,
+      cantidad:       i.cantidad,
+      total_linea:    i.total_linea,
+      con_oferta:     i.con_oferta || false,
+    })))
+  }
+
+  const guardarEdicion = async () => {
+    setSaving(true)
+    try {
+      const nuevoTotal = editItems.reduce((s, i) => s + i.total_linea, 0)
+      await updateTicket(editando.id, nuevoTotal, editItems)
+      setTickets(prev => prev.map(t => t.id === editando.id
+        ? { ...t, total: nuevoTotal, ticket_items: editItems.map(i => ({ ...i, nombre_producto: i.nombre, precio_unitario: i.precio })) }
+        : t))
+      setEditando(null)
+    } catch (e) { alert('Error guardando: ' + e.message) }
+    setSaving(false)
+  }
+
+  const editQty = (idx, delta) => {
+    setEditItems(prev => prev.map((item, i) => {
+      if (i !== idx) return item
+      const nq = Math.max(1, item.cantidad + delta)
+      return { ...item, cantidad: nq, total_linea: +(nq * item.precio).toFixed(2) }
+    }))
+  }
+
+  const editDel = (idx) => setEditItems(prev => prev.filter((_, i) => i !== idx))
+
+  // Añadir un producto existente al ticket en edición
+  const editAddProd = (prod) => {
+    setEditItems(prev => {
+      const idx = prev.findIndex(i => i.producto_id === prod.id)
+      if (idx >= 0) {
+        return prev.map((it, i) => i !== idx ? it : {
+          ...it, cantidad: it.cantidad + 1,
+          total_linea: +((it.cantidad + 1) * it.precio).toFixed(2),
+        })
+      }
+      return [...prev, {
+        producto_id: prod.id, nombre: prod.nombre,
+        precio: prod.precio, cantidad: 1,
+        total_linea: +prod.precio.toFixed(2), con_oferta: false,
+      }]
+    })
+    setEditBusq('')
+  }
+
   const totalTurno = tickets.reduce((s, t) => s + t.total, 0)
 
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="mc wide" style={{ maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
         <div className="mt-modal">🧾 Tickets del turno</div>
-        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
-          {tickets.length} tickets · Total: <strong style={{ color: 'var(--ac)' }}>{fmt(totalTurno)}</strong>
+
+        {/* Buscador */}
+        <input className="si" placeholder="Buscar por empleado, producto, importe..."
+          value={busq} onChange={e => setBusq(e.target.value)}
+          style={{ marginBottom: 10 }} />
+
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
+          {ticketsFiltrados.length} tickets · Total: <strong style={{ color: 'var(--ac)' }}>{fmt(totalTurno)}</strong>
         </div>
+
         {loading
           ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
           : (
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {tickets.length === 0
-                ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30 }}>Sin tickets en este turno</div>
-                : tickets.map(t => (
+              {ticketsFiltrados.length === 0
+                ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30 }}>Sin resultados</div>
+                : ticketsFiltrados.map(t => (
                   <div key={t.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
                           {new Date(t.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
@@ -367,10 +448,12 @@ function ModalHistorial({ cajaId, perfil, onClose }) {
                         </div>
                         <div style={{ fontWeight: 700, color: 'var(--ac)', fontSize: '1rem' }}>{fmt(t.total)}</div>
                       </div>
-                      <button className="btn-o" style={{ fontSize: '.73rem' }} onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
+                      <button className="btn-o" style={{ fontSize: '.7rem' }} onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
                         {expanded === t.id ? 'Ocultar' : 'Ver'}
                       </button>
-                      <button className="btn-del" onClick={() => eliminar(t.id)}>Eliminar</button>
+                      <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--blue)', color: 'var(--blue)' }}
+                        onClick={() => abrirEdicion(t)}>Editar</button>
+                      <button className="btn-del" onClick={() => eliminar(t.id)}>✕</button>
                     </div>
                     {expanded === t.id && t.ticket_items && (
                       <div style={{ marginTop: 8, borderTop: '1px solid var(--bd)', paddingTop: 8 }}>
@@ -390,61 +473,495 @@ function ModalHistorial({ cajaId, perfil, onClose }) {
         }
         <button className="btn-s" style={{ marginTop: 12 }} onClick={onClose}>Cerrar</button>
       </div>
+
+      {/* Modal edición ticket */}
+      {editando && (
+        <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setEditando(null)}>
+          <div className="mc wide" style={{ maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="mt-modal">✏️ Editar Ticket</div>
+            <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 12 }}>
+              {new Date(editando.creado_en).toLocaleString('es-ES')} · {editando.perfiles?.nombre}
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {editItems.map((item, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
+                  <div style={{ flex: 1, fontSize: '.85rem' }}>{item.nombre}</div>
+                  <button className="qb" onClick={() => editQty(idx, -1)}>−</button>
+                  <span style={{ minWidth: 26, textAlign: 'center', fontWeight: 700 }}>{item.cantidad}</span>
+                  <button className="qb" onClick={() => editQty(idx, +1)}>+</button>
+                  <span style={{ minWidth: 52, textAlign: 'right', fontSize: '.85rem', color: 'var(--ac)' }}>{fmt(item.total_linea)}</span>
+                  <button onClick={() => editDel(idx)} style={{
+                    width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)',
+                    background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem',
+                  }}>✕</button>
+                </div>
+              ))}
+              {/* Buscador para añadir productos al ticket */}
+              <div style={{ position: 'relative', marginBottom: 10 }}>
+                <input
+                  className="si"
+                  placeholder="Añadir producto al ticket (escribe para buscar)..."
+                  value={editBusq}
+                  onChange={e => setEditBusq(e.target.value)}
+                />
+                {editBusq.length > 1 && (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', maxHeight: 180, overflowY: 'auto' }}>
+                    {productos
+                      .filter(p => p.nombre.toLowerCase().includes(editBusq.toLowerCase()))
+                      .slice(0, 15)
+                      .map(p => (
+                        <div key={p.id} onClick={() => editAddProd(p)}
+                          style={{ padding: '9px 13px', cursor: 'pointer', fontSize: '.83rem', borderBottom: '1px solid var(--bd)', display: 'flex', justifyContent: 'space-between' }}
+                          onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                          <span>{p.nombre}</span>
+                          <span style={{ color: 'var(--ac)', fontWeight: 700 }}>{fmt(p.precio)}</span>
+                        </div>
+                      ))
+                    }
+                    {productos.filter(p => p.nombre.toLowerCase().includes(editBusq.toLowerCase())).length === 0 && (
+                      <div style={{ padding: 12, color: 'var(--tx2)', fontSize: '.82rem', textAlign: 'center' }}>Sin resultados</div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {editItems.length === 0 && (
+                <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 20, fontSize: '.85rem' }}>
+                  Sin artículos — el ticket quedará vacío
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, padding: '10px 0', fontSize: '1rem' }}>
+              <span>Nuevo total</span>
+              <span style={{ color: 'var(--ac)' }}>{fmt(editItems.reduce((s, i) => s + i.total_linea, 0))}</span>
+            </div>
+            <button className="btn-p" disabled={saving} onClick={guardarEdicion}>
+              {saving ? 'Guardando...' : '✓ Guardar cambios'}
+            </button>
+            <button className="btn-s" onClick={() => setEditando(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-// ─── TARJETA PRODUCTO ────────────────────────────────────────
-function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong, onFav, eaBadge }) {
-  const lp = useLongPress(onTap, onLong)
+// ─── MODAL PEDIDO ─────────────────────────────────────────────
+function ModalPedido({ caseta, perfil, productos, onClose, onCreado, showToast }) {
+  const [items, setItems]  = useState([])
+  const [notas, setNotas]  = useState('')
+  const [busq, setBusq]    = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const prodsFiltrados = productos.filter(p =>
+    busq.length > 1
+      ? p.nombre.toLowerCase().includes(busq.toLowerCase())
+      : false
+  ).slice(0, 20)
+
+  const addItem = (p) => {
+    setItems(prev => {
+      const idx = prev.findIndex(i => i.producto_id === p.id)
+      if (idx >= 0) {
+        const n = [...prev]; n[idx] = { ...n[idx], cantidad: n[idx].cantidad + 1 }; return n
+      }
+      return [...prev, { producto_id: p.id, nombre: p.nombre, cantidad: 1 }]
+    })
+    setBusq('')
+  }
+
+  const setQty = (id, val) => {
+    const q = Math.max(1, parseInt(val) || 1)
+    setItems(prev => prev.map(i => i.producto_id === id ? { ...i, cantidad: q } : i))
+  }
+
+  const del = (id) => setItems(prev => prev.filter(i => i.producto_id !== id))
+
+  const enviar = async () => {
+    if (items.length === 0) { showToast('Añade al menos un producto', 'error'); return }
+    setLoading(true)
+    try {
+      await crearPedido(caseta.id, perfil.id, items, notas)
+      showToast('✓ Pedido enviado al administrador')
+      onCreado()
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setLoading(false)
+  }
+
   return (
-    <div
-      className="pc"
-      {...lp}
-      style={{ opacity: stockDisp === 0 ? .4 : 1, outline: enT ? '2px solid var(--ac)' : 'none', userSelect: 'none' }}
-    >
-      {eaBadge(p)}
-      <button onClick={e => onFav(e, p.id)} style={{
-        position: 'absolute', top: 6, left: 6, background: 'transparent', border: 'none',
-        cursor: 'pointer', fontSize: '.8rem', opacity: esFav ? 1 : .25, padding: 0, lineHeight: 1,
-      }}>⭐</button>
-      <div className="pn" style={{ paddingLeft: 14 }}>{p.nombre}</div>
-      <div className="pp2">{fmt(p.precio)}</div>
-      <div className="pst">
-        {stockDisp === 0 ? 'Agotado' : `Stock: ${stockDisp}`}
-        {enT && <span style={{ color: 'var(--green)' }}> · {enT.cantidad}</span>}
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="mt-modal">📦 Nuevo Pedido</div>
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 14 }}>
+          {caseta.nombre} · {perfil.nombre}
+        </div>
+
+        {/* Buscador de productos */}
+        <div style={{ position: 'relative', marginBottom: 10 }}>
+          <input className="si" placeholder="Buscar producto para añadir..."
+            value={busq} onChange={e => setBusq(e.target.value)} />
+          {prodsFiltrados.length > 0 && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', maxHeight: 200, overflowY: 'auto' }}>
+              {prodsFiltrados.map(p => (
+                <div key={p.id} onClick={() => addItem(p)} style={{
+                  padding: '9px 13px', cursor: 'pointer', fontSize: '.85rem',
+                  borderBottom: '1px solid var(--bd)',
+                }} onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  {p.nombre} <span style={{ color: 'var(--tx2)', fontSize: '.75rem' }}>({p.categoria})</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Lista de items */}
+        <div style={{ overflowY: 'auto', flex: 1, marginBottom: 10 }}>
+          {items.length === 0 && (
+            <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
+              Busca productos arriba para añadirlos al pedido
+            </div>
+          )}
+          {items.map(item => (
+            <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--bd)' }}>
+              <div style={{ flex: 1, fontSize: '.85rem', fontWeight: 600 }}>{item.nombre}</div>
+              <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad - 1)}>−</button>
+              <input type="number" value={item.cantidad} min="1"
+                onChange={e => setQty(item.producto_id, e.target.value)}
+                style={{ width: 52, textAlign: 'center', background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '4px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
+                inputMode="numeric" />
+              <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad + 1)}>+</button>
+              <button onClick={() => del(item.producto_id)} style={{
+                width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)',
+                background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer',
+              }}>✕</button>
+            </div>
+          ))}
+        </div>
+
+        <div className="fg" style={{ marginBottom: 10 }}>
+          <label>Notas / Observaciones (opcional)</label>
+          <input className="bi" style={{ marginBottom: 0 }} value={notas} onChange={e => setNotas(e.target.value)}
+            placeholder="Ej: urgente, faltan chispitas..." />
+        </div>
+
+        <button className="btn-p" disabled={loading || items.length === 0} onClick={enviar}>
+          {loading ? 'Enviando...' : `📤 Enviar pedido (${items.length} producto${items.length !== 1 ? 's' : ''})`}
+        </button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
-      {tieneOferta && <span className="ocbadge">OFERTA</span>}
     </div>
   )
 }
+
+// ─── MODAL MIS PEDIDOS ────────────────────────────────────────
+function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
+  const [pedidos, setPedidos]       = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [recibiendo, setRecibiendo] = useState(null)
+  const [recItems, setRecItems]     = useState([])
+  const [notasRec, setNotasRec]     = useState('')
+  const [saving, setSaving]         = useState(false)
+
+  useEffect(() => {
+    getPedidos({ casetaId: caseta.id }).then(setPedidos).finally(() => setLoading(false))
+  }, [caseta.id])
+
+  const abrirRecepcion = (pedido) => {
+    setRecibiendo(pedido)
+    setRecItems(pedido.pedido_items.map(i => ({
+      id:               i.id,
+      producto_id:      i.producto_id,
+      nombre:           i.productos?.nombre || '?',
+      cantidad:         i.cantidad,
+      cantidad_recibida: i.cantidad,   // por defecto = lo pedido
+      notas_item:       '',
+    })))
+    setNotasRec('')
+  }
+
+  const confirmarRec = async () => {
+    setSaving(true)
+    try {
+      await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec)
+      showToast('✓ Recepción confirmada, stock actualizado')
+      setPedidos(prev => prev.map(p => p.id === recibiendo.id
+        ? { ...p, estado: recItems.some(i => i.notas_item?.trim() || i.cantidad_recibida !== i.cantidad) ? 'INCIDENCIA' : 'RECIBIDO' }
+        : p))
+      setRecibiendo(null)
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setSaving(false)
+  }
+
+  const ESTADO_COLOR = {
+    PENDIENTE:  'var(--gold)',
+    ACEPTADO:   'var(--blue)',
+    EN_CAMINO:  'var(--ac)',
+    RECIBIDO:   'var(--green)',
+    INCIDENCIA: 'var(--red)',
+  }
+  const ESTADO_LABEL = {
+    PENDIENTE:  '⏳ Pendiente',
+    ACEPTADO:   '✅ Aceptado',
+    EN_CAMINO:  '🚚 En camino',
+    RECIBIDO:   '📦 Recibido',
+    INCIDENCIA: '⚠️ Incidencia',
+  }
+
+  return (
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="mt-modal">📋 Mis Pedidos</div>
+        {loading
+          ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
+          : (
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {pedidos.length === 0 && (
+                <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30 }}>Sin pedidos realizados</div>
+              )}
+              {pedidos.map(p => (
+                <div key={p.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontWeight: 700, fontSize: '.88rem' }}>
+                      {new Date(p.creado_en).toLocaleDateString('es-ES')}
+                      <span style={{ fontWeight: 400, color: 'var(--tx2)', fontSize: '.75rem', marginLeft: 6 }}>
+                        {new Date(p.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </span>
+                    <span style={{ fontWeight: 700, fontSize: '.82rem', color: ESTADO_COLOR[p.estado] }}>
+                      {ESTADO_LABEL[p.estado]}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 6 }}>
+                    {p.pedido_items?.map(i => `${i.productos?.nombre} ×${i.cantidad}`).join(' · ')}
+                  </div>
+                  {p.notas && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', fontStyle: 'italic' }}>📝 {p.notas}</div>}
+                  {p.notas_admin && (
+                    <div style={{ fontSize: '.75rem', marginTop: 4, color: 'var(--blue)' }}>
+                      🔵 Admin: {p.notas_admin}
+                    </div>
+                  )}
+                  {p.estado === 'EN_CAMINO' && (
+                    <button className="btn-p" style={{ marginTop: 8, padding: '7px 0', fontSize: '.82rem' }}
+                      onClick={() => abrirRecepcion(p)}>
+                      📦 Confirmar recepción
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )
+        }
+        <button className="btn-s" style={{ marginTop: 12 }} onClick={onClose}>Cerrar</button>
+      </div>
+
+      {/* Modal confirmar recepción */}
+      {recibiendo && (
+        <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setRecibiendo(null)}>
+          <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="mt-modal">📦 Confirmar Recepción</div>
+            <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
+              Anota lo que ha llegado realmente. Si hay diferencias, indícalas.
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {recItems.map((item, idx) => (
+                <div key={item.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 12px', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 6 }}>{item.nombre}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                    <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Pedido: <strong>{item.cantidad}</strong></span>
+                    <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Recibido:</span>
+                    <input type="number" value={item.cantidad_recibida} min="0"
+                      onChange={e => setRecItems(prev => prev.map((r, i) => i === idx ? { ...r, cantidad_recibida: parseInt(e.target.value) || 0 } : r))}
+                      style={{ width: 60, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '4px 8px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
+                      inputMode="numeric" />
+                    {item.cantidad_recibida !== item.cantidad && (
+                      <span style={{ fontSize: '.75rem', color: item.cantidad_recibida < item.cantidad ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>
+                        {item.cantidad_recibida > item.cantidad ? '+' : ''}{item.cantidad_recibida - item.cantidad}
+                      </span>
+                    )}
+                  </div>
+                  <input placeholder="Incidencia (opcional): faltó esto, llegó roto..."
+                    value={item.notas_item}
+                    onChange={e => setRecItems(prev => prev.map((r, i) => i === idx ? { ...r, notas_item: e.target.value } : r))}
+                    style={{ width: '100%', background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '6px 10px', fontSize: '.78rem', fontFamily: "'DM Sans',sans-serif" }} />
+                </div>
+              ))}
+            </div>
+            <div className="fg" style={{ marginTop: 8 }}>
+              <label>Notas generales de la recepción</label>
+              <input className="bi" style={{ marginBottom: 0 }} value={notasRec}
+                onChange={e => setNotasRec(e.target.value)} placeholder="Observaciones generales..." />
+            </div>
+            <button className="btn-p" style={{ marginTop: 12 }} disabled={saving} onClick={confirmarRec}>
+              {saving ? 'Guardando...' : '✓ Confirmar y actualizar stock'}
+            </button>
+            <button className="btn-s" onClick={() => setRecibiendo(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── MODAL INVENTARIO ─────────────────────────────────────────
+function ModalInventario({ caseta, perfil, productos, stockActual, onClose, showToast }) {
+  const [items, setItems]       = useState(() =>
+    productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, cantidad_real: stockActual[p.id] ?? 0 }))
+  )
+  const [busq, setBusq]         = useState('')
+  const [catFiltro, setCatFiltro] = useState('Todos')
+  const [loading, setLoading]   = useState(false)
+  const [enviado, setEnviado]   = useState(false)
+
+  const cats = ['Todos', ...new Set(productos.map(p => p.categoria))]
+
+  const itemsFiltrados = items.filter(i => {
+    const bOk = !busq || i.nombre.toLowerCase().includes(busq.toLowerCase())
+    const cOk = catFiltro === 'Todos' || i.categoria === catFiltro
+    return bOk && cOk
+  })
+
+  const setQty = (productoId, val) => {
+    const q = Math.max(0, parseInt(val) || 0)
+    setItems(prev => prev.map(i => i.producto_id === productoId ? { ...i, cantidad_real: q } : i))
+  }
+
+  const enviar = async () => {
+    setLoading(true)
+    try {
+      await crearInventario(caseta.id, perfil.id, items)
+      showToast('✓ Inventario enviado al administrador para confirmación')
+      setEnviado(true)
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setLoading(false)
+  }
+
+  if (enviado) return (
+    <div className="mo">
+      <div className="mc" style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>✅</div>
+        <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>Inventario enviado</div>
+        <div style={{ color: 'var(--tx2)', fontSize: '.85rem', marginBottom: 20 }}>
+          El administrador revisará el inventario y actualizará el stock.
+        </div>
+        <button className="btn-p" onClick={onClose}>Cerrar</button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="mt-modal">📋 Inventario de Cierre</div>
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
+          {caseta.nombre} · Cuenta el stock físico restante
+        </div>
+
+        <input className="si" placeholder="Buscar producto..."
+          value={busq} onChange={e => setBusq(e.target.value)} style={{ marginBottom: 8 }} />
+
+        <div className="catbar" style={{ marginBottom: 8 }}>
+          {cats.map(c => (
+            <button key={c} className={`ct ${catFiltro === c ? 'on' : ''}`} onClick={() => setCatFiltro(c)}>{c}</button>
+          ))}
+        </div>
+
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {itemsFiltrados.map(item => (
+            <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '.82rem', fontWeight: 600 }}>{item.nombre}</div>
+                <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>
+                  Stock teórico: {stockActual[item.producto_id] ?? 0}
+                  {item.cantidad_real !== (stockActual[item.producto_id] ?? 0) && (
+                    <span style={{ marginLeft: 6, color: item.cantidad_real < (stockActual[item.producto_id] ?? 0) ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>
+                      ({item.cantidad_real - (stockActual[item.producto_id] ?? 0) >= 0 ? '+' : ''}{item.cantidad_real - (stockActual[item.producto_id] ?? 0)})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad_real - 1)}>−</button>
+              <input type="number" value={item.cantidad_real} min="0"
+                onChange={e => setQty(item.producto_id, e.target.value)}
+                style={{ width: 60, background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '5px', textAlign: 'center', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
+                inputMode="numeric" />
+              <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad_real + 1)}>+</button>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: '10px 0', fontSize: '.78rem', color: 'var(--tx2)' }}>
+          {items.filter(i => i.cantidad_real !== (stockActual[i.producto_id] ?? 0)).length} diferencias encontradas
+        </div>
+
+        <button className="btn-p" disabled={loading} onClick={enviar}>
+          {loading ? 'Enviando...' : '📤 Enviar inventario para revisión'}
+        </button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── BADGE KILOS PÓLVORA ──────────────────────────────────────
+function BadgeKgPolvora({ kgActual, kgLimite }) {
+  const pct = kgLimite > 0 ? (kgActual / kgLimite) * 100 : 0
+  const color = pct >= 90 ? 'var(--red)' : pct >= 75 ? 'var(--gold)' : 'var(--green)'
+  const alerta = pct >= 80
+  return (
+    <div title={`${kgActual.toFixed(2)} kg / ${kgLimite} kg permitidos`} style={{
+      display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px',
+      background: alerta ? `rgba(${pct >= 90 ? '239,68,68' : '245,200,66'},.15)` : 'var(--s2)',
+      border: `1px solid ${color}`, borderRadius: 20, fontSize: '.72rem', cursor: 'default',
+    }}>
+      <span style={{ color, fontWeight: 700 }}>💥 {kgActual.toFixed(2)}kg</span>
+      <span style={{ color: 'var(--tx2)' }}>/ {kgLimite}kg</span>
+      {alerta && <span style={{ color, fontWeight: 800 }}>⚠️</span>}
+    </div>
+  )
+}
+
+// ─── EMPLEADO PANEL ───────────────────────────────────────────
 export default function EmpleadoPanel({ perfil, casetas }) {
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
 
-  const [productos,     setProductos]     = useState([])
-  const [stock,         setStock]         = useState({})
-  const [ofertas,       setOfertas]       = useState([])
-  const [caja,          setCaja]          = useState(null)
-  const [ventas,        setVentas]        = useState([])
-  const [loading,       setLoading]       = useState(true)
-  const [ticket,        setTicket]        = useState([])
-  const [busq,          setBusq]          = useState('')
-  const [cat,           setCat]           = useState('Todos')
-  const [showScan,      setShowScan]      = useState(false)
-  const [showPago,      setShowPago]      = useState(false)
-  const [showCierre,    setShowCierre]    = useState(false)
-  const [showHistorial, setShowHistorial] = useState(false)
-  const [showOk,        setShowOk]        = useState(null)
-  const [toast,         setToast]         = useState(null)
-  const [apertura,      setApertura]      = useState('')
-  const [modoRapido,    setModoRapido]    = useState(false)
-  const [favoritos,     setFavoritos]     = useState(() => getFavoritos())
-  const [tabTPV,        setTabTPV]        = useState('todos') // todos | favoritos
-  const [prodModal,     setProdModal]     = useState(null)   // producto para modal cantidad
+  const [productos,      setProductos]      = useState([])
+  const [stock,          setStock]          = useState({})
+  const [ofertas,        setOfertas]        = useState([])
+  const [caja,           setCaja]           = useState(null)
+  const [ventas,         setVentas]         = useState([])
+  const [loading,        setLoading]        = useState(true)
+  const [ticket,         setTicket]         = useState([])
+  const [busq,           setBusq]           = useState('')
+  const [cat,            setCat]            = useState('Todos')
+  const [showScan,       setShowScan]       = useState(false)
+  const [showPago,       setShowPago]       = useState(false)
+  const [showCierre,     setShowCierre]     = useState(false)
+  const [showHistorial,  setShowHistorial]  = useState(false)
+  const [showOk,         setShowOk]         = useState(null)
+  const [toast,          setToast]          = useState(null)
+  const [apertura,       setApertura]       = useState('')
+  // ── Persistidos en sessionStorage para sobrevivir a cambios de página ──
+  const [modoRapido,     setModoRapido]     = useState(() => sessionStorage.getItem('tpv_rapido') === '1')
+  const [tabTPV,         setTabTPV]         = useState(() => sessionStorage.getItem('tpv_tab') || 'todos')
+  const [cat2,           setCat2]           = useState(() => sessionStorage.getItem('tpv_cat') || 'Todos')
+
+  const [favoritos,      setFavoritos]      = useState(() => getFavoritos())
+  const [prodModal,      setProdModal]      = useState(null)
+  const [showPedido,     setShowPedido]     = useState(false)
+  const [showMisPedidos, setShowMisPedidos] = useState(false)
+  const [showInventario, setShowInventario] = useState(false)
+  const [kgPolvora,      setKgPolvora]      = useState(0)
+  const [kgLimite,       setKgLimite]       = useState(10)
+  const [pedidosPend,    setPedidosPend]    = useState(0)
 
   const showToast = (msg, type = 'ok') => { setToast({ msg, type }); setTimeout(() => setToast(null), 2800) }
 
-  // Categorías dinámicas del catálogo
+  // Persistir estado simple en sessionStorage
+  useEffect(() => { sessionStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
+  useEffect(() => { sessionStorage.setItem('tpv_tab', tabTPV) }, [tabTPV])
+  useEffect(() => { sessionStorage.setItem('tpv_cat', cat2) }, [cat2])
+
   const CATS = ['Todos', ...new Set(productos.map(p => p.categoria))].filter(Boolean)
 
   useEffect(() => {
@@ -452,8 +969,12 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     Promise.all([
       getProductos(), getStockCaseta(caseta.id),
       getOfertas(), getCajaAbierta(caseta.id),
-    ]).then(([prods, stk, ofs, cajaAbierta]) => {
+      getKgPolvora(caseta.id), getLimitePolvora(caseta.id),
+      getPedidos({ casetaId: caseta.id, activos: true }),
+    ]).then(([prods, stk, ofs, cajaAbierta, kg, limite, peds]) => {
       setProductos(prods); setStock(stk); setOfertas(ofs)
+      setKgPolvora(kg); setKgLimite(limite)
+      setPedidosPend(peds.filter(p => p.estado === 'EN_CAMINO').length)
       if (cajaAbierta) { setCaja(cajaAbierta); getResumenCaja(cajaAbierta.id).then(setVentas) }
     }).finally(() => setLoading(false))
   }, [caseta?.id])
@@ -463,7 +984,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     if (!caseta) return
     const ch = supabase.channel(`stock-${caseta.id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'stock', filter: `caseta_id=eq.${caseta.id}` },
-        payload => setStock(prev => ({ ...prev, [payload.new.producto_id]: payload.new.cantidad })))
+        payload => {
+          setStock(prev => ({ ...prev, [payload.new.producto_id]: payload.new.cantidad }))
+          // Recalcular kg pólvora en background
+          getKgPolvora(caseta.id).then(setKgPolvora)
+        })
       .subscribe()
     return () => supabase.removeChannel(ch)
   }, [caseta?.id])
@@ -475,7 +1000,6 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     } catch (e) { showToast('Error: ' + e.message, 'error') }
   }
 
-  // Click en producto: si tiene stock y se hace click largo → modal cantidad, click normal → +1
   const agregar = useCallback((prod, cantidad = 1) => {
     const stockDisp = stock[prod.id] ?? 0
     if (stockDisp <= 0) { showToast('Sin stock disponible', 'error'); return }
@@ -513,32 +1037,24 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         const { total: totalLinea, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
         return {
           producto_id: item.id, nombre: item.nombre, precio_unitario: item.precio,
-          cantidad: item.cantidad, total_linea: totalLinea,
-          con_oferta: !!desglose,
+          cantidad: item.cantidad, total_linea: totalLinea, con_oferta: !!desglose,
           detalle_oferta: desglose ? desglose.map(d => d.tipo === 'pack' ? `${d.packs}x ${d.etiqueta}` : `${d.unidades}u normal`).join(' + ') : null,
         }
       })
       await crearTicket({ cajaId: caja.id, casetaId: caseta.id, empleadoId: perfil.id, metodoPago: metodo, total, dineroDado, cambio, items })
-
       setStock(prev => {
         const next = { ...prev }
         ticket.forEach(i => { if (next[i.id] !== undefined) next[i.id] -= i.cantidad })
         return next
       })
       setVentas(prev => [...prev, { metodo_pago: metodo, total, perfiles: { nombre: perfil.nombre } }])
-
       if (modoRapido) {
-        setTicket([])
-        setShowPago(false)
+        setTicket([]); setShowPago(false)
         showToast(`✓ Venta ${fmt(total)} · ${metodo === 'efectivo' ? `Cambio: ${fmt(cambio)}` : 'Tarjeta'}`)
       } else {
-        setShowOk({ metodo, total, cambio })
-        setTicket([])
-        setShowPago(false)
+        setShowOk({ metodo, total, cambio }); setTicket([]); setShowPago(false)
       }
-    } catch (e) {
-      showToast('Error al guardar venta: ' + e.message, 'error')
-    }
+    } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
   }
 
   const confirmarCierre = async (contado) => {
@@ -548,22 +1064,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     } catch (e) { showToast('Error cerrando caja: ' + e.message, 'error') }
   }
 
-  const handleToggleFav = (e, prodId) => {
-    e.stopPropagation()
-    const nuevos = toggleFavorito(prodId)
-    setFavoritos([...nuevos])
-  }
-
-  const eaBadge = p => {
-    if (p.edad_minima === 0)  return <span className="pea et1">T1</span>
-    if (p.edad_minima === 12) return <span className="pea e12">12+</span>
-    if (p.edad_minima === 16) return <span className="pea e16">16+</span>
-    return <span className="pea e18">18+</span>
-  }
-
   if (loading) return <div className="splash"><div className="spinner" /></div>
 
-  // ── Apertura caja ──────────────────────────────────────────
+  // ── Pantalla apertura caja ─────────────────────────────────
   if (!caja) return (
     <div className="app">
       <div className="topbar">
@@ -577,9 +1080,6 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         <div className="apc">
           <div className="apt">Apertura de Caja</div>
           <div className="aps">Hola <strong>{perfil.nombre}</strong> · {caseta?.nombre}</div>
-          <div className="aps" style={{ marginBottom: 20, fontSize: '.77rem', color: 'var(--tx2)' }}>
-            Introduce el efectivo inicial. Si un compañero ya abrió la caja, pulsa directamente.
-          </div>
           <input className="bi" type="number" placeholder="0,00" value={apertura}
             onChange={e => setApertura(e.target.value)} min="0" step="0.01" inputMode="decimal" />
           <button className="btn-p" onClick={handleAbrirCaja}>Abrir caja y comenzar</button>
@@ -591,32 +1091,46 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   // ── TPV ────────────────────────────────────────────────────
   const totalCajaTurno = ventas.reduce((s, v) => s + v.total, 0)
 
-  // Productos filtrados
   let prodsFiltrados = productos
   if (tabTPV === 'favoritos') {
     prodsFiltrados = favoritos.map(id => productos.find(p => p.id === id)).filter(Boolean)
-  } else {
-    if (cat !== 'Todos') prodsFiltrados = prodsFiltrados.filter(p => p.categoria === cat)
+  } else if (tabTPV === 'todos') {
+    if (cat2 !== 'Todos') prodsFiltrados = prodsFiltrados.filter(p => p.categoria === cat2)
   }
   if (busq) prodsFiltrados = prodsFiltrados.filter(p =>
     p.nombre.toLowerCase().includes(busq.toLowerCase()) || p.codigo_ean?.includes(busq)
   )
 
-  // Botones rápidos siempre visibles (mechas y bolsas)
   const botonesRapidos = productos.filter(p =>
     ['mecha', 'bolsa', 'cebador'].some(kw => p.nombre.toLowerCase().includes(kw))
   ).slice(0, 4)
+
+  const pctPolvora = kgLimite > 0 ? (kgPolvora / kgLimite) * 100 : 0
 
   return (
     <div className="app">
       <div className="topbar">
         <div className="tl">💥 Caballer</div>
         <div className="ti">
+          <BadgeKgPolvora kgActual={kgPolvora} kgLimite={kgLimite} />
           <span style={{ fontSize: '.79rem', color: 'var(--tx2)' }}>{caseta?.nombre}</span>
           <span className="badge be">Empleado</span>
           <button className="btn-o" onClick={() => supabase.auth.signOut()}>Salir</button>
         </div>
       </div>
+
+      {/* Alerta pólvora prominente */}
+      {pctPolvora >= 80 && (
+        <div style={{
+          background: pctPolvora >= 90 ? 'rgba(239,68,68,.15)' : 'rgba(245,200,66,.12)',
+          borderBottom: `2px solid ${pctPolvora >= 90 ? 'var(--red)' : 'var(--gold)'}`,
+          padding: '7px 20px', fontSize: '.8rem', fontWeight: 700,
+          color: pctPolvora >= 90 ? 'var(--red)' : 'var(--gold)',
+        }}>
+          ⚠️ {pctPolvora >= 90 ? '🚨 ALERTA: ' : ''}Límite de pólvora al {pctPolvora.toFixed(0)}% ({kgPolvora.toFixed(2)} kg de {kgLimite} kg permitidos)
+          {pctPolvora >= 90 && ' — NO recibir más stock hasta reducir'}
+        </div>
+      )}
 
       {/* Subbar caja */}
       <div style={{ padding: '7px 20px', background: 'var(--s1)', borderBottom: '1px solid var(--bd)', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: '.78rem' }}>
@@ -627,8 +1141,18 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           {ventas.length} tickets · <strong style={{ color: 'var(--ac)' }}>{fmt(totalCajaTurno)}</strong>
         </span>
         {modoRapido && <span style={{ background: 'rgba(34,197,94,.15)', color: 'var(--green)', padding: '2px 8px', borderRadius: 20, fontSize: '.7rem', fontWeight: 700 }}>⚡ MODO RÁPIDO</span>}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 7 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 7, flexWrap: 'wrap' }}>
           <button className="btn-o" onClick={() => setShowHistorial(true)}>Ver tickets</button>
+          <button className="btn-o" style={{ position: 'relative' }} onClick={() => setShowMisPedidos(true)}>
+            📋 Pedidos
+            {pedidosPend > 0 && (
+              <span style={{ position: 'absolute', top: -5, right: -5, background: 'var(--ac)', color: 'white', borderRadius: '50%', width: 16, height: 16, fontSize: '.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
+                {pedidosPend}
+              </span>
+            )}
+          </button>
+          <button className="btn-o" onClick={() => setShowPedido(true)}>📤 Pedir</button>
+          <button className="btn-o" onClick={() => setShowInventario(true)}>📋 Inventario</button>
           <button className="btn-o" onClick={() => setShowCierre(true)}>Cerrar Caja</button>
         </div>
       </div>
@@ -639,16 +1163,16 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           <div className="pp">
             <div className="srch">
               <input className="si" placeholder="Buscar producto o EAN..."
-                value={busq} onChange={e => { setBusq(e.target.value); setTabTPV('todos') }} />
+                value={busq} onChange={e => { setBusq(e.target.value); if (e.target.value) setTabTPV('todos') }} />
               <button className="bsc" onClick={() => setShowScan(true)}>📷</button>
             </div>
 
-            {/* Tabs todos / favoritos / ofertas */}
+            {/* Tabs */}
             <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--bd)' }}>
               {[
-                ['todos',     'Todos',                     'var(--ac)'],
+                ['todos',     'Todos',                        'var(--ac)'],
                 ['favoritos', `⭐ Favs (${favoritos.length})`, 'var(--gold)'],
-                ['ofertas',   `🏷️ Ofertas (${ofertas.length})`, 'var(--green)'],
+                ['ofertas',   `🏷 Ofertas (${ofertas.length})`, 'var(--green)'],
               ].map(([k, l, color]) => (
                 <button key={k} onClick={() => setTabTPV(k)} style={{
                   flex: 1, padding: '9px 4px', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer',
@@ -659,11 +1183,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               ))}
             </div>
 
-            {/* Categorías (solo en tab todos) */}
+            {/* Categorías */}
             {tabTPV === 'todos' && (
               <div className="catbar">
                 {CATS.map(c => (
-                  <button key={c} className={`ct ${cat === c ? 'on' : ''}`} onClick={() => setCat(c)}>{c}</button>
+                  <button key={c} className={`ct ${cat2 === c ? 'on' : ''}`} onClick={() => setCat2(c)}>{c}</button>
                 ))}
               </div>
             )}
@@ -677,16 +1201,12 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                     padding: '5px 11px', borderRadius: 20, border: '1px solid var(--bd)',
                     background: 'var(--s2)', color: 'var(--tx2)', fontSize: '.73rem',
                     fontWeight: 600, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
-                    transition: 'all .15s',
-                  }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--ac)'; e.currentTarget.style.color = 'var(--ac)' }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--bd)'; e.currentTarget.style.color = 'var(--tx2)' }}
-                  >{p.nombre}</button>
+                  }}>{p.nombre}</button>
                 ))}
               </div>
             )}
 
-            {/* Grid productos — oculto en tab ofertas */}
+            {/* Grid productos */}
             <div className="pg" style={{ display: tabTPV === 'ofertas' ? 'none' : undefined }}>
               {prodsFiltrados.map(p => {
                 const stockDisp = stock[p.id] ?? 0
@@ -700,8 +1220,10 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                     tieneOferta={tieneOferta} esFav={esFav}
                     onTap={() => agregar(p)}
                     onLong={() => abrirModalCantidad(p)}
-                    onFav={handleToggleFav}
-                    eaBadge={eaBadge}
+                    onFav={(id) => {
+                      const nuevos = toggleFavorito(id)
+                      setFavoritos([...nuevos])
+                    }}
                   />
                 )
               })}
@@ -710,17 +1232,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                   Pulsa ⭐ en cualquier producto para añadirlo a favoritos
                 </div>
               )}
-              {tabTPV === 'ofertas' && ofertas.length === 0 && (
-                <div style={{ gridColumn: '1/-1', textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
-                  Sin ofertas activas. Créalas en el panel Admin.
-                </div>
-              )}
             </div>
 
-            {/* Tab ofertas — tarjetas grandes */}
-            {tabTPV === 'ofertas' && ofertas.length > 0 && (
+            {/* Tab ofertas */}
+            {tabTPV === 'ofertas' && (
               <div style={{ padding: 12, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {/* Combinadas */}
                 {ofertas.filter(o => o.tipo === 'combinada').map(o => {
                   const sinStock = (o.productos_requeridos || []).some(r => (stock[r.producto_id] ?? 0) < r.cantidad)
                   return (
@@ -738,17 +1254,15 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                       opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--blue)', fontSize: '.95rem' }}>🎁 {o.etiqueta}</span>
+                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--blue)', fontSize: '.95rem' }}>🎁 {o.etiqueta || o.nombre}</span>
                         <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(o.precio_pack)}</span>
                       </div>
                       <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
-                        {(o.productos_requeridos || []).map(r => `${r.cantidad}× ${r.nombre}`).join(' + ')}
+                        {(o.productos_requeridos || []).map(r => `${r.cantidad}× ${r.nombre || productos.find(p => p.id === r.producto_id)?.nombre || '?'}`).join(' + ')}
                       </div>
-                      {sinStock && <div style={{ fontSize: '.7rem', color: 'var(--red)', marginTop: 3 }}>Sin stock suficiente</div>}
                     </button>
                   )
                 })}
-                {/* Packs */}
                 {[...new Map(ofertas.filter(o => !o.tipo || o.tipo === 'pack').map(o => [o.producto_id, o])).values()].map(o => {
                   const prod = productos.find(p => p.id === o.producto_id)
                   if (!prod) return null
@@ -758,7 +1272,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                     <button key={o.producto_id} disabled={sinStock} onClick={() => {
                       if (sinStock) { showToast('Stock insuficiente', 'error'); return }
                       agregar(prod, o.cantidad_pack)
-                      showToast(`✓ ${o.etiqueta} añadido`)
+                      showToast(`✓ ${o.etiqueta || o.nombre} añadido`)
                     }} style={{
                       background: sinStock ? 'var(--s2)' : 'rgba(245,200,66,.08)',
                       border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(245,200,66,.35)'}`,
@@ -766,13 +1280,12 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                       opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--gold)', fontSize: '.95rem' }}>📦 {o.etiqueta}</span>
+                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--gold)', fontSize: '.95rem' }}>📦 {o.etiqueta || o.nombre}</span>
                         <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(o.precio_pack)}</span>
                       </div>
                       <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
-                        {prod.nombre} · {o.cantidad_pack} unidades · Stock: {stockDisp}
+                        {prod.nombre} · {o.cantidad_pack} uds · Stock: {stockDisp}
                       </div>
-                      {sinStock && <div style={{ fontSize: '.7rem', color: 'var(--red)', marginTop: 3 }}>Sin stock suficiente</div>}
                     </button>
                   )
                 })}
@@ -780,8 +1293,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             )}
           </div>
 
-            {/* Panel ticket */}
-            <div className="tp">
+          {/* Panel ticket */}
+          <div className="tp">
             <div className="th">
               <div className="tt">🧾 Ticket</div>
               <div className="tm">{perfil.nombre} · {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</div>
@@ -795,10 +1308,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                 ))
               }
             </div>
-
             <div className="tf">
               <div className="tsb"><span>Artículos</span><span>{ticket.reduce((s, i) => s + i.cantidad, 0)}</span></div>
-              {/* Ofertas combinadas aplicadas */}
               {detectarOfertasCombinadas(ticket, ofertas).map(o => {
                 const sinOferta = (o.productos_requeridos || []).reduce((s, req) => {
                   const item = ticket.find(i => i.id === req.producto_id)
@@ -808,9 +1319,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                 }, 0)
                 const ahorro = sinOferta - o.precio_pack
                 return ahorro > 0 ? (
-                  <div key={o.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'5px 0', borderTop:'1px dashed rgba(34,197,94,.3)', margin:'2px 0' }}>
-                    <span style={{ fontSize:'.72rem', color:'var(--green)', fontWeight:600 }}>🏷 {o.etiqueta}</span>
-                    <span style={{ fontSize:'.72rem', color:'var(--green)', fontWeight:700 }}>-{fmt(ahorro)}</span>
+                  <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px dashed rgba(34,197,94,.3)', margin: '2px 0' }}>
+                    <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 600 }}>🏷 {o.etiqueta || o.nombre}</span>
+                    <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 700 }}>-{fmt(ahorro)}</span>
                   </div>
                 ) : null
               })}
@@ -828,29 +1339,23 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           </div>
         </div>
 
-        {/* Ayuda gestos */}
         <div style={{ fontSize: '.68rem', color: 'var(--tx2)', textAlign: 'center', marginTop: 8, opacity: .6 }}>
           Pulsa = +1 unidad · Mantén pulsado = selector de cantidad · ⭐ = favorito
         </div>
       </div>
 
-      {/* Modales */}
+      {/* ─── Modales ─── */}
       {prodModal && (
-        <ModalCantidad
-          producto={prodModal}
-          stockDisp={stock[prodModal.id] ?? 0}
+        <ModalCantidad producto={prodModal} stockDisp={stock[prodModal.id] ?? 0}
           ofertas={ofertas}
           onConfirm={qty => { agregar(prodModal, qty); setProdModal(null) }}
-          onClose={() => setProdModal(null)}
-        />
+          onClose={() => setProdModal(null)} />
       )}
       {showScan && (
         <Scanner
           onDetect={(p, qty) => { agregar(p, qty || 1); setShowScan(false) }}
           onClose={() => setShowScan(false)}
-          stock={stock}
-          ofertas={ofertas}
-        />
+          stock={stock} ofertas={ofertas} />
       )}
       {showPago && (
         <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => setShowPago(false)}
@@ -860,8 +1365,25 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         <ModalCierreCaja caja={caja} caseta={caseta?.nombre} ventas={ventas}
           onClose={() => setShowCierre(false)} onCerrar={confirmarCierre} />
       )}
-      {showHistorial && <ModalHistorial cajaId={caja.id} perfil={perfil} onClose={() => setShowHistorial(false)} />}
-
+      {showHistorial && (
+        <ModalHistorial cajaId={caja.id} perfil={perfil} productos={productos} ofertas={ofertas}
+          onClose={() => setShowHistorial(false)} />
+      )}
+      {showPedido && (
+        <ModalPedido caseta={caseta} perfil={perfil} productos={productos}
+          showToast={showToast}
+          onClose={() => setShowPedido(false)}
+          onCreado={() => { setShowPedido(false); setPedidosPend(n => n + 0) }} />
+      )}
+      {showMisPedidos && (
+        <ModalMisPedidos caseta={caseta} perfil={perfil} productos={productos}
+          showToast={showToast}
+          onClose={() => { setShowMisPedidos(false); getKgPolvora(caseta.id).then(setKgPolvora) }} />
+      )}
+      {showInventario && (
+        <ModalInventario caseta={caseta} perfil={perfil} productos={productos} stockActual={stock}
+          showToast={showToast} onClose={() => setShowInventario(false)} />
+      )}
       {showOk && (
         <div className="mo">
           <div className="mc" style={{ textAlign: 'center' }}>
@@ -875,7 +1397,6 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           </div>
         </div>
       )}
-
       {toast && <Toast msg={toast.msg} type={toast.type} />}
     </div>
   )
