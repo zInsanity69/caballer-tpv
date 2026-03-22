@@ -9,6 +9,7 @@ import {
   crearInventario, getInventarios, confirmarInventario,
   getKgPolvora, getLimitePolvora,
   getUltimoFichaje, fichar, getFichajesEmpleado, calcularTurnos, calcularEstado, fmtDuracion,
+  getEmpleadosActivosCaseta, obtenerUbicacion, verificarUbicacion,
 } from '../lib/api.js'
 import { calcularPrecio, calcularTotalTicket, detectarOfertasCombinadas, fmt } from '../lib/precios.js'
 import Scanner from './Scanner.jsx'
@@ -1176,7 +1177,7 @@ function BadgeKgPolvora({ kgActual, kgLimite }) {
 // ─── EMPLEADO PANEL ───────────────────────────────────────────
 
 // ─── MODAL MIS FICHAJES ───────────────────────────────────────
-function ModalFichajes({ perfil, caseta, ultimoFichaje, onFichar, onClose, showToast }) {
+function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, onFichar, onSolicitarCierreCaja, onClose, showToast }) {
   const [semana, setSemana]     = useState(0)
   const [fichajes, setFichajes] = useState([])
   const [loading, setLoading]   = useState(true)
@@ -1204,13 +1205,54 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, onFichar, onClose, showT
   const totalTrabajado = turnos.filter(t=>!t.enCurso).reduce((s,t)=>s+t.minutosTrabajados,0)
   const turnoHoy = turnos.find(t=>t.enCurso)
 
+  const [geoEstado, setGeoEstado] = useState(null) // null | 'obteniendo' | 'ok' | 'fuera' | 'error'
+  const [geoMsg, setGeoMsg]       = useState('')
+
   const handleFichar = async (tipo) => {
+    // Si va a salir y es el último empleado activo con caja abierta → debe cerrar caja primero
+    if (tipo === 'SALIDA' && esSoloEmpleado && caja) {
+      showToast('Debes cerrar la caja antes de salir (eres el último en la caseta)', 'error')
+      setFichandoType(null)
+      onSolicitarCierreCaja()
+      return
+    }
+
     setFichandoType(tipo)
+    setGeoEstado(null)
+    setGeoMsg('')
+
+    // ── Geolocalización ──────────────────────────────────────
+    let geoData = null
+    // Solo verificar si la caseta tiene geo activado
+    if (caseta.geo_activo && caseta.latitud && caseta.longitud) {
+      setGeoEstado('obteniendo')
+      try {
+        const pos = await obtenerUbicacion()
+        const verificacion = verificarUbicacion(pos.lat, pos.lng, caseta)
+        geoData = { ...pos, geo_ok: verificacion.permitido }
+        if (!verificacion.permitido) {
+          setGeoEstado('fuera')
+          setGeoMsg(verificacion.mensaje)
+          setFichandoType(null)
+          return  // Bloquear fichaje
+        }
+        setGeoEstado('ok')
+        setGeoMsg(verificacion.mensaje)
+      } catch(e) {
+        // Si no se puede obtener ubicación → bloquear (no permitir fichar sin geo si está activo)
+        setGeoEstado('error')
+        setGeoMsg(e.message)
+        setFichandoType(null)
+        return
+      }
+    }
+    // ────────────────────────────────────────────────────────
+
     try {
-      const f = await fichar(perfil.id, caseta.id, tipo, notas)
+      const f = await fichar(perfil.id, caseta.id, tipo, notas, geoData)
       const mensajes = {
         ENTRADA:          '🟢 Entrada registrada',
-        SALIDA:           '🔴 Salida registrada',
+        SALIDA:           '🔴 Salida registrada — ¡Hasta mañana!',
         INICIO_DESCANSO:  '☕ Descanso iniciado',
         FIN_DESCANSO:     '▶️ Volviendo al trabajo',
       }
@@ -1218,6 +1260,9 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, onFichar, onClose, showT
       onFichar({ tipo, timestamp: f.timestamp })
       setNotas('')
       setShowNotas(false)
+      setGeoEstado(null)
+      setGeoMsg('')
+      if (tipo === 'SALIDA') { onClose(); return }
       cargar()
     } catch(e) { showToast('Error: '+e.message, 'error') }
     setFichandoType(null)
@@ -1306,6 +1351,43 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, onFichar, onClose, showT
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
               }}>{fichandoType==='SALIDA'?'...':'🔴 Salida directa'}</button>
             </>)}
+            {/* Feedback de geolocalización */}
+          {geoEstado === 'obteniendo' && (
+            <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(96,165,250,.1)',border:'1px solid rgba(96,165,250,.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--blue)',display:'flex',gap:8,alignItems:'center'}}>
+              <div className="spin-sm" style={{width:14,height:14,flexShrink:0}}/>
+              Verificando tu ubicación...
+            </div>
+          )}
+          {geoEstado === 'ok' && geoMsg && (
+            <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(34,197,94,.1)',border:'1px solid rgba(34,197,94,.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--green)'}}>
+              📍 {geoMsg}
+            </div>
+          )}
+          {geoEstado === 'fuera' && (
+            <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.4)',borderRadius:'var(--rs)',fontSize:'.8rem',color:'var(--red)',fontWeight:600}}>
+              📍 {geoMsg}
+            </div>
+          )}
+          {geoEstado === 'error' && (
+            <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.4)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--red)'}}>
+              ⚠️ {geoMsg}
+            </div>
+          )}
+
+          {/* Aviso si es el último y tiene caja abierta */}
+            {(estado==='trabajando'||estado==='descanso') && esSoloEmpleado && caja && (
+              <div style={{width:'100%',marginTop:4,fontSize:'.72rem',color:'var(--gold)',
+                background:'rgba(245,200,66,.08)',border:'1px solid rgba(245,200,66,.2)',
+                borderRadius:'var(--rs)',padding:'5px 10px',textAlign:'center'}}>
+                ⚠️ Eres el único empleado — debes cerrar caja antes de salir
+              </div>
+            )}
+            {/* Aviso si hay otros empleados activos (puede salir libremente) */}
+            {(estado==='trabajando'||estado==='descanso') && !esSoloEmpleado && (
+              <div style={{width:'100%',marginTop:4,fontSize:'.72rem',color:'var(--tx2)',textAlign:'center'}}>
+                Hay otros compañeros trabajando — puedes salir sin cerrar caja
+              </div>
+            )}
             <button onClick={()=>setShowNotas(v=>!v)} title="Añadir nota" style={{
               padding:'9px 12px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',
               background:showNotas?'var(--s2)':'transparent',color:'var(--tx2)',
@@ -1412,6 +1494,213 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, onFichar, onClose, showT
 }
 
 
+
+// ─── GENERADOR DE TICKET IMPRIMIBLE ───────────────────────────
+// Configuración fiscal de la empresa — editar aquí o mover a BD
+const CONFIG_EMPRESA = {
+  nombre:    'Caballer',
+  razonSocial: 'Caballer Pirotecnia, S.L.',
+  direccion: 'C/ Ejemplo 12, 46000 Valencia',
+  cif:       'B00000000',   // ← Cambiar por el CIF real
+  telefono:  '',
+  web:       '',
+  textoLegal: 'Es imprescindible presentar el ticket para cualquier reclamación. Solo se aceptan devoluciones de artículos defectuosos, en cuyo caso será por otro igual o similar.',
+  iva:       21,
+}
+
+function generarTicketHTML(datos) {
+  const { items, total, metodo, cambio, caseta, perfil, fecha, ticketNum } = datos
+  const iva = CONFIG_EMPRESA.iva / 100
+  const baseImponible = total / (1 + iva)
+  const cuotaIva = total - baseImponible
+  const totalNEC = items.reduce((s, i) => s + (i.gramos_polvora || 0) * i.cantidad, 0)
+  const fmtE = n => n.toFixed(2) + '€'
+  const fmtFecha = d => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=80mm">
+<title>Ticket ${ticketNum}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    width: 80mm;
+    max-width: 80mm;
+    color: #000;
+    background: #fff;
+    padding: 4mm;
+  }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .bold { font-weight: bold; }
+  .logo {
+    text-align: center;
+    font-family: Arial Black, sans-serif;
+    font-size: 26px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: #000;
+    margin: 4px 0 2px;
+    text-transform: uppercase;
+  }
+  .logo-sub {
+    text-align: center;
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: #444;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
+  .separator { border: none; border-top: 1px dashed #000; margin: 5px 0; }
+  .separator-solid { border: none; border-top: 1px solid #000; margin: 5px 0; }
+  .empresa { text-align: center; font-size: 10px; line-height: 1.5; margin-bottom: 4px; }
+  .num-fecha {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    margin: 3px 0;
+  }
+  .col-header {
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+    font-size: 10px;
+    border-bottom: 1px solid #000;
+    padding-bottom: 2px;
+    margin-bottom: 3px;
+  }
+  .item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2px;
+    font-size: 10px;
+    gap: 4px;
+  }
+  .item-nombre { flex: 1; }
+  .item-uds { width: 20px; text-align: right; flex-shrink: 0; }
+  .item-precio { width: 38px; text-align: right; flex-shrink: 0; }
+  .item-total { width: 38px; text-align: right; flex-shrink: 0; }
+  .desglose { font-size: 10px; margin: 3px 0; }
+  .desglose div { display: flex; justify-content: space-between; padding: 1px 0; }
+  .total-line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 15px;
+    font-weight: bold;
+    margin: 4px 0;
+  }
+  .pago { font-size: 10px; text-align: center; margin: 3px 0; }
+  .cambio { font-size: 11px; text-align: center; font-weight: bold; margin: 2px 0; }
+  .legal { font-size: 9px; text-align: center; color: #444; margin-top: 5px; line-height: 1.4; }
+  .glosario { font-size: 8.5px; color: #666; margin-top: 5px; border-top: 1px dashed #999; padding-top: 3px; }
+  @media print {
+    body { width: 80mm; }
+    @page { margin: 0; size: 80mm auto; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- LOGO CABALLER -->
+  <div class="logo">★ CABALLER ★</div>
+  <div class="logo-sub">Pirotecnia</div>
+  <hr class="separator-solid">
+
+  <!-- DATOS EMPRESA -->
+  <div class="empresa">
+    <div class="bold">${CONFIG_EMPRESA.razonSocial}</div>
+    <div>${caseta?.nombre || ''}</div>
+    <div>${CONFIG_EMPRESA.direccion}</div>
+    <div>CIF: ${CONFIG_EMPRESA.cif}</div>
+  </div>
+  <hr class="separator">
+
+  <!-- NÚMERO Y FECHA -->
+  <div class="num-fecha">
+    <span class="bold">${ticketNum}</span>
+    <span>${fmtFecha(fecha)}</span>
+  </div>
+  <hr class="separator">
+
+  <!-- CABECERA PRODUCTOS -->
+  <div class="col-header">
+    <span style="width:20px">Uds</span>
+    <span style="flex:1;margin-left:4px">Producto</span>
+    <span style="width:38px;text-align:right">Precio</span>
+    <span style="width:38px;text-align:right">Subt</span>
+  </div>
+
+  <!-- LÍNEAS DE PRODUCTO -->
+  ${items.map(i => `
+  <div class="item">
+    <span class="item-uds">${i.cantidad}</span>
+    <span class="item-nombre" style="margin-left:4px">${i.nombre}</span>
+    <span class="item-precio">${fmtE(i.precio)}</span>
+    <span class="item-total">${fmtE(i.total_linea)}</span>
+  </div>`).join('')}
+
+  <hr class="separator">
+
+  <!-- DESGLOSE FISCAL -->
+  <div class="desglose">
+    <div style="font-weight:bold;margin-bottom:2px">Desglose TOTAL:</div>
+    <div><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div>
+    <div><span>I.V.A.(${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
+    ${totalNEC > 0 ? `<div><span>N.E.C.:</span><span>${totalNEC.toFixed(2)} g</span></div>` : ''}
+  </div>
+  <hr class="separator-solid">
+
+  <!-- TOTAL -->
+  <div class="total-line">
+    <span>TOTAL:</span>
+    <span>${fmtE(total)}</span>
+  </div>
+  <hr class="separator">
+
+  <!-- PAGO -->
+  <div class="pago">
+    Forma de pago: <strong>${metodo === 'efectivo' ? 'Efectivo' : 'Tarjeta'}</strong>
+  </div>
+  ${metodo === 'efectivo' && cambio > 0 ? `<div class="cambio">Cambio: ${fmtE(cambio)}</div>` : ''}
+  <div class="pago"><strong>I.V.A. incluido</strong></div>
+  <hr class="separator">
+
+  <!-- TEXTO LEGAL -->
+  <div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
+
+  <!-- GLOSARIO -->
+  <div class="glosario">
+    Subt.*: Subtotal &nbsp;|&nbsp; B.I.*: Base Imponible<br>
+    ${totalNEC > 0 ? 'N.E.C.*: Net Explosive Content (Contenido neto en explosivos)' : ''}
+  </div>
+
+</body>
+</html>`
+}
+
+function imprimirTicket(datos) {
+  const html = generarTicketHTML(datos)
+  const ventana = window.open('', '_blank', 'width=400,height=700,scrollbars=yes')
+  if (!ventana) {
+    alert('El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para esta página.')
+    return
+  }
+  ventana.document.write(html)
+  ventana.document.close()
+  // Imprimir automáticamente tras cargar
+  ventana.onload = () => {
+    ventana.focus()
+    ventana.print()
+    // Cerrar tras imprimir (en algunos navegadores)
+    ventana.onafterprint = () => ventana.close()
+  }
+}
+
 export default function EmpleadoPanel({ perfil, casetas }) {
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
 
@@ -1444,6 +1733,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [showInventario, setShowInventario] = useState(()=>sessionStorage.getItem('tpv_panel')==='inventario')
   const [showFichajes,   setShowFichajes]   = useState(false)
   const [ultimoFichaje,  setUltimoFichaje]  = useState(null)
+  const [otrosActivos,   setOtrosActivos]   = useState([]) // otros empleados activos en la caseta
   const [kgPolvora,      setKgPolvora]      = useState(0)
   const [kgLimite,       setKgLimite]       = useState(10)
   const [pedidosPend,    setPedidosPend]    = useState(0)
@@ -1470,8 +1760,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       setPedidosPend(peds.filter(p => p.estado === 'EN_CAMINO').length)
       if (cajaAbierta) { setCaja(cajaAbierta); getResumenCaja(cajaAbierta.id).then(setVentas) }
     }).finally(() => setLoading(false))
-    // Cargar último fichaje
+    // Cargar último fichaje y otros empleados activos en caseta
     getUltimoFichaje(perfil.id).then(setUltimoFichaje)
+    getEmpleadosActivosCaseta(caseta.id, perfil.id).then(setOtrosActivos)
   }, [caseta?.id])
 
   // Realtime stock
@@ -1496,6 +1787,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   }
 
   const agregar = useCallback((prod, cantidad = 1) => {
+    if (!puedeOperar) {
+      showToast(enDescanso ? '☕ Estás en descanso — termina el descanso para vender' : '⏱ Ficha tu entrada antes de vender', 'error')
+      setShowFichajes(true)
+      return
+    }
     const stockDisp = stock[prod.id] ?? 0
     if (stockDisp <= 0) { showToast('Sin stock disponible', 'error'); return }
     setTicket(prev => {
@@ -1505,7 +1801,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         if (nuevaCant > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
         const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
       }
-      return [...prev, { ...prod, cantidad }]
+      return [...prev, { ...prod, cantidad, gramos_polvora: prod.gramos_polvora || 0 }]
     })
     setShowScan(false)
   }, [stock])
@@ -1547,7 +1843,17 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         setTicket([]); setShowPago(false)
         showToast(`✓ Venta ${fmt(total)} · ${metodo === 'efectivo' ? `Cambio: ${fmt(cambio)}` : 'Tarjeta'}`)
       } else {
-        setShowOk({ metodo, total, cambio }); setTicket([]); setShowPago(false)
+        setShowOk({
+          metodo, total, cambio,
+          items: ticket.map(i => {
+            const { total: tl } = calcularPrecio(i.id, i.cantidad, i.precio, ofertas)
+            return { nombre: i.nombre, cantidad: i.cantidad, precio: i.precio, total_linea: tl, gramos_polvora: i.gramos_polvora || 0 }
+          }),
+          caseta, perfil,
+          fecha: new Date(),
+          ticketNum: `TVN${Date.now().toString().slice(-10)}`,
+        })
+        setTicket([]); setShowPago(false)
       }
     } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
   }
@@ -1575,6 +1881,14 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         <div className="apc">
           <div className="apt">Apertura de Caja</div>
           <div className="aps">Hola <strong>{perfil.nombre}</strong> · {caseta?.nombre}</div>
+          {!estaFichado && (
+            <div style={{background:'rgba(255,77,28,.1)',border:'1px solid rgba(255,77,28,.3)',borderRadius:'var(--rs)',padding:'9px 12px',marginBottom:12,fontSize:'.8rem',color:'var(--ac)'}}>
+              ⏱ Recuerda fichar tu entrada antes de abrir caja
+              <button onClick={()=>setShowFichajes(true)} style={{display:'block',marginTop:6,background:'var(--ac)',border:'none',borderRadius:'var(--rs)',padding:'5px 14px',color:'white',fontWeight:700,cursor:'pointer',fontFamily:"'DM Sans',sans-serif",fontSize:'.78rem'}}>
+                🟢 Fichar entrada ahora
+              </button>
+            </div>
+          )}
           <input className="bi" type="number" placeholder="0,00" value={apertura}
             onChange={e => setApertura(e.target.value)} min="0" step="0.01" inputMode="decimal" />
           <button className="btn-p" onClick={handleAbrirCaja}>Abrir caja y comenzar</button>
@@ -1601,6 +1915,14 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   ).slice(0, 4)
 
   const pctPolvora = kgLimite > 0 ? (kgPolvora / kgLimite) * 100 : 0
+
+  // ── Restricciones basadas en fichaje ──────────────────────
+  const estadoFichaje = calcularEstado(ultimoFichaje)
+  const estaFichado   = estadoFichaje !== 'libre'         // ha fichado entrada
+  const enDescanso    = estadoFichaje === 'descanso'      // está en pausa
+  const puedeOperar   = estaFichado && !enDescanso        // puede vender
+  // Para salir: si hay otros activos puede salir sin cerrar caja; si es el último, no
+  const esSoloEmpleado = otrosActivos.length === 0
 
   return (
     <div className="app">
@@ -1630,6 +1952,25 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           <button className="btn-o" style={{padding:'5px 10px',fontSize:'.75rem'}} onClick={() => supabase.auth.signOut()}>Salir</button>
         </div>
       </div>
+
+      {/* Banner de estado de fichaje — aparece si no puede operar */}
+      {!puedeOperar && (
+        <div onClick={() => setShowFichajes(true)} style={{
+          padding: '9px 14px', cursor: 'pointer',
+          background: enDescanso ? 'rgba(245,200,66,.15)' : 'rgba(255,77,28,.12)',
+          borderBottom: `2px solid ${enDescanso ? 'var(--gold)' : 'var(--ac)'}`,
+          display: 'flex', alignItems: 'center', gap: 10, fontSize: '.82rem', fontWeight: 700,
+          color: enDescanso ? 'var(--gold)' : 'var(--ac)',
+        }}>
+          <span style={{ fontSize: '1.1rem' }}>{enDescanso ? '☕' : '⏱'}</span>
+          <span>
+            {enDescanso
+              ? 'Estás en descanso — toca aquí para volver al trabajo'
+              : 'No has fichado — toca aquí para registrar tu entrada'}
+          </span>
+          <span style={{ marginLeft: 'auto', opacity: .7, fontSize: '.75rem' }}>→ Fichar</span>
+        </div>
+      )}
 
       {/* Alerta pólvora prominente */}
       {pctPolvora >= 80 && (
@@ -1850,8 +2191,19 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                 <span className="ttl">TOTAL</span>
                 <span className="tta">{fmt(total)}</span>
               </div>
-              <button className="bfin" disabled={ticket.length === 0} onClick={() => setShowPago(true)}>
-                Finalizar Venta →
+              <button className="bfin"
+                disabled={ticket.length === 0 || !puedeOperar}
+                onClick={() => {
+                  if (!puedeOperar) {
+                    showToast(enDescanso ? '☕ Termina el descanso para cobrar' : '⏱ Ficha tu entrada para cobrar', 'error')
+                    setShowFichajes(true)
+                    return
+                  }
+                  setShowPago(true)
+                }}>
+                {!puedeOperar
+                  ? (enDescanso ? '☕ En descanso' : '⏱ Ficha para vender')
+                  : 'Finalizar Venta →'}
               </button>
               {ticket.length > 0 && (
                 <button className="bclr" onClick={() => setTicket([])}>✕ Limpiar ticket</button>
@@ -1915,13 +2267,23 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {showOk && (
         <div className="mo">
           <div className="mc" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '3rem', marginBottom: 12 }}>🎉</div>
+            <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>🎉</div>
             <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '1.8rem', color: 'var(--green)', marginBottom: 6 }}>¡Venta Confirmada!</div>
-            <div style={{ fontSize: '.84rem', color: 'var(--tx2)', lineHeight: 1.65 }}>
-              Total: <strong style={{ color: 'var(--tx)' }}>{fmt(showOk.total)}</strong><br />
+            <div style={{ fontSize: '.9rem', fontWeight: 700, color: 'var(--ac)', marginBottom: 4 }}>{fmt(showOk.total)}</div>
+            <div style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 16 }}>
               {showOk.metodo === 'efectivo' ? `Efectivo · Cambio: ${fmt(showOk.cambio)}` : '💳 Tarjeta'}
             </div>
-            <button className="btn-p" style={{ marginTop: 22 }} onClick={() => setShowOk(null)}>Nueva Venta</button>
+            {/* Botón imprimir ticket */}
+            <button onClick={() => imprimirTicket(showOk)} style={{
+              width: '100%', padding: '11px 0', borderRadius: 'var(--rs)', marginBottom: 10,
+              background: 'var(--s2)', border: '1px solid var(--bd)',
+              color: 'var(--tx)', fontWeight: 700, cursor: 'pointer',
+              fontFamily: "'DM Sans',sans-serif", fontSize: '.9rem',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}>
+              🖨️ Imprimir ticket
+            </button>
+            <button className="btn-p" onClick={() => setShowOk(null)}>Nueva Venta</button>
           </div>
         </div>
       )}
@@ -1929,8 +2291,15 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         <ModalFichajes
           perfil={perfil} caseta={caseta}
           ultimoFichaje={ultimoFichaje}
+          caja={caja}
+          esSoloEmpleado={esSoloEmpleado}
           showToast={showToast}
-          onFichar={(f) => setUltimoFichaje(f)}
+          onFichar={(f) => {
+            setUltimoFichaje(f)
+            // Recargar otros activos al fichar (puede haber cambiado)
+            getEmpleadosActivosCaseta(caseta.id, perfil.id).then(setOtrosActivos)
+          }}
+          onSolicitarCierreCaja={() => { setShowFichajes(false); setShowCierre(true) }}
           onClose={() => setShowFichajes(false)}
         />
       )}

@@ -941,13 +941,22 @@ function GestionOfertas() {
 function GestionCasetas({ casetas, setCasetas }) {
   const [toast,setToast]=useState(null)
   const [editId,setEditId]=useState(null)
-  const F0={nombre:'',direccion:'',limite_kg_polvora:'10'}
+  const F0={nombre:'',direccion:'',limite_kg_polvora:'10',latitud:'',longitud:'',radio_metros:'150',geo_activo:false}
   const [form,setForm]=useState(F0)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
   const guardar=async()=>{
     if(!form.nombre.trim()){showToast('El nombre es obligatorio','error');return}
     try{
-      const data=await upsertCaseta({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),direccion:form.direccion.trim()||null,limite_kg_polvora:parseFloat(form.limite_kg_polvora)||10})
+      const data=await upsertCaseta({
+        ...(editId?{id:editId}:{}),
+        nombre:form.nombre.trim(),
+        direccion:form.direccion.trim()||null,
+        limite_kg_polvora:parseFloat(form.limite_kg_polvora)||10,
+        latitud:form.latitud?parseFloat(form.latitud):null,
+        longitud:form.longitud?parseFloat(form.longitud):null,
+        radio_metros:parseInt(form.radio_metros)||150,
+        geo_activo:form.geo_activo,
+      })
       if(editId){setCasetas(prev=>prev.map(c=>c.id===editId?data:c));showToast('Caseta actualizada ✓')}
       else{setCasetas(prev=>[...prev,data]);showToast('Caseta creada ✓')}
       setForm(F0);setEditId(null)
@@ -971,6 +980,40 @@ function GestionCasetas({ casetas, setCasetas }) {
             <input type="number" value={form.limite_kg_polvora} onChange={e=>setForm({...form,limite_kg_polvora:e.target.value})} placeholder="10" min="0" step=".001"/>
           </div>
         </div>
+
+        {/* ── Geolocalización ── */}
+        <div style={{background:'var(--s2)',borderRadius:'var(--rs)',padding:'12px 14px',border:'1px solid var(--bd)',marginBottom:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+            <div style={{fontWeight:700,fontSize:'.85rem'}}>📍 Control de ubicación al fichar</div>
+            <div onClick={()=>setForm(f=>({...f,geo_activo:!f.geo_activo}))} style={{
+              width:38,height:20,borderRadius:10,cursor:'pointer',flexShrink:0,
+              background:form.geo_activo?'var(--green)':'var(--s3)',position:'relative',marginLeft:'auto',transition:'background .2s',
+            }}>
+              <div style={{position:'absolute',top:2,left:form.geo_activo?20:2,width:16,height:16,borderRadius:'50%',background:'white',transition:'left .2s'}}/>
+            </div>
+          </div>
+          {!form.geo_activo&&<div style={{fontSize:'.78rem',color:'var(--tx2)'}}>Desactivado — empleados pueden fichar desde cualquier lugar</div>}
+          {form.geo_activo&&(
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:10}}>
+              <div className="fg" style={{margin:0}}>
+                <label>Latitud</label>
+                <input type="number" step="0.0000001" value={form.latitud} onChange={e=>setForm(f=>({...f,latitud:e.target.value}))} placeholder="39.4699"/>
+              </div>
+              <div className="fg" style={{margin:0}}>
+                <label>Longitud</label>
+                <input type="number" step="0.0000001" value={form.longitud} onChange={e=>setForm(f=>({...f,longitud:e.target.value}))} placeholder="-0.3763"/>
+              </div>
+              <div className="fg" style={{margin:0}}>
+                <label>Radio (metros)</label>
+                <input type="number" min="50" max="500" value={form.radio_metros} onChange={e=>setForm(f=>({...f,radio_metros:e.target.value}))} placeholder="150"/>
+              </div>
+              <div style={{gridColumn:'1/-1',fontSize:'.73rem',color:'var(--tx2)'}}>
+                💡 Abre <a href="https://maps.google.com" target="_blank" rel="noopener" style={{color:'var(--blue)'}}>Google Maps</a>, mantén pulsado sobre la caseta y copia las coordenadas que aparecen.
+              </div>
+            </div>
+          )}
+        </div>
+        </div>
         <div style={{display:'flex',gap:9}}>
           <button className="btn-add" onClick={guardar}>{editId?'Guardar':'Crear caseta'}</button>
           {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
@@ -985,8 +1028,13 @@ function GestionCasetas({ casetas, setCasetas }) {
               <td style={{fontWeight:600}}>{c.nombre}</td>
               <td style={{color:'var(--tx2)'}}>{c.direccion||<span style={{opacity:.4}}>—</span>}</td>
               <td style={{color:'var(--gold)',fontWeight:700}}>{c.limite_kg_polvora||10} kg</td>
+              <td>
+                {c.geo_activo
+                  ?<span style={{color:'var(--green)',fontSize:'.78rem',fontWeight:700}}>📍 {c.radio_metros||150}m</span>
+                  :<span style={{color:'var(--tx2)',fontSize:'.78rem',opacity:.5}}>—</span>}
+              </td>
               <td><div className="acell">
-                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10)})}}>Editar</button>
+                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10),latitud:c.latitud?String(c.latitud):'',longitud:c.longitud?String(c.longitud):'',radio_metros:String(c.radio_metros||150),geo_activo:c.geo_activo||false})}}>Editar</button>
                 <button className="btn-del" onClick={()=>eliminar(c.id)}>Eliminar</button>
               </div></td>
             </tr>
@@ -1239,6 +1287,8 @@ function PanelFichajes({ casetas, adminId }) {
                         <td>
                           <span style={{fontWeight:700,color:'var(--green)'}}>{new Date(t.entrada.timestamp).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
                           {t.entrada.editado&&<span style={{marginLeft:4,fontSize:'.65rem',color:'var(--gold)'}}>✏️</span>}
+                          {t.entrada.geo_ok===false&&<span title="Fichó fuera de la zona permitida" style={{marginLeft:4,fontSize:'.75rem',color:'var(--red)'}}>📍⚠️</span>}
+                          {t.entrada.geo_ok===true&&<span title="Ubicación verificada" style={{marginLeft:4,fontSize:'.75rem',color:'var(--green)',opacity:.6}}>📍</span>}
                           {t.entrada.notas&&<div style={{fontSize:'.68rem',color:'var(--tx2)',fontStyle:'italic'}}>{t.entrada.notas}</div>}
                         </td>
                         <td>
@@ -1273,7 +1323,11 @@ function PanelFichajes({ casetas, adminId }) {
                 <tr key={f.id}>
                   <td style={{fontWeight:600}}>{f.perfiles?.nombre}</td>
                   <td style={{color:'var(--tx2)',fontSize:'.8rem'}}>{f.casetas?.nombre}</td>
-                  <td><span style={{fontWeight:700,color:f.tipo==='ENTRADA'?'var(--green)':'var(--red)',background:f.tipo==='ENTRADA'?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)',padding:'2px 8px',borderRadius:10,fontSize:'.75rem'}}>{f.tipo}</span></td>
+                  <td>
+                    <span style={{fontWeight:700,color:f.tipo==='ENTRADA'?'var(--green)':f.tipo==='SALIDA'?'var(--red)':f.tipo==='INICIO_DESCANSO'?'var(--gold)':'var(--blue)',background:f.tipo==='ENTRADA'?'rgba(34,197,94,.1)':f.tipo==='SALIDA'?'rgba(239,68,68,.1)':'rgba(245,200,66,.1)',padding:'2px 8px',borderRadius:10,fontSize:'.72rem'}}>{f.tipo.replace('_',' ')}</span>
+                    {f.geo_ok===true&&<span title="Ubicación verificada" style={{marginLeft:4,fontSize:'.75rem'}}>📍✓</span>}
+                    {f.geo_ok===false&&<span title={`Fichaje fuera de zona`} style={{marginLeft:4,fontSize:'.75rem',color:'var(--red)'}}>📍⚠️</span>}
+                  </td>
                   <td style={{fontSize:'.82rem'}}>{fmtTs(f.timestamp)}{f.editado&&<span style={{marginLeft:4,fontSize:'.65rem',color:'var(--gold)'}}>✏️</span>}</td>
                   <td style={{color:'var(--tx2)',fontSize:'.78rem',fontStyle:'italic'}}>{f.notas||'—'}</td>
                   <td><div className="acell">

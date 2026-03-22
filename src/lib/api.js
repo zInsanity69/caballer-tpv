@@ -460,6 +460,64 @@ export async function getVentasPorDia(casetaId, año, mes) {
   return porDia
 }
 
+
+// ─── GEOLOCALIZACIÓN ──────────────────────────────────────────
+
+// Fórmula Haversine — distancia en metros entre dos coordenadas
+function haversineMetros(lat1, lon1, lat2, lon2) {
+  const R = 6371000 // radio tierra en metros
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat/2)**2 +
+    Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2)**2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+}
+
+// Obtener ubicación actual del navegador
+// Devuelve { lat, lng, precision } o lanza error con mensaje claro
+export function obtenerUbicacion() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Tu navegador no soporta geolocalización. Usa Chrome o Safari actualizado.'))
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({
+        lat:       pos.coords.latitude,
+        lng:       pos.coords.longitude,
+        precision: Math.round(pos.coords.accuracy),
+      }),
+      err => {
+        const msgs = {
+          1: 'Has denegado el acceso a la ubicación. Ve a los ajustes del navegador y permite la ubicación para esta página.',
+          2: 'No se pudo obtener tu ubicación. Asegúrate de tener el GPS activado.',
+          3: 'Tiempo de espera agotado al obtener la ubicación. Inténtalo de nuevo.',
+        }
+        reject(new Error(msgs[err.code] || 'Error de geolocalización desconocido.'))
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    )
+  })
+}
+
+// Verificar si una ubicación está dentro del radio de una caseta
+// Devuelve { permitido, distancia, mensaje }
+export function verificarUbicacion(lat, lng, caseta) {
+  if (!caseta.geo_activo || !caseta.latitud || !caseta.longitud) {
+    return { permitido: true, distancia: null, mensaje: null }
+  }
+  const distancia = Math.round(haversineMetros(lat, lng, caseta.latitud, caseta.longitud))
+  const radio = caseta.radio_metros || 200
+  if (distancia <= radio) {
+    return { permitido: true, distancia, mensaje: `✓ Ubicación verificada (${distancia}m de la caseta)` }
+  }
+  return {
+    permitido: false,
+    distancia,
+    mensaje: `Estás a ${distancia}m de la caseta. Debes estar a menos de ${radio}m para fichar.`,
+  }
+}
+
 // ─── FICHAJES ─────────────────────────────────────────────────
 export async function getUltimoFichaje(empleadoId) {
   const { data, error } = await supabase
@@ -473,10 +531,23 @@ export async function getUltimoFichaje(empleadoId) {
   return data
 }
 
-export async function fichar(empleadoId, casetaId, tipo, notas = '') {
+export async function fichar(empleadoId, casetaId, tipo, notas = '', geoData = null) {
+  const fila = {
+    empleado_id: empleadoId,
+    caseta_id:   casetaId,
+    tipo,
+    notas:       notas || null,
+  }
+  // Añadir datos de geolocalización si se proporcionan
+  if (geoData) {
+    fila.latitud    = geoData.lat
+    fila.longitud   = geoData.lng
+    fila.precision_m = geoData.precision
+    fila.geo_ok     = geoData.geo_ok
+  }
   const { data, error } = await supabase
     .from('fichajes')
-    .insert({ empleado_id: empleadoId, caseta_id: casetaId, tipo, notas: notas || null })
+    .insert(fila)
     .select()
     .single()
   if (error) throw error
@@ -565,6 +636,34 @@ export async function editarFichaje(fichajeId, adminId, nuevoTimestamp, notas) {
 export async function deleteFichaje(fichajeId) {
   const { error } = await supabase.from('fichajes').delete().eq('id', fichajeId)
   if (error) throw error
+}
+
+// Obtener empleados activos (fichados) en una caseta ahora mismo
+// Sirve para saber si un empleado puede salir sin cerrar caja
+export async function getEmpleadosActivosCaseta(casetaId, empleadoId) {
+  // Traer el último fichaje de cada empleado de esa caseta hoy
+  const hoy = new Date(); hoy.setHours(0,0,0,0)
+  const { data, error } = await supabase
+    .from('fichajes')
+    .select('empleado_id, tipo, timestamp')
+    .eq('caseta_id', casetaId)
+    .gte('timestamp', new Date(hoy.getTime() - 3*60*60*1000).toISOString()) // -3h timezone
+    .order('timestamp', { ascending: false })
+  if (error) return []
+
+  // Agrupar por empleado — quedarnos con el último fichaje de cada uno
+  const porEmpleado = {}
+  for (const f of (data || [])) {
+    if (!porEmpleado[f.empleado_id]) porEmpleado[f.empleado_id] = f
+  }
+
+  // Filtrar los que siguen activos (ENTRADA o FIN_DESCANSO o INICIO_DESCANSO)
+  // y excluir al empleado actual
+  const activos = Object.entries(porEmpleado)
+    .filter(([empId, f]) => empId !== empleadoId && f.tipo !== 'SALIDA')
+    .map(([empId]) => empId)
+
+  return activos
 }
 
 // Calcular estado actual a partir del último fichaje
