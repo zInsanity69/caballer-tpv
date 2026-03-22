@@ -489,8 +489,16 @@ export async function getFichajesEmpleado(empleadoId, desde, hasta) {
     .select('*')
     .eq('empleado_id', empleadoId)
     .order('timestamp', { ascending: true })
-  if (desde) q = q.gte('timestamp', desde)
-  if (hasta) q = q.lte('timestamp', hasta)
+  // Compensar timezone España (UTC+1/+2): ampliar rango en la query
+  // El filtro final lo hace el cliente (calcularTurnos agrupa por día local)
+  if (desde) {
+    const d = new Date(desde); d.setHours(d.getHours() - 3)
+    q = q.gte('timestamp', d.toISOString())
+  }
+  if (hasta) {
+    const h = new Date(hasta); h.setHours(h.getHours() + 3)
+    q = q.lte('timestamp', h.toISOString())
+  }
   const { data, error } = await q
   if (error) throw error
   return data || []
@@ -501,8 +509,17 @@ export async function getFichajesAdmin(desde, hasta, casetaId, empleadoId) {
     .from('fichajes')
     .select('*, perfiles(nombre, caseta_id), casetas(nombre)')
     .order('timestamp', { ascending: false })
-  if (desde)      q = q.gte('timestamp', desde)
-  if (hasta)      q = q.lte('timestamp', hasta)
+  // Compensar timezone: España puede ser UTC+1 o UTC+2 (verano).
+  // Restamos 3h al inicio y sumamos 3h al final para cubrir cualquier zona.
+  // El filtro final en cliente eliminará los que queden fuera del rango real.
+  if (desde) {
+    const d = new Date(desde); d.setHours(d.getHours() - 3)
+    q = q.gte('timestamp', d.toISOString())
+  }
+  if (hasta) {
+    const h = new Date(hasta); h.setHours(h.getHours() + 3)
+    q = q.lte('timestamp', h.toISOString())
+  }
   if (casetaId)   q = q.eq('caseta_id', casetaId)
   if (empleadoId) q = q.eq('empleado_id', empleadoId)
   const { data, error } = await q

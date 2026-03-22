@@ -1098,12 +1098,26 @@ function PanelFichajes({ casetas, adminId }) {
     getPerfiles().then(setPerfiles).catch(()=>{})
   }, [])
 
-  const buscar = () => {
+  // buscar acepta parámetros explícitos para evitar problemas de closure
+  const buscar = (d=desde, h=hasta, cas=casetaSel, emp=empleadoSel) => {
     setLoading(true)
-    getFichajesAdmin(desde+'T00:00:00', hasta+'T23:59:59', casetaSel||null, empleadoSel||null)
-      .then(setFichajes).finally(()=>setLoading(false))
+    // La api ya compensa timezone (+/-3h). Aquí pasamos el día en formato local.
+    getFichajesAdmin(d+'T00:00:00', h+'T23:59:59', cas||null, emp||null)
+      .then(data => {
+        // Filtrar en cliente con hora local para excluir excedentes del margen
+        const desdeLocal = new Date(d+'T00:00:00')
+        const hastaLocal = new Date(h+'T23:59:59')
+        setFichajes(data.filter(f => {
+          const ts = new Date(f.timestamp)
+          return ts >= desdeLocal && ts <= hastaLocal
+        }))
+      })
+      .finally(()=>setLoading(false))
   }
-  useEffect(()=>{ buscar() },[])
+  // Cargar al montar pasando los valores iniciales directamente (evita problema de closure)
+  useEffect(()=>{
+    buscar(_lunes.toISOString().slice(0,10), hoy.toISOString().slice(0,10), '', '')
+  },[])
 
   const abrirEdicion = f => {
     setEditando(f)
@@ -1168,7 +1182,7 @@ function PanelFichajes({ casetas, adminId }) {
           <select value={empleadoSel} onChange={e=>setEmpleadoSel(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>
             <option value="">Todos</option>{perfiles.filter(p=>p.rol==='EMPLEADO').map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select></div>
-        <button className="btn-add" onClick={buscar} style={{height:38}}>Buscar</button>
+        <button className="btn-add" onClick={()=>buscar(desde,hasta,casetaSel,empleadoSel)} style={{height:38}}>Buscar</button>
         {/* Toggle vista */}
         <div style={{display:'flex',gap:0,background:'var(--s2)',borderRadius:'var(--rs)',padding:3,marginLeft:'auto'}}>
           <button onClick={()=>setVistaAgrup(true)} style={{padding:'6px 12px',borderRadius:'var(--rs)',border:'none',cursor:'pointer',fontFamily:"'DM Sans',sans-serif",fontWeight:600,fontSize:'.76rem',background:vistaAgrup?'var(--ac)':'transparent',color:vistaAgrup?'white':'var(--tx2)'}}>Por empleado</button>
