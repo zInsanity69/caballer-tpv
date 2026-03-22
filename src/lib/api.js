@@ -207,7 +207,8 @@ export async function getResumenCaja(cajaId) {
 
 // ─── TICKETS ─────────────────────────────────────────────────
 export async function crearTicket(payload) {
-  const { data, error } = await supabase.rpc('crear_ticket', {
+  // Llama a la función RPC que genera el número secuencial y crea el ticket
+  const { data: ticketId, error } = await supabase.rpc('crear_ticket', {
     p_caja_id:     payload.cajaId,
     p_caseta_id:   payload.casetaId,
     p_empleado_id: payload.empleadoId,
@@ -218,13 +219,19 @@ export async function crearTicket(payload) {
     p_items:       payload.items,
   })
   if (error) throw error
-  return data
+  // Recuperar el número de ticket asignado
+  const { data: ticket } = await supabase
+    .from('tickets')
+    .select('id, numero_ticket')
+    .eq('id', ticketId)
+    .single()
+  return ticket || { id: ticketId, numero_ticket: ticketId?.slice(-8).toUpperCase() }
 }
 
 export async function getTicketsTurno(cajaId) {
   const { data, error } = await supabase
     .from('tickets')
-    .select('*, ticket_items(id, producto_id, nombre_producto, precio_unitario, cantidad, total_linea, con_oferta), perfiles(nombre)')
+    .select('*, numero_ticket, ticket_items(id, producto_id, nombre_producto, precio_unitario, cantidad, total_linea, con_oferta), perfiles(nombre)')
     .eq('caja_id', cajaId).order('creado_en', { ascending: false })
   if (error) throw error
   return data
@@ -242,7 +249,7 @@ export async function getTicketsPorRango(casetaId, desde, hasta) {
 
 export async function getTicketsAdmin(desde, hasta, casetaId) {
   let q = supabase.from('tickets')
-    .select('*, ticket_items(id, cantidad, total_linea, nombre_producto, producto_id, precio_unitario), casetas(nombre), perfiles(nombre)')
+    .select('*, numero_ticket, ticket_items(id, cantidad, total_linea, nombre_producto, producto_id, precio_unitario), casetas(nombre), perfiles(nombre)')
     .order('creado_en', { ascending: false }).limit(200)
   if (desde) q = q.gte('creado_en', desde)
   if (hasta) q = q.lte('creado_en', hasta)

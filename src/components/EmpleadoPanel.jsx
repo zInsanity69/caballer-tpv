@@ -243,7 +243,7 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
 }
 
 // ─── MODAL PAGO ──────────────────────────────────────────────
-function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }) {
+function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, ticketActivo, onToggleTicket }) {
   const [metodo, setMetodo]     = useState('')
   const [recibido, setRecibido] = useState('')
   const [loading, setLoading]   = useState(false)
@@ -277,17 +277,25 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido }
             </div>
           </>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', marginBottom: 4 }}>
+        {/* Toggle modo rápido */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
           <div onClick={onToggleModoRapido} style={{
             width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all .2s',
-            background: modoRapido ? 'var(--green)' : 'var(--s3)', position: 'relative',
+            background: modoRapido ? 'var(--green)' : 'var(--s3)', position: 'relative', flexShrink: 0,
           }}>
-            <div style={{
-              position: 'absolute', top: 3, left: modoRapido ? 21 : 3,
-              width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s',
-            }} />
+            <div style={{ position: 'absolute', top: 3, left: modoRapido ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
           </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Venta rápida — nuevo ticket automático</span>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>⚡ Venta rápida — nuevo ticket automático</span>
+        </div>
+        {/* Toggle impresión de ticket */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', marginBottom: 4 }}>
+          <div onClick={onToggleTicket} style={{
+            width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all .2s',
+            background: ticketActivo ? 'var(--green)' : 'var(--s3)', position: 'relative', flexShrink: 0,
+          }}>
+            <div style={{ position: 'absolute', top: 3, left: ticketActivo ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
+          </div>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>🖨️ Mostrar opción de imprimir ticket</span>
         </div>
         <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={async () => {
           setLoading(true)
@@ -483,6 +491,7 @@ function ModalHistorial({ cajaId, perfil, productos, ofertas, onStockChange, onC
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
+                          {t.numero_ticket && <span style={{ color: 'var(--ac)', fontWeight: 700, marginRight: 4 }}>{t.numero_ticket}</span>}
                           {new Date(t.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                           {' · '}{t.perfiles?.nombre}
                           {' · '}{t.metodo_pago === 'efectivo' ? '💵' : '💳'}
@@ -492,6 +501,14 @@ function ModalHistorial({ cajaId, perfil, productos, ofertas, onStockChange, onC
                       <button className="btn-o" style={{ fontSize: '.7rem' }} onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
                         {expanded === t.id ? 'Ocultar' : 'Ver'}
                       </button>
+                      <button className="btn-o" style={{ fontSize: '.7rem' }}
+                        onClick={() => imprimirTicket({
+                          items: (t.ticket_items||[]).map(i=>({nombre:i.nombre_producto,cantidad:i.cantidad,precio:i.precio_unitario,total_linea:i.total_linea,gramos_polvora:0})),
+                          total: t.total, metodo: t.metodo_pago, cambio: 0,
+                          caseta, perfil: t.perfiles,
+                          fecha: new Date(t.creado_en),
+                          ticketNum: t.numero_ticket || `TVN-${t.id.slice(-6).toUpperCase()}`,
+                        })}>🖨️</button>
                       <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--blue)', color: 'var(--blue)' }}
                         onClick={() => abrirEdicion(t)}>Editar</button>
                       <button className="btn-del" onClick={() => eliminar(t.id)}>✕</button>
@@ -1722,6 +1739,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [apertura,       setApertura]       = useState('')
   // ── Persistidos en sessionStorage para sobrevivir a cambios de página ──
   const [modoRapido,     setModoRapido]     = useState(() => sessionStorage.getItem('tpv_rapido') === '1')
+  const [ticketActivo,   setTicketActivo]   = useState(() => sessionStorage.getItem('tpv_ticket') !== '0') // true por defecto
   const [tabTPV,         setTabTPV]         = useState(() => sessionStorage.getItem('tpv_tab') || 'todos')
   const [cat2,           setCat2]           = useState(() => sessionStorage.getItem('tpv_cat') || 'Todos')
 
@@ -1742,6 +1760,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   // Persistir estado simple en sessionStorage
   useEffect(() => { sessionStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
+  useEffect(() => { sessionStorage.setItem('tpv_ticket', ticketActivo ? '1' : '0') }, [ticketActivo])
   useEffect(() => { sessionStorage.setItem('tpv_tab', tabTPV) }, [tabTPV])
   useEffect(() => { sessionStorage.setItem('tpv_cat', cat2) }, [cat2])
 
@@ -1832,7 +1851,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           detalle_oferta: desglose ? desglose.map(d => d.tipo === 'pack' ? `${d.packs}x ${d.etiqueta}` : `${d.unidades}u normal`).join(' + ') : null,
         }
       })
-      await crearTicket({ cajaId: caja.id, casetaId: caseta.id, empleadoId: perfil.id, metodoPago: metodo, total, dineroDado, cambio, items })
+      const ticketResult = await crearTicket({ cajaId: caja.id, casetaId: caseta.id, empleadoId: perfil.id, metodoPago: metodo, total, dineroDado, cambio, items })
       setStock(prev => {
         const next = { ...prev }
         ticket.forEach(i => { if (next[i.id] !== undefined) next[i.id] -= i.cantidad })
@@ -1843,7 +1862,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         setTicket([]); setShowPago(false)
         showToast(`✓ Venta ${fmt(total)} · ${metodo === 'efectivo' ? `Cambio: ${fmt(cambio)}` : 'Tarjeta'}`)
       } else {
-        setShowOk({
+        const ticketData = {
           metodo, total, cambio,
           items: ticket.map(i => {
             const { total: tl } = calcularPrecio(i.id, i.cantidad, i.precio, ofertas)
@@ -1851,8 +1870,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           }),
           caseta, perfil,
           fecha: new Date(),
-          ticketNum: `TVN${Date.now().toString().slice(-10)}`,
-        })
+          ticketNum: ticketResult?.numero_ticket || `TVN-${Date.now().toString().slice(-6)}`,
+        }
+        if (ticketActivo) setShowOk(ticketData)
         setTicket([]); setShowPago(false)
       }
     } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
@@ -2232,7 +2252,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       )}
       {showPago && (
         <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => setShowPago(false)}
-          modoRapido={modoRapido} onToggleModoRapido={() => setModoRapido(m => !m)} />
+          modoRapido={modoRapido} onToggleModoRapido={() => setModoRapido(m => !m)}
+          ticketActivo={ticketActivo} onToggleTicket={() => setTicketActivo(t => !t)} />
       )}
       {showCierre && (
         <ModalCierreCaja caja={caja} caseta={caseta?.nombre} ventas={ventas}

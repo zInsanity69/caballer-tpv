@@ -45,6 +45,53 @@ function WheelScrollDiv({ children, className, style }) {
   return <div ref={ref} className={className} style={style}>{children}</div>
 }
 
+
+// ─── TICKET IMPRIMIBLE ────────────────────────────────────────
+const CONFIG_EMPRESA = {
+  nombre: 'Caballer', razonSocial: 'Caballer Pirotecnia, S.L.',
+  direccion: 'C/ Ejemplo 12, 46000 Valencia', cif: 'B00000000',
+  textoLegal: 'Es imprescindible presentar el ticket para cualquier reclamación. Solo se aceptan devoluciones de artículos defectuosos, en cuyo caso será por otro igual o similar.',
+  iva: 21,
+}
+
+function imprimirTicketAdmin(t) {
+  const iva = CONFIG_EMPRESA.iva / 100
+  const total = t.total
+  const baseImponible = total / (1 + iva)
+  const cuotaIva = total - baseImponible
+  const items = t.ticket_items || []
+  const fmtE = n => n.toFixed(2) + '€'
+  const fecha = new Date(t.creado_en)
+  const fmtFecha = d => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  const ticketNum = `TVN${t.id.slice(-10).toUpperCase()}`
+  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Ticket</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Courier New',monospace;font-size:11px;width:80mm;max-width:80mm;color:#000;background:#fff;padding:4mm}.logo{text-align:center;font-family:'Arial Black',sans-serif;font-size:26px;font-weight:900;letter-spacing:3px;margin:4px 0 2px;text-transform:uppercase}.logo-sub{text-align:center;font-size:9px;letter-spacing:2px;color:#444;margin-bottom:6px;text-transform:uppercase}.sep{border:none;border-top:1px dashed #000;margin:5px 0}.sep-s{border:none;border-top:1px solid #000;margin:5px 0}.emp{text-align:center;font-size:10px;line-height:1.5;margin-bottom:4px}.nf{display:flex;justify-content:space-between;font-size:10px;margin:3px 0}.ch{display:flex;justify-content:space-between;font-weight:bold;font-size:10px;border-bottom:1px solid #000;padding-bottom:2px;margin-bottom:3px}.it{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px;font-size:10px;gap:4px}.desg{font-size:10px;margin:3px 0}.desg div{display:flex;justify-content:space-between;padding:1px 0}.ttl{display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin:4px 0}.pago{font-size:10px;text-align:center;margin:3px 0}.legal{font-size:9px;text-align:center;color:#444;margin-top:5px;line-height:1.4}@media print{body{width:80mm}@page{margin:0;size:80mm auto}}</style>
+</head><body>
+<div class="logo">★ CABALLER ★</div>
+<div class="logo-sub">Pirotecnia</div>
+<hr class="sep-s">
+<div class="emp"><div><b>${CONFIG_EMPRESA.razonSocial}</b></div><div>${t.casetas?.nombre||''}</div><div>${CONFIG_EMPRESA.direccion}</div><div>CIF: ${CONFIG_EMPRESA.cif}</div></div>
+<hr class="sep">
+<div class="nf"><span><b>${ticketNum}</b></span><span>${fmtFecha(fecha)}</span></div>
+<hr class="sep">
+<div class="ch"><span style="width:20px">Uds</span><span style="flex:1;margin-left:4px">Producto</span><span style="width:38px;text-align:right">Precio</span><span style="width:38px;text-align:right">Subt</span></div>
+${items.map(i=>`<div class="it"><span style="width:20px;text-align:right">${i.cantidad}</span><span style="flex:1;margin-left:4px">${i.nombre_producto}</span><span style="width:38px;text-align:right">${fmtE(i.precio_unitario)}</span><span style="width:38px;text-align:right">${fmtE(i.total_linea)}</span></div>`).join('')}
+<hr class="sep">
+<div class="desg"><div style="font-weight:bold;margin-bottom:2px">Desglose TOTAL:</div><div><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div><div><span>I.V.A.(${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div></div>
+<hr class="sep-s">
+<div class="ttl"><span>TOTAL:</span><span>${fmtE(total)}</span></div>
+<hr class="sep">
+<div class="pago">Forma de pago: <b>${t.metodo_pago==='efectivo'?'Efectivo':'Tarjeta'}</b></div>
+<div class="pago"><b>I.V.A. incluido</b></div>
+<hr class="sep">
+<div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
+</body></html>`
+  const v = window.open('','_blank','width=400,height=700,scrollbars=yes')
+  if (!v) { alert('Permite las ventanas emergentes para imprimir.'); return }
+  v.document.write(html); v.document.close()
+  v.onload = () => { v.focus(); v.print(); v.onafterprint = () => v.close() }
+}
+
 function Toast({ msg, type }) {
   return <div className="twrap"><div className={`toast ${type === 'error' ? 'te2' : 'tok'}`}>{msg}</div></div>
 }
@@ -330,6 +377,7 @@ function PanelTickets({ casetas, filtroInicial }) {
                   <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
                   <td><div className="acell">
                     <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
+                    <button className="btn-edit" onClick={()=>imprimirTicketAdmin(t)}>🖨️</button>
                     <button className="btn-edit" style={{color:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>setEditando(t)}>Editar</button>
                     <button className="btn-del" onClick={()=>eliminar(t.id)}>Eliminar</button>
                   </div></td>
