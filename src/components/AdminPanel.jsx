@@ -1066,7 +1066,7 @@ function GestionCasetas({ casetas, setCasetas }) {
           <button className="btn-add" onClick={guardar}>{editId?'Guardar':'Crear caseta'}</button>
           {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
         </div>
-      </div>
+      
       <div className="stit">Casetas ({casetas.length})</div>
       <div className="tw"><table>
         <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Acciones</th></tr></thead>
