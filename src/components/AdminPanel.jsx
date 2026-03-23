@@ -1173,7 +1173,6 @@ function GestionCasetas({ casetas, setCasetas }) {
             </div>
           )}
         </div>
-        </div>
         <div style={{display:'flex',gap:9}}>
           <button className="btn-add" onClick={guardar}>{editId?'Guardar':'Crear caseta'}</button>
           {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
