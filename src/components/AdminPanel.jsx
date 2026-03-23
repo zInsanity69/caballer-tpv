@@ -402,6 +402,130 @@ function PanelTickets({ casetas, filtroInicial }) {
 }
 
 // ─── PANEL PEDIDOS ────────────────────────────────────────────
+
+// ─── MODAL EDITAR PEDIDO ─────────────────────────────────────
+function ModalEditarPedido({ pedido, items, notasAdmin, saving, onChangeItems, onChangeNotas, onGuardar, onClose }) {
+  const [productos, setProductos] = useState([])
+  const [busq, setBusq]           = useState('')
+  const [addQty, setAddQty]       = useState(1)
+  const [showAdd, setShowAdd]     = useState(false)
+
+  useEffect(() => {
+    getProductos(true).then(setProductos).catch(() => {})
+  }, [])
+
+  const prodsFiltrados = busq.length >= 2
+    ? productos.filter(p => p.nombre.toLowerCase().includes(busq.toLowerCase()) || p.codigo_ean?.includes(busq)).slice(0, 8)
+    : []
+
+  const addProducto = (prod) => {
+    // Si ya está en el pedido, incrementar cantidad
+    const existe = items.findIndex(i => i.producto_id === prod.id)
+    if (existe >= 0) {
+      onChangeItems(prev => prev.map((it, i) => i !== existe ? it : { ...it, cantidad: it.cantidad + addQty }))
+    } else {
+      onChangeItems(prev => [...prev, { producto_id: prod.id, nombre: prod.nombre, cantidad: addQty }])
+    }
+    setBusq('')
+    setAddQty(1)
+    setShowAdd(false)
+  }
+
+  const setQty = (idx, val) => {
+    const q = Math.max(1, parseInt(val) || 1)
+    onChangeItems(prev => prev.map((it, i) => i !== idx ? it : { ...it, cantidad: q }))
+  }
+
+  return (
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="mt-modal">✏️ Editar Pedido — {pedido.casetas?.nombre}</div>
+
+        {/* Lista de items actuales */}
+        <div style={{ overflowY: 'auto', flex: 1, marginBottom: 10 }}>
+          {items.map((item, idx) => (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--bd)' }}>
+              <div style={{ flex: 1, fontSize: '.85rem', fontWeight: 600 }}>{item.nombre}</div>
+              <button className="qb" onClick={() => setQty(idx, item.cantidad - 1)}>−</button>
+              <input
+                type="number" min="1" value={item.cantidad}
+                onChange={e => setQty(idx, e.target.value)}
+                style={{ width: 46, textAlign: 'center', background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', fontWeight: 700, fontFamily: "'DM Sans',sans-serif", padding: '4px 2px' }}
+                inputMode="numeric"
+              />
+              <button className="qb" onClick={() => setQty(idx, item.cantidad + 1)}>+</button>
+              <button onClick={() => onChangeItems(prev => prev.filter((_, i) => i !== idx))}
+                style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)', background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem', fontFamily: "'DM Sans',sans-serif" }}>✕</button>
+            </div>
+          ))}
+          {items.length === 0 && (
+            <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 20, fontSize: '.85rem' }}>Sin productos — añade al menos uno</div>
+          )}
+        </div>
+
+        {/* Añadir producto */}
+        {!showAdd ? (
+          <button onClick={() => setShowAdd(true)} style={{
+            padding: '8px 0', borderRadius: 'var(--rs)', border: '1px dashed var(--bd)',
+            background: 'transparent', color: 'var(--tx2)', cursor: 'pointer',
+            fontFamily: "'DM Sans',sans-serif", fontWeight: 600, fontSize: '.83rem', marginBottom: 10,
+          }}>+ Añadir producto</button>
+        ) : (
+          <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 12px', marginBottom: 10, border: '1px solid var(--bd)' }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <input
+                autoFocus
+                placeholder="Buscar producto..." value={busq}
+                onChange={e => setBusq(e.target.value)}
+                style={{ flex: 1, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '7px 10px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif" }}
+              />
+              <input
+                type="number" min="1" value={addQty}
+                onChange={e => setAddQty(Math.max(1, parseInt(e.target.value) || 1))}
+                style={{ width: 56, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '7px 8px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif", fontWeight: 700, textAlign: 'center' }}
+                inputMode="numeric"
+              />
+              <button onClick={() => { setShowAdd(false); setBusq('') }} style={{ padding: '6px 10px', borderRadius: 'var(--rs)', border: '1px solid var(--bd)', background: 'transparent', color: 'var(--tx2)', cursor: 'pointer', fontFamily: "'DM Sans',sans-serif" }}>✕</button>
+            </div>
+            {prodsFiltrados.length > 0 && (
+              <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                {prodsFiltrados.map(p => (
+                  <div key={p.id} onClick={() => addProducto(p)} style={{
+                    padding: '7px 10px', cursor: 'pointer', borderRadius: 'var(--rs)',
+                    fontSize: '.82rem', display: 'flex', justifyContent: 'space-between',
+                  }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--s3)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <span style={{ fontWeight: 600 }}>{p.nombre}</span>
+                    <span style={{ color: 'var(--tx2)', fontSize: '.75rem' }}>{p.categoria}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {busq.length >= 2 && prodsFiltrados.length === 0 && (
+              <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 8, fontSize: '.8rem' }}>Sin resultados</div>
+            )}
+            {busq.length < 2 && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', textAlign: 'center' }}>Escribe al menos 2 letras para buscar</div>}
+          </div>
+        )}
+
+        {/* Nota para empleado */}
+        <div className="fg" style={{ marginTop: 4 }}>
+          <label>Nota para el empleado (opcional)</label>
+          <input className="bi" style={{ marginBottom: 0 }} value={notasAdmin}
+            onChange={e => onChangeNotas(e.target.value)}
+            placeholder="Ej: cambiada cantidad por falta de stock..." />
+        </div>
+
+        <button className="btn-p" style={{ marginTop: 12 }} disabled={saving || items.length === 0} onClick={onGuardar}>
+          {saving ? 'Guardando...' : '✓ Guardar y aceptar'}
+        </button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
 function PanelPedidos({ casetas, onPedidoAceptado }) {
   const [pedidos,setPedidos]=useState([])
   const [loading,setLoading]=useState(true)
@@ -515,28 +639,16 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
       ))}
 
       {editando&&(
-        <div className="mo" onClick={e=>e.target===e.currentTarget&&setEditando(null)}>
-          <div className="mc wide" style={{maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
-            <div className="mt-modal">✏️ Editar Pedido — {editando.casetas?.nombre}</div>
-            <div style={{overflowY:'auto',flex:1}}>
-              {editItems.map((item,idx)=>(
-                <div key={idx} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid var(--bd)'}}>
-                  <div style={{flex:1,fontSize:'.85rem'}}>{item.nombre}</div>
-                  <button className="qb" onClick={()=>setEditItems(prev=>prev.map((it,i)=>i!==idx?it:{...it,cantidad:Math.max(1,it.cantidad-1)}))}>−</button>
-                  <span style={{minWidth:26,textAlign:'center',fontWeight:700}}>{item.cantidad}</span>
-                  <button className="qb" onClick={()=>setEditItems(prev=>prev.map((it,i)=>i!==idx?it:{...it,cantidad:it.cantidad+1}))}>+</button>
-                  <button onClick={()=>setEditItems(prev=>prev.filter((_,i)=>i!==idx))} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem'}}>✕</button>
-                </div>
-              ))}
-            </div>
-            <div className="fg" style={{marginTop:10}}>
-              <label>Nota para el empleado</label>
-              <input className="bi" style={{marginBottom:0}} value={notasAdmin} onChange={e=>setNotasAdmin(e.target.value)} placeholder="Ej: cambiada cantidad por falta de stock..."/>
-            </div>
-            <button className="btn-p" style={{marginTop:12}} disabled={saving} onClick={guardarEdicion}>{saving?'Guardando...':'✓ Guardar y aceptar'}</button>
-            <button className="btn-s" onClick={()=>setEditando(null)}>Cancelar</button>
-          </div>
-        </div>
+        <ModalEditarPedido
+          pedido={editando}
+          items={editItems}
+          notasAdmin={notasAdmin}
+          saving={saving}
+          onChangeItems={setEditItems}
+          onChangeNotas={setNotasAdmin}
+          onGuardar={guardarEdicion}
+          onClose={()=>setEditando(null)}
+        />
       )}
     </>
   )
@@ -1066,7 +1178,7 @@ function GestionCasetas({ casetas, setCasetas }) {
           <button className="btn-add" onClick={guardar}>{editId?'Guardar':'Crear caseta'}</button>
           {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
         </div>
-      
+      </div>
       <div className="stit">Casetas ({casetas.length})</div>
       <div className="tw"><table>
         <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Acciones</th></tr></thead>
@@ -1251,12 +1363,16 @@ function PanelFichajes({ casetas, adminId }) {
     if(!porEmpleado[id]) porEmpleado[id] = { nombre: f.perfiles?.nombre||'?', caseta: f.casetas?.nombre||'?', fichajes:[] }
     porEmpleado[id].fichajes.push(f)
   })
+  const ahora = Date.now()
   Object.values(porEmpleado).forEach(emp=>{
     emp.fichajes.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))
     emp.turnos = calcularTurnos(emp.fichajes)
     emp.totalMins = emp.turnos.filter(t=>!t.enCurso).reduce((s,t)=>s+t.minutosTrabajados,0)
     emp.totalDescanso = emp.turnos.filter(t=>!t.enCurso).reduce((s,t)=>s+t.minutosDescanso,0)
-    emp.turnoEnCurso = emp.turnos.find(t=>t.enCurso)
+    // Solo marcar como "en curso" si la entrada fue hace menos de 16 horas
+    // Evita que fichajes sin salida de días anteriores aparezcan como activos
+    const tc = emp.turnos.find(t=>t.enCurso)
+    emp.turnoEnCurso = tc && (ahora - new Date(tc.entrada.timestamp)) < 16*60*60*1000 ? tc : null
   })
 
   const totalMinsGlobal = Object.values(porEmpleado).reduce((s,e)=>s+e.totalMins,0)
@@ -1308,17 +1424,30 @@ function PanelFichajes({ casetas, adminId }) {
             ? <div style={{textAlign:'center',color:'var(--tx2)',padding:40}}>Sin fichajes en este período</div>
             : Object.entries(porEmpleado).map(([empId,emp])=>(
             <div key={empId} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px 16px',marginBottom:14,border:'1px solid var(--bd)'}}>
-              {/* Cabecera empleado */}
-              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
-                <div style={{flex:1}}>
-                  <span style={{fontWeight:700,fontSize:'1rem'}}>{emp.nombre}</span>
-                  <span style={{color:'var(--tx2)',fontSize:'.78rem',marginLeft:8}}>{emp.caseta}</span>
-                  {emp.turnoEnCurso&&(emp.turnoEnCurso.enDescanso
-                    ?<span style={{marginLeft:8,background:'rgba(245,200,66,.15)',color:'var(--gold)',padding:'2px 8px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}>☕ En descanso</span>
-                    :<span style={{marginLeft:8,background:'rgba(34,197,94,.15)',color:'var(--green)',padding:'2px 8px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}>● Trabajando ahora</span>
+              {/* Cabecera empleado — layout fijo en dos líneas */}
+              <div style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:12}}>
+                <div style={{flex:1,minWidth:0}}>
+                  {/* Línea 1: nombre + caseta + dot estado */}
+                  <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'nowrap',overflow:'hidden'}}>
+                    <span style={{fontWeight:700,fontSize:'1rem',whiteSpace:'nowrap'}}>{emp.nombre}</span>
+                    <span style={{color:'var(--tx2)',fontSize:'.78rem',whiteSpace:'nowrap'}}>{emp.caseta}</span>
+                    {emp.turnoEnCurso&&(
+                      <span style={{width:8,height:8,borderRadius:'50%',flexShrink:0,display:'inline-block',
+                        background:emp.turnoEnCurso.enDescanso?'var(--gold)':'var(--green)',
+                        animation:'pulse 1.5s ease-in-out infinite'}}/>
+                    )}
+                  </div>
+                  {/* Línea 2: badge de estado — siempre debajo */}
+                  {emp.turnoEnCurso&&(
+                    <div style={{marginTop:4}}>
+                      {emp.turnoEnCurso.enDescanso
+                        ?<span style={{background:'rgba(245,200,66,.15)',color:'var(--gold)',padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}>☕ En descanso</span>
+                        :<span style={{background:'rgba(34,197,94,.15)',color:'var(--green)',padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}>● Trabajando ahora</span>
+                      }
+                    </div>
                   )}
                 </div>
-                <div style={{textAlign:'right'}}>
+                <div style={{textAlign:'right',flexShrink:0}}>
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.6rem',color:'var(--ac)',lineHeight:1}}>{fmtDuracion(emp.totalMins)}</div>
                   <div style={{fontSize:'.7rem',color:'var(--tx2)'}}>{emp.turnos.filter(t=>!t.enCurso).length} turnos</div>
                   {emp.totalDescanso>0&&<div style={{fontSize:'.7rem',color:'var(--gold)'}}>☕ {fmtDuracion(emp.totalDescanso)} descanso</div>}

@@ -1751,6 +1751,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [showInventario, setShowInventario] = useState(()=>sessionStorage.getItem('tpv_panel')==='inventario')
   const [showFichajes,   setShowFichajes]   = useState(false)
   const [ultimoFichaje,  setUltimoFichaje]  = useState(null)
+  const [fichajeLoading, setFichajeLoading] = useState(true)  // true mientras carga el estado del fichaje
   const [otrosActivos,   setOtrosActivos]   = useState([]) // otros empleados activos en la caseta
   const [kgPolvora,      setKgPolvora]      = useState(0)
   const [kgLimite,       setKgLimite]       = useState(10)
@@ -1780,7 +1781,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       if (cajaAbierta) { setCaja(cajaAbierta); getResumenCaja(cajaAbierta.id).then(setVentas) }
     }).finally(() => setLoading(false))
     // Cargar último fichaje y otros empleados activos en caseta
-    getUltimoFichaje(perfil.id).then(setUltimoFichaje)
+    getUltimoFichaje(perfil.id).then(f => { setUltimoFichaje(f); setFichajeLoading(false) }).catch(() => setFichajeLoading(false))
     getEmpleadosActivosCaseta(caseta.id, perfil.id).then(setOtrosActivos)
   }, [caseta?.id])
 
@@ -1938,9 +1939,10 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   // ── Restricciones basadas en fichaje ──────────────────────
   const estadoFichaje = calcularEstado(ultimoFichaje)
-  const estaFichado   = estadoFichaje !== 'libre'         // ha fichado entrada
-  const enDescanso    = estadoFichaje === 'descanso'      // está en pausa
-  const puedeOperar   = estaFichado && !enDescanso        // puede vender
+  const estaFichado   = estadoFichaje !== 'libre'
+  const enDescanso    = estadoFichaje === 'descanso'
+  // Mientras carga el fichaje no bloqueamos (evita falso negativo al arrancar)
+  const puedeOperar   = fichajeLoading || (estaFichado && !enDescanso)
   // Para salir: si hay otros activos puede salir sin cerrar caja; si es el último, no
   const esSoloEmpleado = otrosActivos.length === 0
 
@@ -1973,8 +1975,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         </div>
       </div>
 
-      {/* Banner de estado de fichaje — aparece si no puede operar */}
-      {!puedeOperar && (
+      {/* Banner de estado de fichaje — solo cuando ya se cargó el estado */}
+      {!fichajeLoading && !puedeOperar && (
         <div onClick={() => setShowFichajes(true)} style={{
           padding: '9px 14px', cursor: 'pointer',
           background: enDescanso ? 'rgba(245,200,66,.15)' : 'rgba(255,77,28,.12)',
