@@ -175,13 +175,11 @@ function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong,
       style={{ opacity: stockDisp === 0 ? .4 : 1, outline: enT ? '2px solid var(--ac)' : 'none', userSelect: 'none', touchAction: 'pan-y' }}
     >
       <EaBadge edad={p.edad_minima} />
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, marginBottom: 5, marginTop: 2 }}>
-        <button data-nobubble="1" onClick={(e) => { e.stopPropagation(); onFav(p.id) }} style={{
-          background: 'transparent', border: 'none', cursor: 'pointer',
-          fontSize: '.75rem', opacity: esFav ? 1 : .25, padding: 0, lineHeight: 1, flexShrink: 0, marginTop: 1,
-        }}>⭐</button>
-        <div className="pn">{p.nombre}</div>
-      </div>
+      <button data-nobubble="1" onClick={(e) => { e.stopPropagation(); onFav(p.id) }} style={{
+        position: 'absolute', top: 5, left: 5, background: 'transparent', border: 'none',
+        cursor: 'pointer', fontSize: '.72rem', opacity: esFav ? 1 : .25, padding: 0, lineHeight: 1,
+      }}>⭐</button>
+      <div className="pn">{p.nombre}</div>
       <div className="pp2">{fmt(p.precio)}</div>
       <div className="pst">
         {stockDisp === 0 ? 'Agotado' : `Stock: ${stockDisp}`}
