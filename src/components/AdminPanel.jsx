@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase.js'
 import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
   getOfertas, upsertOferta, deleteOferta,
-  getPerfiles, updatePerfil, crearUsuario,
+  getPerfiles, updatePerfil, crearUsuario, actualizarCredenciales,
   getCasetas, upsertCaseta, deleteCaseta,
   getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket,
   setStock, getStockCaseta,
@@ -1237,6 +1237,13 @@ function GestionUsuarios({ casetas }) {
       if(editId){
         const cambios={nombre:form.nombre,rol:form.rol,caseta_id:form.caseta_id||null}
         await updatePerfil(editId,cambios)
+        // Actualizar email/contraseña si se han rellenado
+        if(form.email?.trim()||form.password?.trim()){
+          if(form.password?.trim()&&form.password.trim().length<6){
+            showMsg('La contraseña debe tener al menos 6 caracteres',false); setSaving(false); return
+          }
+          await actualizarCredenciales(editId,{email:form.email?.trim()||null,password:form.password?.trim()||null})
+        }
         setPerfiles(prev=>prev.map(p=>p.id===editId?{...p,...cambios,casetas:casetas.find(c=>c.id===form.caseta_id)}:p))
         showMsg('Usuario actualizado ✓')
       }else{
@@ -1259,8 +1266,16 @@ function GestionUsuarios({ casetas }) {
       <div className="iform">
         <div className="frow">
           <div className="fg"><label>Nombre completo</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="María García"/></div>
-          {!editId&&<div className="fg"><label>Email</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="maria@caballer.es"/></div>}
-          {!editId&&<div className="fg"><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>}
+          {/* Email: obligatorio al crear, opcional al editar */}
+          {!editId
+            ? <div className="fg"><label>Email</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="maria@caballer.es"/></div>
+            : <div className="fg"><label>Nuevo email <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="Nuevo email..."/></div>
+          }
+          {/* Contraseña: obligatoria al crear, opcional al editar */}
+          {!editId
+            ? <div className="fg"><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>
+            : <div className="fg"><label>Nueva contraseña <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Nueva contraseña..."/></div>
+          }
           <div className="fg"><label>Rol</label><select value={form.rol} onChange={e=>setForm({...form,rol:e.target.value,caseta_id:e.target.value==='ADMIN'?'':form.caseta_id})}><option value="EMPLEADO">Empleado</option><option value="ADMIN">Administrador</option></select></div>
           {form.rol==='EMPLEADO'&&<div className="fg"><label>Caseta asignada</label><select value={form.caseta_id} onChange={e=>setForm({...form,caseta_id:e.target.value})}><option value="">-- Seleccionar --</option>{casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>}
         </div>

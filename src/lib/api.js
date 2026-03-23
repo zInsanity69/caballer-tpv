@@ -167,6 +167,25 @@ export async function crearUsuario({ nombre, email, password, rol, caseta_id }) 
   return data
 }
 
+export async function actualizarCredenciales(userId, { email, password }) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/actualizar-usuario`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({ userId, email: email || null, password: password || null }),
+    }
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Error actualizando credenciales')
+  return data
+}
+
 export async function updatePerfil(id, cambios) {
   const { error } = await supabase.from('perfiles').update(cambios).eq('id', id)
   if (error) throw error
