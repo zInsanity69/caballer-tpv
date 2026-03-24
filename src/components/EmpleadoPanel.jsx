@@ -555,10 +555,10 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                 </div>
               ))}
               {/* Buscador para añadir productos al ticket */}
-              <div style={{ position: 'relative', marginBottom: 10 }}>
+              <div style={{ position: 'relative', marginBottom: 10, marginTop: 14, borderTop: '1px solid var(--bd)', paddingTop: 12 }}>
                 <input
                   className="si"
-                  placeholder="Añadir producto al ticket (escribe para buscar)..."
+                  placeholder="+ Añadir producto al ticket..."
                   value={editBusq}
                   onChange={e => setEditBusq(e.target.value)}
                 />
@@ -1849,6 +1849,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const total = calcularTotalTicket(ticket, ofertas)
 
   const confirmarVenta = async ({ metodo, dineroDado, cambio }) => {
+    // Doble check en el momento de ejecutar (no en el render)
+    if (!caja) { showToast('La caja está cerrada — no se puede registrar la venta', 'error'); return }
     try {
       const items = ticket.map(item => {
         const { total: totalLinea, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
@@ -1888,7 +1890,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const confirmarCierre = async (contado) => {
     try {
       await cerrarCaja(caja.id, perfil.id, contado)
-      // Cerrar todos los modales abiertos antes de resetear la caja
+      // Cerrar modales y resetear caja inmediatamente
       setShowCierre(false)
       setShowFichajes(false)
       setShowHistorial(false)
@@ -1897,9 +1899,10 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       setShowPedido(false)
       setShowOk(null)
       sessionStorage.removeItem('tpv_panel')
-      setTimeout(() => {
-        setCaja(null); setVentas([]); setTicket([])
-      }, 150)
+      setCaja(null)
+      setVentas([])
+      setTicket([])
+      showToast('✓ Caja cerrada correctamente')
     } catch (e) { showToast('Error cerrando caja: ' + e.message, 'error') }
   }
 
@@ -2303,9 +2306,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             <button className="btn-p" style={{ marginTop: 16 }} onClick={async () => {
               try {
                 const c = await abrirCaja(caseta.id, perfil.id, parseFloat(apertura) || 0)
-                setCaja(c); setVentas([])
+                setCaja(c)
+                setVentas([])
+                setApertura('')
                 setShowAperturaCaja(false)
-                showToast('✓ Caja abierta')
+                showToast('✓ Caja abierta — ya puedes vender')
               } catch (e) { showToast('Error: ' + e.message, 'error') }
             }}>Abrir caja y comenzar</button>
             <button className="btn-s" onClick={() => setShowAperturaCaja(false)}>Cancelar</button>
@@ -2371,7 +2376,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           showToast={showToast}
           onFichar={(f) => {
             setUltimoFichaje(f)
-            // Recargar otros activos al fichar (puede haber cambiado)
+            setFichajeLoading(false) // asegurar que no queda en estado "cargando"
             getEmpleadosActivosCaseta(caseta.id, perfil.id).then(setOtrosActivos)
           }}
           onSolicitarCierreCaja={() => {

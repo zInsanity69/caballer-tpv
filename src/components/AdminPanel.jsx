@@ -145,7 +145,7 @@ function Dashboard({ casetas }) {
                 <td style={{color:'var(--tx2)'}}>{new Date(t.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
                 <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                 <td>{t.perfiles?.nombre}</td>
-                <td>{t.metodo_pago==='efectivo'?'💵':'💳'} {t.metodo_pago}</td>
+                <td style={{textAlign:'center'}}>{t.metodo_pago==='efectivo'?'💵':'💳'}</td>
                 <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
               </tr>
             ))}
@@ -373,7 +373,7 @@ function PanelTickets({ casetas, filtroInicial }) {
                   <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{new Date(t.creado_en).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
                   <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                   <td>{t.perfiles?.nombre}</td>
-                  <td>{t.metodo_pago==='efectivo'?'💵':'💳'}</td>
+                  <td style={{textAlign:'center'}}>{t.metodo_pago==='efectivo'?'💵':'💳'}</td>
                   <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
                   <td><div className="acell">
                     <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
@@ -621,11 +621,17 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
             {p.estado==='PENDIENTE'&&(
               <>
                 <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0}} onClick={()=>cambiarEstado(p.id,'ACEPTADO')}>✅ Aceptar</button>
-                <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar antes de aceptar</button>
+                <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar</button>
               </>
             )}
             {p.estado==='ACEPTADO'&&(
-              <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0,background:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>cambiarEstado(p.id,'EN_CAMINO')}>🚚 Marcar en camino</button>
+              <>
+                <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0,background:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>cambiarEstado(p.id,'EN_CAMINO')}>🚚 En camino</button>
+                <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar</button>
+              </>
+            )}
+            {p.estado==='EN_CAMINO'&&(
+              <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar</button>
             )}
             {(p.estado==='RECIBIDO'||p.estado==='INCIDENCIA')&&(
               <button className="btn-edit" style={{fontSize:'.72rem'}} onClick={()=>setExpandido(expandido===p.id?null:p.id)}>{expandido===p.id?'Ocultar detalles':'Ver detalles recepción'}</button>
@@ -1189,7 +1195,7 @@ function GestionCasetas({ casetas, setCasetas }) {
       </div>
       <div className="stit">Casetas ({casetas.length})</div>
       <div className="tw"><table>
-        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Geo</th><th>Acciones</th></tr></thead>
         <tbody>
           {casetas.map(c=>(
             <tr key={c.id}>
