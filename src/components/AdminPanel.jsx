@@ -1240,7 +1240,6 @@ function GestionUsuarios({ casetas }) {
     return reqs
   }
   const [form,setForm]=useState(F0)
-  const [toast,setToast]=useState(null)
   const showToast=(txt,type='ok')=>{ setToast({msg:txt,type}); setTimeout(()=>setToast(null),3000) }
   const showMsg=(txt,ok=true)=>showToast(txt,ok?'ok':'error')
   useEffect(()=>{ getPerfiles().then(setPerfiles).finally(()=>setLoading(false)) },[])
