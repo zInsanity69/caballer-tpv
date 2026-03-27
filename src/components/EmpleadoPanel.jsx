@@ -1719,23 +1719,9 @@ function imprimirTicket(datos) {
 }
 
 export default function EmpleadoPanel({ perfil, casetas }) {
-  // Buscar la caseta en el array global; si RLS no permite verlas todas,
-  // usar el join que ya viene embebido en el perfil (perfil.casetas)
+  // Fallback: si RLS impide leer casetas[], usar el join embebido en el perfil
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
     ?? (perfil.casetas ? { ...perfil.casetas } : null)
-
-  if (!caseta) return (
-    <div className="splash" style={{ flexDirection: 'column', gap: 16, textAlign: 'center', padding: 32 }}>
-      <div style={{ fontSize: '2rem' }}>⚠️</div>
-      <div style={{ fontWeight: 700, color: 'var(--tx)' }}>Sin caseta asignada</div>
-      <div style={{ fontSize: '.85rem', color: 'var(--tx2)', maxWidth: 280 }}>
-        Tu usuario no tiene ninguna caseta asignada. Contacta con el administrador.
-      </div>
-      <button className="btn-s" style={{ marginTop: 8 }} onClick={() => supabase.auth.signOut()}>
-        Cerrar sesión
-      </button>
-    </div>
-  )
 
   const [productos,      setProductos]      = useState([])
   const [stock,          setStock]          = useState({})
@@ -1923,6 +1909,19 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   }
 
   if (loading) return <div className="splash"><div className="spinner" /></div>
+
+  if (!caseta) return (
+    <div className="splash" style={{ flexDirection: 'column', gap: 16, textAlign: 'center', padding: 32 }}>
+      <div style={{ fontSize: '2rem' }}>⚠️</div>
+      <div style={{ fontWeight: 700, color: 'var(--tx)' }}>Sin caseta asignada</div>
+      <div style={{ fontSize: '.85rem', color: 'var(--tx2)', maxWidth: 280 }}>
+        Tu usuario no tiene ninguna caseta asignada. Contacta con el administrador.
+      </div>
+      <button className="btn-s" style={{ marginTop: 8 }} onClick={() => supabase.auth.signOut()}>
+        Cerrar sesión
+      </button>
+    </div>
+  )
 
   // ── TPV ────────────────────────────────────────────────────
   const totalCajaTurno = ventas.reduce((s, v) => s + v.total, 0)
