@@ -37,7 +37,7 @@ export default function App() {
     setLoading(true)
     Promise.all([
       getPerfil(session.user.id),
-      getCasetas(),
+      getCasetas().catch(() => []),  // empleados pueden no tener permiso para leer todas las casetas
     ])
       .then(([p, c]) => { setPerfil(p); setCasetas(c) })
       .catch(e => setError(e.message))

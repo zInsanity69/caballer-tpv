@@ -1719,7 +1719,10 @@ function imprimirTicket(datos) {
 }
 
 export default function EmpleadoPanel({ perfil, casetas }) {
+  // Buscar la caseta en el array global; si RLS no permite verlas todas,
+  // usar el join que ya viene embebido en el perfil (perfil.casetas)
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
+    ?? (perfil.casetas ? { ...perfil.casetas } : null)
 
   if (!caseta) return (
     <div className="splash" style={{ flexDirection: 'column', gap: 16, textAlign: 'center', padding: 32 }}>
