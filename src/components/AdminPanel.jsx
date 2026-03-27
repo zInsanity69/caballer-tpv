@@ -1228,7 +1228,7 @@ function GestionUsuarios({ casetas }) {
   const [editId,setEditId]=useState(null)
   const F0={nombre:'',email:'',password:'',rol:'EMPLEADO',caseta_id:''}
   const [showPass, setShowPass] = useState(false)
-  const PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/
+  const PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/
   const passValida = (p) => !p || PASS_REGEX.test(p)
   const passReqs = (p) => {
     if (!p) return null
@@ -1249,7 +1249,7 @@ function GestionUsuarios({ casetas }) {
     if(!form.nombre.trim()){showMsg('Nombre obligatorio',false);return}
     if(!editId&&!form.email.trim()){showMsg('Email obligatorio',false);return}
     if(!editId&&!form.password.trim()){showMsg('Contraseña obligatoria',false);return}
-    if(form.password.trim()&&!passValida(form.password.trim())){showMsg('Contraseña débil: necesita 8+ caracteres, mayúscula, minúscula y número',false);return}
+    if(form.password.trim()&&!passValida(form.password.trim())){showMsg('Contraseña insegura. Requisitos: mínimo 8 caracteres, una mayúscula, una minúscula, un número y un carácter especial (!@#$...)',false);return}
     if(form.rol==='EMPLEADO'&&!form.caseta_id){showMsg('Asigna una caseta al empleado',false);return}
     setSaving(true)
     try{
@@ -1294,21 +1294,19 @@ function GestionUsuarios({ casetas }) {
           {!editId
             ? <div className="fg">
                 <label>Contraseña</label>
-                <div style={{position:'relative',paddingBottom:form.password?20:0}}>
+                <div style={{position:'relative'}}>
                   <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mín. 8 car., mayúscula, minúscula y número" style={{paddingRight:38}}/>
-                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:16,background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
-                  {passReqs(form.password)?.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,fontSize:'.7rem',color:'var(--gold)',marginTop:2,lineHeight:1.3}}>⚠️ Falta: {passReqs(form.password).join(', ')}</div>}
-                  {form.password&&passValida(form.password)&&<div style={{position:'absolute',top:'100%',left:0,fontSize:'.7rem',color:'var(--green)',marginTop:2}}>✓ Contraseña segura</div>}
+                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
                 </div>
+
               </div>
             : <div className="fg">
                 <label>Nueva contraseña <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label>
-                <div style={{position:'relative',paddingBottom:form.password?20:0}}>
+                <div style={{position:'relative'}}>
                   <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Nueva contraseña..." style={{paddingRight:38}}/>
-                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:16,background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
-                  {form.password&&passReqs(form.password)?.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,fontSize:'.7rem',color:'var(--gold)',marginTop:2,lineHeight:1.3}}>⚠️ Falta: {passReqs(form.password).join(', ')}</div>}
-                  {form.password&&passValida(form.password)&&<div style={{position:'absolute',top:'100%',left:0,fontSize:'.7rem',color:'var(--green)',marginTop:2}}>✓ Contraseña segura</div>}
+                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
                 </div>
+
               </div>
           }
           <div className="fg"><label>Rol</label><select value={form.rol} onChange={e=>setForm({...form,rol:e.target.value,caseta_id:e.target.value==='ADMIN'?'':form.caseta_id})}><option value="EMPLEADO">Empleado</option><option value="ADMIN">Administrador</option></select></div>
