@@ -1722,6 +1722,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   // Fallback: si RLS impide leer casetas[], usar el join embebido en el perfil
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
     ?? (perfil.casetas ? { ...perfil.casetas } : null)
+  console.log('PERFIL:', perfil)
+console.log('CASETAS:', casetas)
+console.log('CASETA ENCONTRADA:', caseta)
 
   const [productos,      setProductos]      = useState([])
   const [stock,          setStock]          = useState({})
