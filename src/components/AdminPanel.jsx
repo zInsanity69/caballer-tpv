@@ -145,7 +145,7 @@ function Dashboard({ casetas }) {
                 <td style={{color:'var(--tx2)'}}>{new Date(t.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
                 <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                 <td>{t.perfiles?.nombre}</td>
-                <td style={{textAlign:'center'}}>{t.metodo_pago==='efectivo'?'💵':'💳'}</td>
+                <td style={{textAlign:'center',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?'💵 Efectivo':'💳 Tarjeta'}</td>
                 <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
               </tr>
             ))}
@@ -373,7 +373,7 @@ function PanelTickets({ casetas, filtroInicial }) {
                   <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{new Date(t.creado_en).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
                   <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                   <td>{t.perfiles?.nombre}</td>
-                  <td style={{textAlign:'center'}}>{t.metodo_pago==='efectivo'?'💵':'💳'}</td>
+                  <td style={{textAlign:'center',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?'💵 Efectivo':'💳 Tarjeta'}</td>
                   <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
                   <td><div className="acell">
                     <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
@@ -1227,6 +1227,18 @@ function GestionUsuarios({ casetas }) {
   const [toast,setToast]=useState(null)
   const [editId,setEditId]=useState(null)
   const F0={nombre:'',email:'',password:'',rol:'EMPLEADO',caseta_id:''}
+  const [showPass, setShowPass] = useState(false)
+  const PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/
+  const passValida = (p) => !p || PASS_REGEX.test(p)
+  const passReqs = (p) => {
+    if (!p) return null
+    const reqs = []
+    if (p.length < 8) reqs.push('mínimo 8 caracteres')
+    if (!/[A-Z]/.test(p)) reqs.push('una mayúscula')
+    if (!/[a-z]/.test(p)) reqs.push('una minúscula')
+    if (!/\d/.test(p)) reqs.push('un número')
+    return reqs
+  }
   const [form,setForm]=useState(F0)
   const [msg,setMsg]=useState(null)
   const showToast=(txt,type='ok')=>{ setToast({msg:txt,type}); setTimeout(()=>setToast(null),3000) }
@@ -1237,6 +1249,7 @@ function GestionUsuarios({ casetas }) {
     if(!form.nombre.trim()){showMsg('Nombre obligatorio',false);return}
     if(!editId&&!form.email.trim()){showMsg('Email obligatorio',false);return}
     if(!editId&&!form.password.trim()){showMsg('Contraseña obligatoria',false);return}
+    if(form.password.trim()&&!passValida(form.password.trim())){showMsg('Contraseña débil: necesita 8+ caracteres, mayúscula, minúscula y número',false);return}
     if(form.rol==='EMPLEADO'&&!form.caseta_id){showMsg('Asigna una caseta al empleado',false);return}
     setSaving(true)
     try{
@@ -1279,8 +1292,24 @@ function GestionUsuarios({ casetas }) {
           }
           {/* Contraseña: obligatoria al crear, opcional al editar */}
           {!editId
-            ? <div className="fg"><label>Contraseña</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mínimo 6 caracteres"/></div>
-            : <div className="fg"><label>Nueva contraseña <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Nueva contraseña..."/></div>
+            ? <div className="fg">
+                <label>Contraseña</label>
+                <div style={{position:'relative'}}>
+                  <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mín. 8 car., mayúscula, minúscula y número" style={{paddingRight:38}}/>
+                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
+                </div>
+                {passReqs(form.password)?.length>0&&<div style={{fontSize:'.72rem',color:'var(--gold)',marginTop:4}}>⚠️ Falta: {passReqs(form.password).join(', ')}</div>}
+                {form.password&&passValida(form.password)&&<div style={{fontSize:'.72rem',color:'var(--green)',marginTop:4}}>✓ Contraseña segura</div>}
+              </div>
+            : <div className="fg">
+                <label>Nueva contraseña <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label>
+                <div style={{position:'relative'}}>
+                  <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Nueva contraseña..." style={{paddingRight:38}}/>
+                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
+                </div>
+                {form.password&&passReqs(form.password)?.length>0&&<div style={{fontSize:'.72rem',color:'var(--gold)',marginTop:4}}>⚠️ Falta: {passReqs(form.password).join(', ')}</div>}
+                {form.password&&passValida(form.password)&&<div style={{fontSize:'.72rem',color:'var(--green)',marginTop:4}}>✓ Contraseña segura</div>}
+              </div>
           }
           <div className="fg"><label>Rol</label><select value={form.rol} onChange={e=>setForm({...form,rol:e.target.value,caseta_id:e.target.value==='ADMIN'?'':form.caseta_id})}><option value="EMPLEADO">Empleado</option><option value="ADMIN">Administrador</option></select></div>
           {form.rol==='EMPLEADO'&&<div className="fg"><label>Caseta asignada</label><select value={form.caseta_id} onChange={e=>setForm({...form,caseta_id:e.target.value})}><option value="">-- Seleccionar --</option>{casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>}

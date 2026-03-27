@@ -555,7 +555,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                 </div>
               ))}
               {/* Buscador para añadir productos al ticket */}
-              <div style={{ position: 'relative', marginBottom: 10, marginTop: 14, borderTop: '1px solid var(--bd)', paddingTop: 12 }}>
+              <div style={{ position: 'relative', marginBottom: 10, marginTop: 16 }}>
                 <input
                   className="si"
                   placeholder="+ Añadir producto al ticket..."
@@ -1830,7 +1830,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       return [...prev, { ...prod, cantidad, gramos_polvora: prod.gramos_polvora || 0 }]
     })
     setShowScan(false)
-  }, [stock])
+  }, [stock, caja, puedeOperar, enDescanso])
 
   const abrirModalCantidad = (prod) => {
     const stockDisp = stock[prod.id] ?? 0

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { login } from '../lib/api.js'
 
 export default function Login() {
+  const [showPass, setShowPass] = useState(false)
   const [email, setEmail]   = useState('')
   const [pass, setPass]     = useState('')
   const [err, setErr]       = useState('')
@@ -45,12 +46,16 @@ export default function Login() {
         </div>
         <div className="fg">
           <label>Contraseña</label>
-          <input
-            type="password" value={pass} autoComplete="current-password"
-            onChange={e => setPass(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && go()}
-            placeholder="••••••••"
-          />
+          <div style={{position:'relative'}}>
+            <input
+              type={showPass?'text':'password'} value={pass} autoComplete="current-password"
+              onChange={e => setPass(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && go()}
+              placeholder="••••••••"
+              style={{paddingRight:38}}
+            />
+            <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
+          </div>
         </div>
 
         <button className="btn-p" onClick={go} disabled={loading}>
