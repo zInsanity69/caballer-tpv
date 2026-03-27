@@ -1722,9 +1722,6 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   // Fallback: si RLS impide leer casetas[], usar el join embebido en el perfil
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
     ?? (perfil.casetas ? { ...perfil.casetas } : null)
-  console.log('PERFIL:', perfil)
-console.log('CASETAS:', casetas)
-console.log('CASETA ENCONTRADA:', caseta)
 
   const [productos,      setProductos]      = useState([])
   const [stock,          setStock]          = useState({})
@@ -1811,6 +1808,15 @@ console.log('CASETA ENCONTRADA:', caseta)
       setCaja(c); setVentas([])
     } catch (e) { showToast('Error: ' + e.message, 'error') }
   }
+
+  // ── Restricciones basadas en fichaje ──────────────────────
+  const estadoFichaje = calcularEstado(ultimoFichaje)
+  const estaFichado   = estadoFichaje !== 'libre'
+  const enDescanso    = estadoFichaje === 'descanso'
+  // Mientras carga el fichaje no bloqueamos (evita falso negativo al arrancar)
+  const puedeOperar   = fichajeLoading || (estaFichado && !enDescanso)
+  // Para salir: si hay otros activos puede salir sin cerrar caja; si es el último, no
+  const esSoloEmpleado = otrosActivos.length === 0
 
   const agregar = useCallback((prod, cantidad = 1) => {
     if (!puedeOperar) {
@@ -1944,15 +1950,6 @@ console.log('CASETA ENCONTRADA:', caseta)
   ).slice(0, 4)
 
   const pctPolvora = kgLimite > 0 ? (kgPolvora / kgLimite) * 100 : 0
-
-  // ── Restricciones basadas en fichaje ──────────────────────
-  const estadoFichaje = calcularEstado(ultimoFichaje)
-  const estaFichado   = estadoFichaje !== 'libre'
-  const enDescanso    = estadoFichaje === 'descanso'
-  // Mientras carga el fichaje no bloqueamos (evita falso negativo al arrancar)
-  const puedeOperar   = fichajeLoading || (estaFichado && !enDescanso)
-  // Para salir: si hay otros activos puede salir sin cerrar caja; si es el último, no
-  const esSoloEmpleado = otrosActivos.length === 0
 
   return (
     <div className="app">
