@@ -2050,7 +2050,10 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         <div style={{ flex: 1 }} />
         {/* Botones — con texto en escritorio, solo icono en móvil */}
         <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-          <button className="btn-o subbar-btn" onClick={() => setShowHistorial(true)}>
+          <button className="btn-o subbar-btn" onClick={() => {
+              if (!caja) { showToast('Abre la caja para ver los tickets del turno', 'error'); return }
+              setShowHistorial(true)
+            }}>
             <span className="btn-icon">🧾</span><span className="btn-label"> Tickets</span>
           </button>
           <button className="btn-o subbar-btn" style={{ position: 'relative' }}
@@ -2333,7 +2336,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         </div>
       )}
 
-      {showHistorial && (
+      {showHistorial && caja && (
         <ModalHistorial cajaId={caja.id} perfil={perfil} caseta={caseta} productos={productos} ofertas={ofertas}
           onStockChange={(delta) => setStock(prev => {
             const next = { ...prev }
