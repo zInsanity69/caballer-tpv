@@ -38,6 +38,49 @@ function WheelScrollDiv({ children, className, style }) {
   return <div ref={ref} className={className} style={style}>{children}</div>
 }
 
+// ─── BOTÓN FLOTANTE IR AL TICKET / SUBIR ─────────────────
+// Solo se muestra en móvil (≤768px via CSS).
+// Estado: 'ticket' → baja al ticket | 'top' → sube al inicio
+function useBtnScroll() {
+  const [estado, setEstado] = useState('ticket') // 'ticket' | 'top'
+  useEffect(() => {
+    const onScroll = () => {
+      const ticket = document.getElementById('ticket-panel')
+      if (!ticket) return
+      const rect = ticket.getBoundingClientRect()
+      // Si el ticket ya es visible en pantalla → mostrar "subir"
+      // Si está por debajo del viewport → mostrar "ir al ticket"
+      setEstado(rect.top < window.innerHeight * 0.8 ? 'top' : 'ticket')
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll() // evaluar posición inicial
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+  return estado
+}
+
+function BtnScroll() {
+  const estado = useBtnScroll()
+  const handleClick = () => {
+    if (estado === 'ticket') {
+      const el = document.getElementById('ticket-panel')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
+  return (
+    <button
+      className="btn-scroll-flotante"
+      onClick={handleClick}
+      title={estado === 'ticket' ? 'Ver ticket' : 'Subir arriba'}
+      aria-label={estado === 'ticket' ? 'Ver ticket' : 'Subir arriba'}
+    >
+      {estado === 'ticket' ? '🧾' : '↑'}
+    </button>
+  )
+}
+
 function Toast({ msg, type }) {
   return <div className="twrap"><div className={`toast ${type === 'error' ? 'te2' : 'tok'}`}>{msg}</div></div>
 }
@@ -2221,7 +2264,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           </div>
 
           {/* Panel ticket */}
-          <div className="tp">
+          <div className="tp" id="ticket-panel">
             <div className="th">
               <div className="tt">🧾 Ticket</div>
               <div className="tm">{perfil.nombre} · {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</div>
@@ -2283,6 +2326,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           Pulsa = +1 unidad · Mantén pulsado = selector de cantidad · ⭐ = favorito
         </div>
       </div>
+
+      {/* ─── Botón flotante móvil: ir al ticket / subir ─── */}
+      <BtnScroll />
 
       {/* ─── Modales ─── */}
       {prodModal && (
