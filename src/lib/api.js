@@ -252,7 +252,7 @@ export async function crearTicket(payload) {
 export async function getTicketsTurno(cajaId) {
   const { data, error } = await supabase
     .from('tickets')
-    .select('*, numero_ticket, ticket_items(id, producto_id, nombre_producto, precio_unitario, cantidad, total_linea, con_oferta), perfiles(nombre)')
+    .select('*, numero_ticket, ticket_items(id, producto_id, nombre_producto, precio_unitario, cantidad, total_linea, con_oferta, productos(gramos_polvora)), perfiles(nombre)')
     .eq('caja_id', cajaId).order('creado_en', { ascending: false })
   if (error) throw error
   return data
@@ -261,7 +261,7 @@ export async function getTicketsTurno(cajaId) {
 export async function getTicketsPorRango(casetaId, desde, hasta) {
   const { data, error } = await supabase
     .from('tickets')
-    .select('*, ticket_items(id, cantidad, total_linea, nombre_producto, producto_id, precio_unitario), perfiles(nombre), casetas(nombre)')
+    .select('*, ticket_items(id, cantidad, total_linea, nombre_producto, producto_id, precio_unitario, productos(gramos_polvora)), perfiles(nombre), casetas(nombre, direccion)')
     .eq('caseta_id', casetaId).gte('creado_en', desde).lte('creado_en', hasta)
     .order('creado_en', { ascending: false })
   if (error) throw error
@@ -270,7 +270,7 @@ export async function getTicketsPorRango(casetaId, desde, hasta) {
 
 export async function getTicketsAdmin(desde, hasta, casetaId) {
   let q = supabase.from('tickets')
-    .select('*, numero_ticket, ticket_items(id, cantidad, total_linea, nombre_producto, producto_id, precio_unitario), casetas(nombre), perfiles(nombre)')
+    .select('*, numero_ticket, ticket_items(id, cantidad, total_linea, nombre_producto, producto_id, precio_unitario, productos(gramos_polvora)), casetas(nombre, direccion), perfiles(nombre)')
     .order('creado_en', { ascending: false }).limit(200)
   if (desde) q = q.gte('creado_en', desde)
   if (hasta) q = q.lte('creado_en', hasta)

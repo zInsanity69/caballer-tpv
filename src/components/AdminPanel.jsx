@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
@@ -59,32 +59,53 @@ function imprimirTicketAdmin(t) {
   const total = t.total
   const baseImponible = total / (1 + iva)
   const cuotaIva = total - baseImponible
-  const items = t.ticket_items || []
+  // Aplanar gramos_polvora desde el join con productos
+  const items = (t.ticket_items || []).map(i => ({
+    ...i,
+    gramos_polvora: i.productos?.gramos_polvora || i.gramos_polvora || 0
+  }))
+  const totalNEC = items.reduce((s, i) => s + (i.gramos_polvora || 0) * i.cantidad, 0)
   const fmtE = n => n.toFixed(2) + '€'
   const fecha = new Date(t.creado_en)
   const fmtFecha = d => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
-  const ticketNum = `TVN${t.id.slice(-10).toUpperCase()}`
+  const ticketNum = t.numero_ticket || `TVN${t.id.slice(-10).toUpperCase()}`
+  const direccionCaseta = t.casetas?.direccion || CONFIG_EMPRESA.direccion
+
+  const necHtml = totalNEC > 0 ? `
+<hr class="sep">
+<div class="desg" style="border:1px solid #ccc;padding:4px 6px;border-radius:3px">
+  <div style="font-weight:bold;margin-bottom:3px">💥 N.E.C. (Contenido Neto Explosivo)</div>
+  ${items.filter(i => (i.gramos_polvora||0) > 0).map(i =>
+    `<div><span>${i.nombre_producto} x${i.cantidad}:</span><span>${((i.gramos_polvora||0)*i.cantidad).toFixed(2)} g</span></div>`
+  ).join('')}
+  <div style="font-weight:bold;border-top:1px solid #ccc;margin-top:3px;padding-top:3px">
+    <span>TOTAL N.E.C.:</span><span>${totalNEC.toFixed(2)} g (${(totalNEC/1000).toFixed(4)} kg)</span>
+  </div>
+</div>` : ''
+
   const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Ticket</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Courier New',monospace;font-size:11px;width:80mm;max-width:80mm;color:#000;background:#fff;padding:4mm}.logo{text-align:center;font-family:'Arial Black',sans-serif;font-size:26px;font-weight:900;letter-spacing:3px;margin:4px 0 2px;text-transform:uppercase}.logo-sub{text-align:center;font-size:9px;letter-spacing:2px;color:#444;margin-bottom:6px;text-transform:uppercase}.sep{border:none;border-top:1px dashed #000;margin:5px 0}.sep-s{border:none;border-top:1px solid #000;margin:5px 0}.emp{text-align:center;font-size:10px;line-height:1.5;margin-bottom:4px}.nf{display:flex;justify-content:space-between;font-size:10px;margin:3px 0}.ch{display:flex;justify-content:space-between;font-weight:bold;font-size:10px;border-bottom:1px solid #000;padding-bottom:2px;margin-bottom:3px}.it{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px;font-size:10px;gap:4px}.desg{font-size:10px;margin:3px 0}.desg div{display:flex;justify-content:space-between;padding:1px 0}.ttl{display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin:4px 0}.pago{font-size:10px;text-align:center;margin:3px 0}.legal{font-size:9px;text-align:center;color:#444;margin-top:5px;line-height:1.4}@media print{body{width:80mm}@page{margin:0;size:80mm auto}}</style>
 </head><body>
 <div class="logo">★ CABALLER ★</div>
 <div class="logo-sub">Pirotecnia</div>
 <hr class="sep-s">
-<div class="emp"><div><b>${CONFIG_EMPRESA.razonSocial}</b></div><div>${t.casetas?.nombre||''}</div><div>${CONFIG_EMPRESA.direccion}</div><div>CIF: ${CONFIG_EMPRESA.cif}</div></div>
+<div class="emp"><div><b>${CONFIG_EMPRESA.razonSocial}</b></div><div>${t.casetas?.nombre||''}</div><div>${direccionCaseta}</div><div>CIF: ${CONFIG_EMPRESA.cif}</div></div>
 <hr class="sep">
 <div class="nf"><span><b>${ticketNum}</b></span><span>${fmtFecha(fecha)}</span></div>
 <hr class="sep">
 <div class="ch"><span style="width:20px">Uds</span><span style="flex:1;margin-left:4px">Producto</span><span style="width:38px;text-align:right">Precio</span><span style="width:38px;text-align:right">Subt</span></div>
 ${items.map(i=>`<div class="it"><span style="width:20px;text-align:right">${i.cantidad}</span><span style="flex:1;margin-left:4px">${i.nombre_producto}</span><span style="width:38px;text-align:right">${fmtE(i.precio_unitario)}</span><span style="width:38px;text-align:right">${fmtE(i.total_linea)}</span></div>`).join('')}
 <hr class="sep">
-<div class="desg"><div style="font-weight:bold;margin-bottom:2px">Desglose TOTAL:</div><div><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div><div><span>I.V.A.(${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div></div>
+<div class="desg"><div style="font-weight:bold;margin-bottom:2px">Desglose fiscal:</div><div><span>Base imponible:</span><span>${fmtE(baseImponible)}</span></div><div><span>I.V.A. (${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div><div><span>TOTAL N.E.C.:</span><span>${totalNEC.toFixed(2)}g</span></div></div> 
 <hr class="sep-s">
 <div class="ttl"><span>TOTAL:</span><span>${fmtE(total)}</span></div>
 <hr class="sep">
 <div class="pago">Forma de pago: <b>${t.metodo_pago==='efectivo'?'Efectivo':'Tarjeta'}</b></div>
 <div class="pago"><b>I.V.A. incluido</b></div>
+<!--- ${necHtml} --->
 <hr class="sep">
 <div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
+<!--- ${totalNEC > 0 ? '<div style="font-size:9px;color:#666;margin-top:4px;border-top:1px dashed #999;padding-top:3px">N.E.C.: Net Explosive Content — Contenido Neto en Explosivos según normativa pirotécnica.</div>' : ''} --->
 </body></html>`
   const v = window.open('','_blank','width=400,height=700,scrollbars=yes')
   if (!v) { alert('Permite las ventanas emergentes para imprimir.'); return }
@@ -145,7 +166,7 @@ function Dashboard({ casetas }) {
                 <td style={{color:'var(--tx2)'}}>{new Date(t.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
                 <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                 <td>{t.perfiles?.nombre}</td>
-                <td style={{whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?'💵 Efectivo':'💳 Tarjeta'}</td>
+                <td style={{textAlign:'center',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?'💵 Efectivo':'💳 Tarjeta'}</td>
                 <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
               </tr>
             ))}
@@ -368,12 +389,12 @@ function PanelTickets({ casetas, filtroInicial }) {
           <tbody>
             {filtrados.length===0?<tr><td colSpan={6} style={{textAlign:'center',color:'var(--tx2)',padding:20}}>Sin tickets</td></tr>
               :filtrados.map(t=>(
-              <>
-                <tr key={t.id}>
+              <React.Fragment key={t.id}>
+                <tr>
                   <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{new Date(t.creado_en).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
                   <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                   <td>{t.perfiles?.nombre}</td>
-                  <td style={{whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?'💵 Efectivo':'💳 Tarjeta'}</td>
+                  <td style={{textAlign:'center',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?'💵 Efectivo':'💳 Tarjeta'}</td>
                   <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
                   <td><div className="acell">
                     <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
@@ -383,7 +404,7 @@ function PanelTickets({ casetas, filtroInicial }) {
                   </div></td>
                 </tr>
                 {expanded===t.id&&t.ticket_items&&(
-                  <tr key={`${t.id}-d`}><td colSpan={6} style={{background:'var(--s2)',padding:'8px 16px'}}>
+                  <tr><td colSpan={6} style={{background:'var(--s2)',padding:'8px 16px'}}>
                     {t.ticket_items.map((li,i)=>(
                       <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'.78rem',padding:'3px 0',borderBottom:'1px solid var(--bd)'}}>
                         <span>{li.nombre_producto} × {li.cantidad}</span><span style={{color:'var(--ac)'}}>{fmt(li.total_linea)}</span>
@@ -391,7 +412,7 @@ function PanelTickets({ casetas, filtroInicial }) {
                     ))}
                   </td></tr>
                 )}
-              </>
+              </React.Fragment>
             ))}
           </tbody>
         </table></div>
@@ -1228,7 +1249,7 @@ function GestionUsuarios({ casetas }) {
   const [editId,setEditId]=useState(null)
   const F0={nombre:'',email:'',password:'',rol:'EMPLEADO',caseta_id:''}
   const [showPass, setShowPass] = useState(false)
-  const PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/
+  const PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/
   const passValida = (p) => !p || PASS_REGEX.test(p)
   const passReqs = (p) => {
     if (!p) return null
@@ -1240,15 +1261,16 @@ function GestionUsuarios({ casetas }) {
     return reqs
   }
   const [form,setForm]=useState(F0)
+  const [msg,setMsg]=useState(null)
   const showToast=(txt,type='ok')=>{ setToast({msg:txt,type}); setTimeout(()=>setToast(null),3000) }
-  const showMsg=(txt,ok=true)=>showToast(txt,ok?'ok':'error')
+  const showMsg=(txt,ok=true)=>{ setMsg({txt,ok}); setTimeout(()=>setMsg(null),4000) }
   useEffect(()=>{ getPerfiles().then(setPerfiles).finally(()=>setLoading(false)) },[])
 
   const guardar=async()=>{
     if(!form.nombre.trim()){showMsg('Nombre obligatorio',false);return}
     if(!editId&&!form.email.trim()){showMsg('Email obligatorio',false);return}
     if(!editId&&!form.password.trim()){showMsg('Contraseña obligatoria',false);return}
-    if(form.password.trim()&&!passValida(form.password.trim())){showMsg('Contraseña insegura. Requisitos: mínimo 8 caracteres, una mayúscula, una minúscula, un número y un carácter especial (!@#$...)',false);return}
+    if(form.password.trim()&&!passValida(form.password.trim())){showMsg('Contraseña débil: necesita 8+ caracteres, mayúscula, minúscula y número',false);return}
     if(form.rol==='EMPLEADO'&&!form.caseta_id){showMsg('Asigna una caseta al empleado',false);return}
     setSaving(true)
     try{
@@ -1257,6 +1279,9 @@ function GestionUsuarios({ casetas }) {
         await updatePerfil(editId,cambios)
         // Actualizar email/contraseña si se han rellenado
         if(form.email?.trim()||form.password?.trim()){
+          if(form.password?.trim()&&form.password.trim().length<6){
+            showMsg('La contraseña debe tener al menos 6 caracteres',false); setSaving(false); return
+          }
           await actualizarCredenciales(editId,{email:form.email?.trim()||null,password:form.password?.trim()||null})
         }
         setPerfiles(prev=>prev.map(p=>p.id===editId?{...p,...cambios,casetas:casetas.find(c=>c.id===form.caseta_id)}:p))
@@ -1277,7 +1302,7 @@ function GestionUsuarios({ casetas }) {
     <>
       {toast&&<Toast msg={toast.msg} type={toast.type}/>}
       <div className="stit">{editId?'✏️ Editar Usuario':'➕ Nuevo Usuario'}</div>
-      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+      {msg&&<div className={msg.ok?'ok-box':'err-box'}>{msg.txt}</div>}
       <div className="iform">
         <div className="frow">
           <div className="fg"><label>Nombre completo</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="María García"/></div>
@@ -1294,7 +1319,8 @@ function GestionUsuarios({ casetas }) {
                   <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mín. 8 car., mayúscula, minúscula y número" style={{paddingRight:38}}/>
                   <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
                 </div>
-
+                {passReqs(form.password)?.length>0&&<div style={{fontSize:'.72rem',color:'var(--gold)',marginTop:4}}>⚠️ Falta: {passReqs(form.password).join(', ')}</div>}
+                {form.password&&passValida(form.password)&&<div style={{fontSize:'.72rem',color:'var(--green)',marginTop:4}}>✓ Contraseña segura</div>}
               </div>
             : <div className="fg">
                 <label>Nueva contraseña <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label>
@@ -1302,7 +1328,8 @@ function GestionUsuarios({ casetas }) {
                   <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Nueva contraseña..." style={{paddingRight:38}}/>
                   <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
                 </div>
-
+                {form.password&&passReqs(form.password)?.length>0&&<div style={{fontSize:'.72rem',color:'var(--gold)',marginTop:4}}>⚠️ Falta: {passReqs(form.password).join(', ')}</div>}
+                {form.password&&passValida(form.password)&&<div style={{fontSize:'.72rem',color:'var(--green)',marginTop:4}}>✓ Contraseña segura</div>}
               </div>
           }
           <div className="fg"><label>Rol</label><select value={form.rol} onChange={e=>setForm({...form,rol:e.target.value,caseta_id:e.target.value==='ADMIN'?'':form.caseta_id})}><option value="EMPLEADO">Empleado</option><option value="ADMIN">Administrador</option></select></div>

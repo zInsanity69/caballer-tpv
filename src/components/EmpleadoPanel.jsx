@@ -546,7 +546,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                       </button>
                       <button className="btn-o" style={{ fontSize: '.7rem' }}
                         onClick={() => imprimirTicket({
-                          items: (t.ticket_items||[]).map(i=>({nombre:i.nombre_producto,cantidad:i.cantidad,precio:i.precio_unitario,total_linea:i.total_linea,gramos_polvora:0})),
+                          items: (t.ticket_items||[]).map(i=>({nombre:i.nombre_producto,cantidad:i.cantidad,precio:i.precio_unitario,total_linea:i.total_linea,gramos_polvora:i.productos?.gramos_polvora||productos.find(p=>p.id===i.producto_id)?.gramos_polvora||0})),
                           total: t.total, metodo: t.metodo_pago, cambio: 0,
                           caseta, perfil: t.perfiles,
                           fecha: new Date(t.creado_en),
@@ -1675,7 +1675,7 @@ function generarTicketHTML(datos) {
   <div class="empresa">
     <div class="bold">${CONFIG_EMPRESA.razonSocial}</div>
     <div>${caseta?.nombre || ''}</div>
-    <div>${CONFIG_EMPRESA.direccion}</div>
+    <div>${caseta?.direccion || CONFIG_EMPRESA.direccion}</div>
     <div>CIF: ${CONFIG_EMPRESA.cif}</div>
   </div>
   <hr class="separator">
@@ -1708,10 +1708,10 @@ function generarTicketHTML(datos) {
 
   <!-- DESGLOSE FISCAL -->
   <div class="desglose">
-    <div style="font-weight:bold;margin-bottom:2px">Desglose TOTAL:</div>
-    <div><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div>
-    <div><span>I.V.A.(${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
-    ${totalNEC > 0 ? `<div><span>N.E.C.:</span><span>${totalNEC.toFixed(2)} g</span></div>` : ''}
+    <div style="font-weight:bold;margin-bottom:2px">Desglose fiscal:</div>
+    <div><span>Base imponible:</span><span>${fmtE(baseImponible)}</span></div>
+    <div><span>I.V.A. (${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
+    <div><span>TOTAL N.E.C.:</span><span>${totalNEC.toFixed(2)}g</span></div>
   </div>
   <hr class="separator-solid">
 
@@ -1730,14 +1730,22 @@ function generarTicketHTML(datos) {
   <div class="pago"><strong>I.V.A. incluido</strong></div>
   <hr class="separator">
 
+  <!-- NEC — solo si hay pólvora 
+  ${totalNEC > 0 ? `
+  <div class="desglose" style="border:1px solid #ccc;padding:4px 6px;border-radius:3px;margin-bottom:4px">
+    <div style="font-weight:bold;margin-bottom:3px">💥 Contenido Neto Explosivo (N.E.C.)</div>
+    ${items.filter(i => (i.gramos_polvora||0) > 0).map(i =>
+      `<div><span>${i.nombre} x${i.cantidad}:</span><span>${((i.gramos_polvora||0)*i.cantidad).toFixed(2)} g</span></div>`
+    ).join('')}
+    <div style="font-weight:bold;border-top:1px solid #ccc;margin-top:3px;padding-top:3px">
+      <span>TOTAL N.E.C.:</span><span>${totalNEC.toFixed(2)} g (${(totalNEC/1000).toFixed(4)} kg)</span>
+    </div>
+  </div>
+  <hr class="separator">` : ''} -->
+
   <!-- TEXTO LEGAL -->
   <div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
-
-  <!-- GLOSARIO -->
-  <div class="glosario">
-    Subt.*: Subtotal &nbsp;|&nbsp; B.I.*: Base Imponible<br>
-    ${totalNEC > 0 ? 'N.E.C.*: Net Explosive Content (Contenido neto en explosivos)' : ''}
-  </div>
+  <!--- ${totalNEC > 0 ? '<div class="glosario">N.E.C.: Net Explosive Content — Contenido Neto en Explosivos según normativa pirotécnica.</div>' : ''} --->
 
 </body>
 </html>`
