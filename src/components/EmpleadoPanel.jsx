@@ -2092,7 +2092,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             </span>
           </>) : (
             <span style={{ color: 'var(--gold)', fontSize: '.72rem', fontWeight: 600, background: 'rgba(245,200,66,.1)', padding: '2px 7px', borderRadius: 10 }}>
-              sin caja
+              Sin caja
             </span>
           )}
           {modoRapido && <span style={{ background: 'rgba(34,197,94,.15)', color: 'var(--green)', padding: '2px 6px', borderRadius: 20, fontSize: '.65rem', fontWeight: 700, flexShrink: 0 }}>⚡</span>}
