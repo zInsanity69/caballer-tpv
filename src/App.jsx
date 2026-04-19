@@ -4,6 +4,8 @@ import { getPerfil, getCasetas } from './lib/api.js'
 import Login from './components/Login.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
 import EmpleadoPanel from './components/EmpleadoPanel.jsx'
+import RRHHPanel from './components/RRHHPanel.jsx'
+import logoColor from './assets/logo_caballer_color.svg'
 import './styles.css'
 
 export default function App() {
@@ -46,8 +48,7 @@ export default function App() {
 
   if (loading) return (
     <div className="splash">
-      <div className="splash-logo">💥</div>
-      <div className="splash-text">Caballer TPV</div>
+      <img src={logoColor} alt="Caballer" style={{ width: 180, marginBottom: 12 }} />
       <div className="spinner" />
     </div>
   )
@@ -72,9 +73,8 @@ export default function App() {
     </div>
   )
 
-  if (perfil.rol === 'ADMIN') {
-    return <AdminPanel perfil={perfil} casetas={casetas} />
-  }
+  if (perfil.rol === 'ADMIN') return <AdminPanel perfil={perfil} casetas={casetas} />
+  if (perfil.rol === 'RRHH')  return <RRHHPanel perfil={perfil} />
 
   return <EmpleadoPanel perfil={perfil} casetas={casetas} />
 }

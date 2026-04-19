@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { login } from '../lib/api.js'
+import logoColor from '../assets/logo_caballer_color.svg'
 
 export default function Login() {
   const [showPass, setShowPass] = useState(false)
@@ -26,9 +27,7 @@ export default function Login() {
   return (
     <div className="splash" style={{ background: 'radial-gradient(ellipse at 50% 0%,#ff4d1c22 0%,transparent 60%),var(--bg)' }}>
       <div style={{ background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 20, padding: '40px 36px', width: '100%', maxWidth: 400 }}>
-        <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '2.4rem', color: 'var(--ac)', letterSpacing: 2, textAlign: 'center', marginBottom: 4 }}>
-          💥 Caballer
-        </div>
+        <img src={logoColor} alt="Caballer" style={{ width: 250, display: 'block', margin: '0 auto 4px' }} />
         <div style={{ textAlign: 'center', color: 'var(--tx2)', fontSize: '.82rem', marginBottom: 28 }}>
           Sistema TPV Profesional
         </div>

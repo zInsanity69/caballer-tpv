@@ -37,7 +37,7 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(ellipse at 50% 0%, #ff4d1c22 0%, transparent 60%), var(--bg);
+  background: radial-gradient(ellipse at 50% 0%, #ff4d1c22  0%, transparent 60%), var(--bg);
   gap: 12px;
 }
 .splash-logo { font-size: 3.5rem; }
@@ -273,33 +273,5 @@ tr:hover td { background: var(--s2); }
   .pst { font-size: .68rem; }
 }
 
-/* ─── BOTÓN FLOTANTE TICKET/SUBIR (solo móvil) ──────── */
-.btn-scroll-flotante {
-  display: none;
-}
-@media (max-width: 768px) {
-  .btn-scroll-flotante {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    bottom: 22px;
-    right: 16px;
-    width: 46px;
-    height: 46px;
-    border-radius: 50%;
-    background: var(--s1);
-    border: 1px solid var(--bd);
-    color: var(--tx);
-    font-size: 1.2rem;
-    cursor: pointer;
-    z-index: 200;
-    box-shadow: 0 4px 16px rgba(0,0,0,.5);
-    transition: background .2s, border-color .2s, transform .15s;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .btn-scroll-flotante:active {
-    transform: scale(.92);
-    background: var(--s2);
-  }
-}
+.hide-mobile { display: inline; }
+@media (max-width: 768px) { .hide-mobile { display: none; } }

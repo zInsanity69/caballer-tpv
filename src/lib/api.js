@@ -81,6 +81,15 @@ export async function setStock(productoId, casetaId, cantidad) {
   if (error) throw error
 }
 
+export async function ajustarStock(productoId, casetaId, delta) {
+  const { data: row } = await supabase
+    .from('stock').select('cantidad').eq('producto_id', productoId).eq('caseta_id', casetaId).maybeSingle()
+  const actual = row?.cantidad ?? 0
+  const nueva = Math.max(0, actual + delta)
+  await setStock(productoId, casetaId, nueva)
+  return nueva
+}
+
 // ─── KILOS PÓLVORA ───────────────────────────────────────────
 export async function getKgPolvora(casetaId) {
   const { data, error } = await supabase
@@ -148,6 +157,18 @@ export async function getPerfiles() {
   return data
 }
 
+export async function getPerfilesEmpleados() {
+  const { data, error } = await supabase
+    .from('perfiles').select('*, casetas(nombre)').eq('rol', 'EMPLEADO').order('nombre')
+  if (error) throw error
+  return data
+}
+
+export async function updateTicketNota(ticketId, notas) {
+  const { error } = await supabase.from('tickets').update({ notas }).eq('id', ticketId)
+  if (error) throw error
+}
+
 export async function crearUsuario({ nombre, email, password, rol, caseta_id }) {
   const { data: { session } } = await supabase.auth.getSession()
   const res = await fetch(
@@ -191,6 +212,11 @@ export async function updatePerfil(id, cambios) {
   if (error) throw error
 }
 
+export async function eliminarPerfil(id) {
+  const { error } = await supabase.from('perfiles').delete().eq('id', id)
+  if (error) throw error
+}
+
 // ─── CAJA ────────────────────────────────────────────────────
 export async function getCajaAbierta(casetaId) {
   const { data, error } = await supabase
@@ -198,6 +224,22 @@ export async function getCajaAbierta(casetaId) {
     .eq('caseta_id', casetaId).eq('estado', 'ABIERTA').maybeSingle()
   if (error) throw error
   return data
+}
+
+export async function getCajasAbiertas() {
+  const { data, error } = await supabase
+    .from('cajas')
+    .select('id, apertura_dinero, caseta_id, casetas(nombre), tickets(metodo_pago, total)')
+    .eq('estado', 'ABIERTA')
+  if (error) throw error
+  return (data || []).map(c => ({
+    casetaNombre: c.casetas?.nombre || '?',
+    casetaId: c.caseta_id,
+    apertura: c.apertura_dinero || 0,
+    ventasEfectivo: (c.tickets || []).filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + (t.total || 0), 0),
+    totalEfectivo: (c.apertura_dinero || 0) + (c.tickets || []).filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + (t.total || 0), 0),
+    numTickets: (c.tickets || []).length,
+  }))
 }
 
 export async function abrirCaja(casetaId, empleadoId, aperturaDinero) {

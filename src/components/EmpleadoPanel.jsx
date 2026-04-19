@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
+import logoMonoSVG from '../assets/logo_caballer_monoV2.svg?raw'
 import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
-  getResumenCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket,
+  getResumenCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
   getFavoritos, toggleFavorito,
   getPedidos, crearPedido, confirmarRecepcionPedido,
   crearInventario, getInventarios, confirmarInventario,
@@ -408,14 +409,17 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
 
 // ─── MODAL HISTORIAL + EDICIÓN TICKETS ───────────────────────
 function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockChange, onClose }) {
-  const [tickets, setTickets]       = useState([])
-  const [loading, setLoading]       = useState(true)
-  const [expanded, setExpanded]     = useState(null)
-  const [editando, setEditando]     = useState(null)
-  const [editItems, setEditItems]   = useState([])
-  const [editBusq, setEditBusq]     = useState('')   // buscador añadir producto
-  const [busq, setBusq]             = useState('')
-  const [saving, setSaving]         = useState(false)
+  const [tickets, setTickets]           = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [expanded, setExpanded]         = useState(null)
+  const [editando, setEditando]         = useState(null)
+  const [editItems, setEditItems]       = useState([])
+  const [editBusq, setEditBusq]         = useState('')
+  const [busq, setBusq]                 = useState('')
+  const [saving, setSaving]             = useState(false)
+  const [incidenciaTicket, setIncidenciaTicket] = useState(null)
+  const [notaIncidencia, setNotaIncidencia]     = useState('')
+  const [guardandoNota, setGuardandoNota]       = useState(false)
 
   useEffect(() => {
     getTicketsTurno(cajaId).then(setTickets).finally(() => setLoading(false))
@@ -453,7 +457,8 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
   const guardarEdicion = async () => {
     setSaving(true)
     try {
-      const nuevoTotal = editItems.reduce((s, i) => s + i.total_linea, 0)
+      const ticketParaCalculo = editItems.map(i => ({ id: i.producto_id, cantidad: i.cantidad, precio: i.precio }))
+      const nuevoTotal = calcularTotalTicket(ticketParaCalculo, ofertas)
       await updateTicket(editando.id, nuevoTotal, editItems)
 
       // Ajustar stock: calcular diferencia entre items originales y nuevos
@@ -478,12 +483,13 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
     setSaving(false)
   }
 
+  const recalcItem = (item, nq) => {
+    const { total } = calcularPrecio(item.producto_id, nq, item.precio, ofertas)
+    return { ...item, cantidad: nq, total_linea: total, con_oferta: total < +(nq * item.precio).toFixed(2) }
+  }
+
   const editQty = (idx, delta) => {
-    setEditItems(prev => prev.map((item, i) => {
-      if (i !== idx) return item
-      const nq = Math.max(1, item.cantidad + delta)
-      return { ...item, cantidad: nq, total_linea: +(nq * item.precio).toFixed(2) }
-    }))
+    setEditItems(prev => prev.map((item, i) => i !== idx ? item : recalcItem(item, Math.max(1, item.cantidad + delta))))
   }
 
   const editDel = (idx) => setEditItems(prev => prev.filter((_, i) => i !== idx))
@@ -493,18 +499,28 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
     setEditItems(prev => {
       const idx = prev.findIndex(i => i.producto_id === prod.id)
       if (idx >= 0) {
-        return prev.map((it, i) => i !== idx ? it : {
-          ...it, cantidad: it.cantidad + 1,
-          total_linea: +((it.cantidad + 1) * it.precio).toFixed(2),
-        })
+        const it = prev[idx]
+        return prev.map((x, i) => i !== idx ? x : recalcItem(x, it.cantidad + 1))
       }
+      const { total } = calcularPrecio(prod.id, 1, prod.precio, ofertas)
       return [...prev, {
         producto_id: prod.id, nombre: prod.nombre,
         precio: prod.precio, cantidad: 1,
-        total_linea: +prod.precio.toFixed(2), con_oferta: false,
+        total_linea: total, con_oferta: false,
       }]
     })
     setEditBusq('')
+  }
+
+  const guardarIncidencia = async () => {
+    if (!notaIncidencia.trim()) return
+    setGuardandoNota(true)
+    try {
+      await updateTicketNota(incidenciaTicket.id, notaIncidencia.trim())
+      setTickets(prev => prev.map(t => t.id === incidenciaTicket.id ? { ...t, notas: notaIncidencia.trim() } : t))
+      setIncidenciaTicket(null); setNotaIncidencia('')
+    } catch { alert('No se pudo guardar la incidencia. Contacta con el administrador.') }
+    setGuardandoNota(false)
   }
 
   const totalTurno = tickets.reduce((s, t) => s + t.total, 0)
@@ -552,10 +568,16 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                           fecha: new Date(t.creado_en),
                           ticketNum: t.numero_ticket || `TVN-${t.id.slice(-6).toUpperCase()}`,
                         })}>🖨️</button>
-                      <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--blue)', color: 'var(--blue)' }}
-                        onClick={() => abrirEdicion(t)}>Editar</button>
-                      <button className="btn-del" onClick={() => eliminar(t.id)}>✕</button>
+                      <button className="btn-o" style={{ fontSize: '.7rem', borderColor: t.notas ? 'var(--red)' : 'var(--gold)', color: t.notas ? 'var(--red)' : 'var(--gold)' }}
+                        onClick={() => { setIncidenciaTicket(t); setNotaIncidencia(t.notas || '') }}>
+                        {t.notas ? '⚠️' : '+ Incidencia'}
+                      </button>
                     </div>
+                    {t.notas && (
+                      <div style={{ marginTop: 6, fontSize: '.75rem', color: 'var(--red)', background: 'rgba(239,68,68,.08)', borderRadius: 'var(--rs)', padding: '4px 8px' }}>
+                        ⚠️ Incidencia: {t.notas}
+                      </div>
+                    )}
                     {expanded === t.id && t.ticket_items && (
                       <div style={{ marginTop: 8, borderTop: '1px solid var(--bd)', paddingTop: 8 }}>
                         {t.ticket_items.map((li, i) => (
@@ -574,6 +596,28 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
         }
         <button className="btn-s" style={{ marginTop: 12 }} onClick={onClose}>Cerrar</button>
       </div>
+
+      {/* Modal incidencia */}
+      {incidenciaTicket && (
+        <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setIncidenciaTicket(null)}>
+          <div className="mc">
+            <div className="mt-modal">⚠️ Incidencia en ticket</div>
+            <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 12 }}>
+              {incidenciaTicket.numero_ticket} · {fmt(incidenciaTicket.total)}
+            </div>
+            <div className="fg">
+              <label>Describe el problema</label>
+              <textarea value={notaIncidencia} onChange={e => setNotaIncidencia(e.target.value)}
+                placeholder="Ej: cliente devolvió artículo, error de precio..."
+                style={{ width: '100%', minHeight: 90, background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '8px 10px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif", fontSize: '.85rem', resize: 'vertical' }} />
+            </div>
+            <button className="btn-p" disabled={guardandoNota || !notaIncidencia.trim()} onClick={guardarIncidencia}>
+              {guardandoNota ? 'Guardando...' : '✓ Guardar incidencia'}
+            </button>
+            <button className="btn-s" onClick={() => setIncidenciaTicket(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
 
       {/* Modal edición ticket */}
       {editando && (
@@ -657,13 +701,13 @@ function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, show
   const [vista, setVista]       = useState('catalogo') // 'catalogo' | 'pedido'
   const [loading, setLoading]   = useState(false)
 
-  const cats = ['Todos', ...new Set(productos.map(p => p.categoria))]
+  const cats = ['Todos', ...new Set(productos.map(p => p.categoria).sort())]
 
   const prodsFiltrados = productos.filter(p => {
     const bOk = !busq || p.nombre.toLowerCase().includes(busq.toLowerCase())
     const cOk = catFiltro === 'Todos' || p.categoria === catFiltro
     return bOk && cOk
-  })
+  }).sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
 
   const cantidadPedida = (productoId) => items.find(i => i.producto_id === productoId)?.cantidad || 0
 
@@ -1107,20 +1151,20 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
 // ─── MODAL INVENTARIO ─────────────────────────────────────────
 function ModalInventario({ caseta, perfil, productos, stockActual, onClose, showToast }) {
   const [items, setItems]       = useState(() =>
-    productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, cantidad_real: stockActual[p.id] ?? 0 }))
+    productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, cantidad_real: 0 }))
   )
   const [busq, setBusq]         = useState('')
   const [catFiltro, setCatFiltro] = useState('Todos')
   const [loading, setLoading]   = useState(false)
   const [enviado, setEnviado]   = useState(false)
 
-  const cats = ['Todos', ...new Set(productos.map(p => p.categoria))]
+  const cats = ['Todos', ...new Set(productos.map(p => p.categoria).sort())]
 
   const itemsFiltrados = items.filter(i => {
     const bOk = !busq || i.nombre.toLowerCase().includes(busq.toLowerCase())
     const cOk = catFiltro === 'Todos' || i.categoria === catFiltro
     return bOk && cOk
-  })
+  }).sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
 
   const setQty = (productoId, val) => {
     const q = Math.max(0, parseInt(val) || 0)
@@ -1180,14 +1224,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
             <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: '.82rem', fontWeight: 600 }}>{item.nombre}</div>
-                <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>
-                  Stock teórico: {stockActual[item.producto_id] ?? 0}
-                  {item.cantidad_real !== (stockActual[item.producto_id] ?? 0) && (
-                    <span style={{ marginLeft: 6, color: item.cantidad_real < (stockActual[item.producto_id] ?? 0) ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>
-                      ({item.cantidad_real - (stockActual[item.producto_id] ?? 0) >= 0 ? '+' : ''}{item.cantidad_real - (stockActual[item.producto_id] ?? 0)})
-                    </span>
-                  )}
-                </div>
+                <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>{item.categoria}</div>
               </div>
               <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad_real - 1)}>−</button>
               <input type="number" value={item.cantidad_real} min="0"
@@ -1200,7 +1237,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
         </div>
 
         <div style={{ padding: '10px 0', fontSize: '.78rem', color: 'var(--tx2)' }}>
-          {items.filter(i => i.cantidad_real !== (stockActual[i.producto_id] ?? 0)).length} diferencias encontradas
+          {items.filter(i => i.cantidad_real > 0).length} de {items.length} productos con stock contado
         </div>
 
         <button className="btn-p" disabled={loading} onClick={enviar}>
@@ -1559,9 +1596,9 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
 // Configuración fiscal de la empresa — editar aquí o mover a BD
 const CONFIG_EMPRESA = {
   nombre:    'Caballer',
-  razonSocial: 'Caballer Pirotecnia, S.L.',
+  razonSocial: 'Green Peony, S.L.',
   direccion: 'C/ Ejemplo 12, 46000 Valencia',
-  cif:       'B00000000',   // ← Cambiar por el CIF real
+  cif:       ' B18898551',   // ← Cambiar por el CIF real
   telefono:  '',
   web:       '',
   textoLegal: 'Es imprescindible presentar el ticket para cualquier reclamación. Solo se aceptan devoluciones de artículos defectuosos, en cuyo caso será por otro igual o similar.',
@@ -1569,13 +1606,16 @@ const CONFIG_EMPRESA = {
 }
 
 function generarTicketHTML(datos) {
-  const { items, total, metodo, cambio, caseta, perfil, fecha, ticketNum } = datos
+  const { items, total, metodo, cambio, dineroDado = 0, descuento = 0, descuentoPct = 0, caseta, perfil, fecha, ticketNum } = datos
+  const ahorroOfertas = items.reduce((s, i) => s + (i.precio * i.cantidad - i.total_linea), 0)
   const iva = CONFIG_EMPRESA.iva / 100
   const baseImponible = total / (1 + iva)
   const cuotaIva = total - baseImponible
   const totalNEC = items.reduce((s, i) => s + (i.gramos_polvora || 0) * i.cantidad, 0)
   const fmtE = n => n.toFixed(2) + '€'
-  const fmtFecha = d => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  const fmtFecha = d =>
+    `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ` +
+    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -1585,167 +1625,160 @@ function generarTicketHTML(datos) {
 <title>Ticket ${ticketNum}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
   body {
     font-family: 'Courier New', Courier, monospace;
-    font-size: 11px;
+    font-size: 14px;
+    font-weight: bold;       /* TODO EN BOLD por defecto */
     width: 80mm;
     max-width: 80mm;
     color: #000;
     background: #fff;
-    padding: 4mm;
+    padding: 2mm 2mm 0 2mm; /* Sin padding inferior = sin espacio en blanco al final */
+    line-height: 1;
   }
-  .center { text-align: center; }
-  .right { text-align: right; }
-  .bold { font-weight: bold; }
-  .logo {
-    text-align: center;
-    font-family: Arial Black, sans-serif;
-    font-size: 26px;
-    font-weight: 900;
-    letter-spacing: 3px;
-    color: #000;
-    margin: 4px 0 2px;
-    text-transform: uppercase;
-  }
-  .logo-sub {
-    text-align: center;
-    font-size: 9px;
-    letter-spacing: 2px;
-    color: #444;
-    margin-bottom: 6px;
-    text-transform: uppercase;
-  }
-  .separator { border: none; border-top: 1px dashed #000; margin: 5px 0; }
-  .separator-solid { border: none; border-top: 1px solid #000; margin: 5px 0; }
-  .empresa { text-align: center; font-size: 10px; line-height: 1.5; margin-bottom: 4px; }
-  .num-fecha {
-    display: flex;
-    justify-content: space-between;
-    font-size: 10px;
-    margin: 3px 0;
-  }
+
+  /* ── SEPARADORES ── */
+  .sep-solid { border: none; border-top: 2px solid #000; margin: 5px 3px; }
+  .sep-dash  { border: none; border-top: 1px dashed #000; margin: 5px 3px; }
+
+  /* ── LOGO ── */
+  .logo     { text-align: center; margin: 2px 0 1px; }
+  .logo svg { display: block; margin: 0 auto; width: 28mm; max-width: 100%; height: auto; }
+
+  /* ── EMPRESA ── */
+  .empresa        { text-align: center; font-size: 13px; font-weight: bold; line-height: 1.2; }
+
+  /* ── NÚMERO / FECHA ── */
+  .num-fecha { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin: 2px 0; }
+
+  /* ── CABECERA COLUMNAS ── */
   .col-header {
     display: flex;
     justify-content: space-between;
+    font-size: 13px;
     font-weight: bold;
-    font-size: 10px;
     border-bottom: 1px solid #000;
     padding-bottom: 2px;
-    margin-bottom: 3px;
+    margin-bottom: 5px;
   }
-  .item {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 2px;
-    font-size: 10px;
-    gap: 4px;
-  }
-  .item-nombre { flex: 1; }
-  .item-uds { width: 20px; text-align: right; flex-shrink: 0; }
-  .item-precio { width: 38px; text-align: right; flex-shrink: 0; }
-  .item-total { width: 38px; text-align: right; flex-shrink: 0; }
-  .desglose { font-size: 10px; margin: 3px 0; }
-  .desglose div { display: flex; justify-content: space-between; padding: 1px 0; }
-  .total-line {
-    display: flex;
-    justify-content: space-between;
-    font-size: 15px;
+
+  /* ── ITEMS ── */
+  .item        { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin-bottom: 2px; }
+  .item-uds    { width: 22px; text-align: center; flex-shrink: 0; }
+  .item-nombre { flex: 1; padding: 0 3px; }
+  .item-precio { width: 40px; text-align: right; flex-shrink: 0; }
+  .item-sep    { width: 6px; flex-shrink: 0; } /* ← Espacio entre Precio y Subt */
+  .item-total  { width: 40px; text-align: right; flex-shrink: 0; }
+
+  /* ── DESGLOSE ── */
+  .desglose       { font-size: 13px; font-weight: bold; margin: 2px 0; }
+  .desglose .fila { display: flex; justify-content: space-between; padding: 1px 0; font-size: 12px; }
+
+  /* ── TOTAL ── */
+  .total-line { display: flex; justify-content: space-between; font-size: 19px; font-weight: bold; margin: 3px 0; }
+
+  /* ── PAGO ── */
+  .pago   { font-size: 13px; font-weight: bold; text-align: center; margin: 2px 0; }
+  .cambio { font-size: 14px; font-weight: bold; text-align: center; margin: 2px 0; }
+
+  /* ── TEXTO LEGAL ── */
+  .legal { font-size: 11px; font-weight: bold; text-align: center; line-height: 1.35; margin-top: 3px; }
+
+  /* ── GLOSARIO (igual que ticket referencia) ── */
+  .glosario {
+    font-size: 11px;
     font-weight: bold;
-    margin: 4px 0;
+    margin-top: 4px;
+    border-top: 1px dashed #000;
+    padding-top: 3px;
+    line-height: 1;
+    margin-bottom: 0;
   }
-  .pago { font-size: 10px; text-align: center; margin: 3px 0; }
-  .cambio { font-size: 11px; text-align: center; font-weight: bold; margin: 2px 0; }
-  .legal { font-size: 9px; text-align: center; color: #444; margin-top: 5px; line-height: 1.4; }
-  .glosario { font-size: 8.5px; color: #666; margin-top: 5px; border-top: 1px dashed #999; padding-top: 3px; }
+
   @media print {
-    body { width: 80mm; }
+    body { padding: 1mm 1mm 0 1mm; }
     @page { margin: 0; size: 80mm auto; }
   }
 </style>
 </head>
 <body>
 
-  <!-- LOGO CABALLER -->
-  <div class="logo">★ CABALLER ★</div>
-  <div class="logo-sub">Pirotecnia</div>
-  <hr class="separator-solid">
+  <!-- LOGO -->
+  <div class="logo">${logoMonoSVG}</div>
+  <hr class="sep-solid">
 
-  <!-- DATOS EMPRESA -->
+  <!-- EMPRESA -->
   <div class="empresa">
-    <div class="bold">${CONFIG_EMPRESA.razonSocial}</div>
-    <div>${caseta?.nombre || ''}</div>
-    <div>${caseta?.direccion || CONFIG_EMPRESA.direccion}</div>
-    <div>CIF: ${CONFIG_EMPRESA.cif}</div>
+    <div>${CONFIG_EMPRESA.razonSocial}</div>
+    <div class="light">${caseta?.nombre || ''}</div>
+    <div class="light">${caseta?.direccion || CONFIG_EMPRESA.direccion}</div>
+    <div class="light">CIF: ${CONFIG_EMPRESA.cif}</div>
   </div>
-  <hr class="separator">
+  <hr class="sep-dash">
 
   <!-- NÚMERO Y FECHA -->
   <div class="num-fecha">
-    <span class="bold">${ticketNum}</span>
+    <span>${ticketNum}</span>
     <span>${fmtFecha(fecha)}</span>
   </div>
-  <hr class="separator">
+  <hr class="sep-dash">
 
   <!-- CABECERA PRODUCTOS -->
   <div class="col-header">
-    <span style="width:20px">Uds</span>
-    <span style="flex:1;margin-left:4px">Producto</span>
-    <span style="width:38px;text-align:right">Precio</span>
-    <span style="width:38px;text-align:right">Subt</span>
+    <span style="width:22px;text-align:center">Uds</span>
+    <span style="flex:1;padding-left:3px">Producto</span>
+    <span style="width:40px;text-align:right">Precio</span>
+    <span class="item-sep"></span>
+    <span style="width:40px;text-align:right">Subt</span>
   </div>
 
-  <!-- LÍNEAS DE PRODUCTO -->
+  <!-- ITEMS -->
   ${items.map(i => `
   <div class="item">
     <span class="item-uds">${i.cantidad}</span>
-    <span class="item-nombre" style="margin-left:4px">${i.nombre}</span>
+    <span class="item-nombre">${i.nombre}${i.precio * i.cantidad > i.total_linea ? ' *' : ''}</span>
     <span class="item-precio">${fmtE(i.precio)}</span>
+    <span class="item-sep"></span>
     <span class="item-total">${fmtE(i.total_linea)}</span>
   </div>`).join('')}
 
-  <hr class="separator">
+  <hr class="sep-dash">
+
+  ${ahorroOfertas > 0.005 ? `<div class="desglose"><div class="fila"><span>* Ahorro ofertas:</span><span>-${fmtE(ahorroOfertas)}</span></div></div>` : ''}
+  ${descuento > 0 ? `<div class="desglose"><div class="fila"><span>Descuento (${descuentoPct}%):</span><span>-${fmtE(descuento)}</span></div></div>` : ''}
 
   <!-- DESGLOSE FISCAL -->
   <div class="desglose">
-    <div style="font-weight:bold;margin-bottom:2px">Desglose fiscal:</div>
-    <div><span>Base imponible:</span><span>${fmtE(baseImponible)}</span></div>
-    <div><span>I.V.A. (${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
-    <div><span>TOTAL N.E.C.:</span><span>${totalNEC.toFixed(2)}g</span></div>
+    <div>Desglose TOTAL:</div>
+    <div class="fila"><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div>
+    <div class="fila"><span>I.V.A. (${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
+    <div class="fila"><span>N.E.C.:</span><span>${totalNEC.toFixed(2)}g</span></div>
   </div>
-  <hr class="separator-solid">
+  <hr class="sep-solid">
 
   <!-- TOTAL -->
   <div class="total-line">
     <span>TOTAL:</span>
     <span>${fmtE(total)}</span>
   </div>
-  <hr class="separator">
+  <hr class="sep-solid">
 
   <!-- PAGO -->
-  <div class="pago">
-    Forma de pago: <strong>${metodo === 'efectivo' ? 'Efectivo' : 'Tarjeta'}</strong>
-  </div>
-  ${metodo === 'efectivo' && cambio > 0 ? `<div class="cambio">Cambio: ${fmtE(cambio)}</div>` : ''}
-  <div class="pago"><strong>I.V.A. incluido</strong></div>
-  <hr class="separator">
-
-  <!-- NEC — solo si hay pólvora 
-  ${totalNEC > 0 ? `
-  <div class="desglose" style="border:1px solid #ccc;padding:4px 6px;border-radius:3px;margin-bottom:4px">
-    <div style="font-weight:bold;margin-bottom:3px">💥 Contenido Neto Explosivo (N.E.C.)</div>
-    ${items.filter(i => (i.gramos_polvora||0) > 0).map(i =>
-      `<div><span>${i.nombre} x${i.cantidad}:</span><span>${((i.gramos_polvora||0)*i.cantidad).toFixed(2)} g</span></div>`
-    ).join('')}
-    <div style="font-weight:bold;border-top:1px solid #ccc;margin-top:3px;padding-top:3px">
-      <span>TOTAL N.E.C.:</span><span>${totalNEC.toFixed(2)} g (${(totalNEC/1000).toFixed(4)} kg)</span>
-    </div>
-  </div>
-  <hr class="separator">` : ''} -->
+  <div class="pago">Forma de pago: ${metodo === 'efectivo' ? 'Efectivo' : 'Tarjeta'}</div>
+  ${metodo === 'efectivo' && dineroDado > 0 ? `<div class="cambio">Entregado: ${fmtE(dineroDado)}</div><div class="cambio">Cambio: ${fmtE(cambio)}</div>` : ''}
+  <div class="pago">I.V.A. incluido</div>
+  <hr class="sep-dash">
 
   <!-- TEXTO LEGAL -->
   <div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
-  <!--- ${totalNEC > 0 ? '<div class="glosario">N.E.C.: Net Explosive Content — Contenido Neto en Explosivos según normativa pirotécnica.</div>' : ''} --->
+
+  <!-- GLOSARIO (igual que ticket referencia) -->
+<div class="glosario">
+  <div>Subt.* : Subtotal</div>
+  <div>B.I.* : Base Imponible</div>
+  <div>N.E.C.* : Contenido Neto Explosivo</div>
+</div>
 
 </body>
 </html>`
@@ -1781,6 +1814,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [ventas,         setVentas]         = useState([])
   const [loading,        setLoading]        = useState(true)
   const [ticket,         setTicket]         = useState([])
+  const [descuento,      setDescuento]      = useState(0)
   const [busq,           setBusq]           = useState('')
   const [cat,            setCat]            = useState('Todos')
   const [showScan,       setShowScan]       = useState(false)
@@ -1819,7 +1853,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   useEffect(() => { sessionStorage.setItem('tpv_tab', tabTPV) }, [tabTPV])
   useEffect(() => { sessionStorage.setItem('tpv_cat', cat2) }, [cat2])
 
-  const CATS = ['Todos', ...new Set(productos.map(p => p.categoria))].filter(Boolean)
+  const CATS = ['Todos', ...new Set(productos.map(p => p.categoria).sort())].filter(Boolean)
 
   useEffect(() => {
     if (!caseta) return
@@ -1885,6 +1919,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     setTicket(prev => {
       const idx = prev.findIndex(i => i.id === prod.id)
       if (idx >= 0) {
+        // Click simple (cantidad=1) → toggle: quitar del ticket
+        if (cantidad === 1) return prev.filter(i => i.id !== prod.id)
         const nuevaCant = prev[idx].cantidad + cantidad
         if (nuevaCant > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
         const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
@@ -1908,7 +1944,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     return { ...i, cantidad: q }
   }).filter(Boolean))
 
-  const total = calcularTotalTicket(ticket, ofertas)
+  const totalBruto = calcularTotalTicket(ticket, ofertas)
+  const descuentoImporte = Math.round(totalBruto * descuento) / 100
+  const total = Math.max(0, totalBruto - descuentoImporte)
 
   const confirmarVenta = async ({ metodo, dineroDado, cambio }) => {
     // Doble check en el momento de ejecutar (no en el render)
@@ -1930,11 +1968,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       })
       setVentas(prev => [...prev, { metodo_pago: metodo, total, perfiles: { nombre: perfil.nombre } }])
       if (modoRapido) {
-        setTicket([]); setShowPago(false)
+        setTicket([]); setDescuento(0); setShowPago(false)
         showToast(`✓ Venta ${fmt(total)} · ${metodo === 'efectivo' ? `Cambio: ${fmt(cambio)}` : 'Tarjeta'}`)
       } else {
         const ticketData = {
-          metodo, total, cambio,
+          metodo, total, cambio, dineroDado, descuento: descuentoImporte, descuentoPct: descuento,
           items: ticket.map(i => {
             const { total: tl } = calcularPrecio(i.id, i.cantidad, i.precio, ofertas)
             return { nombre: i.nombre, cantidad: i.cantidad, precio: i.precio, total_linea: tl, gramos_polvora: i.gramos_polvora || 0 }
@@ -1944,7 +1982,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           ticketNum: ticketResult?.numero_ticket || `TVN-${Date.now().toString().slice(-6)}`,
         }
         if (ticketActivo) setShowOk(ticketData)
-        setTicket([]); setShowPago(false)
+        setTicket([]); setDescuento(0); setShowPago(false)
       }
     } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
   }
@@ -1995,6 +2033,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   if (busq) prodsFiltrados = prodsFiltrados.filter(p =>
     p.nombre.toLowerCase().includes(busq.toLowerCase()) || p.codigo_ean?.includes(busq)
   )
+  prodsFiltrados = [...prodsFiltrados].sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
 
   const botonesRapidos = productos.filter(p =>
     ['mecha', 'bolsa', 'cebador'].some(kw => p.nombre.toLowerCase().includes(kw))
@@ -2303,7 +2342,18 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                   </div>
                 ) : null
               })}
-              <div className="ttr">
+                {ticket.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0', borderTop: '1px dashed rgba(255,255,255,.1)', margin: '2px 0' }}>
+                  <span style={{ fontSize: '.72rem', color: 'var(--tx2)', flexShrink: 0 }}>Descuento</span>
+                  <input type="number" min="0" max="100" step="1" value={descuento || ''} placeholder="0"
+                    onChange={e => setDescuento(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                    style={{ flex: 1, background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '4px 8px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif", fontSize: '.82rem', textAlign: 'right' }}
+                    inputMode="numeric" />
+                  <span style={{ fontSize: '.82rem', color: 'var(--tx2)', flexShrink: 0 }}>%</span>
+                  {descuento > 0 && <button onClick={() => setDescuento(0)} style={{ background: 'none', border: 'none', color: 'var(--tx2)', cursor: 'pointer', fontSize: '.8rem', padding: 0 }}>✕</button>}
+                </div>
+              )}
+            <div className="ttr">
                 <span className="ttl">TOTAL</span>
                 <span className="tta">{fmt(total)}</span>
               </div>
@@ -2324,7 +2374,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                   : 'Finalizar Venta →'}
               </button>
               {ticket.length > 0 && (
-                <button className="bclr" onClick={() => setTicket([])}>✕ Limpiar ticket</button>
+                <button className="bclr" onClick={() => { setTicket([]); setDescuento(0) }}>✕ Limpiar ticket</button>
               )}
             </div>
           </div>
