@@ -275,3 +275,28 @@ tr:hover td { background: var(--s2); }
 
 .hide-mobile { display: inline; }
 @media (max-width: 768px) { .hide-mobile { display: none; } }
+
+/* ─── BOTÓN FLOTANTE SCROLL (solo móvil) ─────────────────── */
+.btn-scroll-flotante { display: none; }
+@media (max-width: 768px) {
+  .btn-scroll-flotante {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    bottom: 22px;
+    right: 14px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--ac);
+    color: white;
+    font-size: 1.25rem;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(255,77,28,.45);
+    z-index: 900;
+    transition: transform .15s;
+  }
+  .btn-scroll-flotante:active { transform: scale(.92); }
+}

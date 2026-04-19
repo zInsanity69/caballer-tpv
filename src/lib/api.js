@@ -10,7 +10,7 @@ export async function logout() { await supabase.auth.signOut() }
 
 export async function getPerfil(userId) {
   const { data, error } = await supabase
-    .from('perfiles').select('*, casetas(id, nombre)').eq('id', userId).single()
+    .from('perfiles').select('*, casetas(id, nombre, pedidos_auto_activos, hora_corte_pedidos)').eq('id', userId).single()
   if (error) throw error
   return data
 }
@@ -146,6 +146,12 @@ export async function upsertCaseta(caseta) {
 
 export async function deleteCaseta(id) {
   const { error } = await supabase.from('casetas').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function updateAllPedidosAuto(activos) {
+  const { error } = await supabase.from('casetas').update({ pedidos_auto_activos: activos })
+    .neq('id', '00000000-0000-0000-0000-000000000000') // aplica a todas
   if (error) throw error
 }
 
@@ -371,7 +377,7 @@ export function toggleFavorito(productoId) {
 // ─── PEDIDOS ─────────────────────────────────────────────────
 export async function getPedidos(filtros = {}) {
   let q = supabase.from('pedidos')
-    .select('*, casetas(nombre), perfiles(nombre), pedido_items(id, producto_id, cantidad, cantidad_recibida, notas_item, productos(id, nombre, categoria))')
+    .select('*, casetas(nombre), perfiles(nombre), pedido_items(id, producto_id, cantidad, cantidad_recibida, notas_item, origen, productos(id, nombre, categoria, empresa, fardo))')
     .order('creado_en', { ascending: false })
   if (filtros.casetaId) q = q.eq('caseta_id', filtros.casetaId)
   if (filtros.estado)   q = q.eq('estado', filtros.estado)
@@ -386,10 +392,30 @@ export async function crearPedido(casetaId, empleadoId, items, notas = '') {
     .insert({ caseta_id: casetaId, empleado_id: empleadoId, notas, estado: 'PENDIENTE' })
     .select().single()
   if (e1) throw e1
-  const filas = items.map(i => ({ pedido_id: pedido.id, producto_id: i.producto_id, cantidad: i.cantidad }))
+  const filas = items.map(i => ({ pedido_id: pedido.id, producto_id: i.producto_id, cantidad: i.cantidad, origen: i.origen || 'manual' }))
   const { error: e2 } = await supabase.from('pedido_items').insert(filas)
-  if (e2) throw e2
+  if (e2) {
+    if (e2.code === '42703') {
+      // columna origen no existe aún — reintenta sin ella
+      const filasSin = items.map(i => ({ pedido_id: pedido.id, producto_id: i.producto_id, cantidad: i.cantidad }))
+      const { error: e3 } = await supabase.from('pedido_items').insert(filasSin)
+      if (e3) throw e3
+    } else throw e2
+  }
   return pedido
+}
+
+export async function getStockMinimos(casetaId) {
+  const { data, error } = await supabase
+    .from('stock').select('producto_id, stock_minimo').eq('caseta_id', casetaId)
+  if (error) return {}
+  return Object.fromEntries((data || []).map(s => [s.producto_id, s.stock_minimo || 0]))
+}
+
+export async function setStockMinimo(productoId, casetaId, minimo) {
+  const { error } = await supabase.from('stock')
+    .upsert({ producto_id: productoId, caseta_id: casetaId, stock_minimo: minimo }, { onConflict: 'producto_id,caseta_id' })
+  if (error) throw error
 }
 
 export async function updatePedido(pedidoId, cambios) {

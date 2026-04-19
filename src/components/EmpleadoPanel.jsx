@@ -6,7 +6,7 @@ import {
   getCajaAbierta, abrirCaja, cerrarCaja,
   getResumenCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
   getFavoritos, toggleFavorito,
-  getPedidos, crearPedido, confirmarRecepcionPedido,
+  getPedidos, crearPedido, confirmarRecepcionPedido, getStockMinimos,
   crearInventario, getInventarios, confirmarInventario,
   getKgPolvora, getLimitePolvora,
   getUltimoFichaje, fichar, getFichajesEmpleado, calcularTurnos, calcularEstado, fmtDuracion,
@@ -692,9 +692,24 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
 }
 
 // ─── MODAL PEDIDO ─────────────────────────────────────────────
-function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, showToast }) {
-  // Vista doble: catálogo con stock actual + lista del pedido
-  const [items, setItems]       = useState([])
+function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedidosActivosProdIds = new Set(), itemsIniciales = null, onClose, onCreado, showToast }) {
+  const [items, setItems] = useState(() => {
+    // Si hay borrador guardado, usarlo directamente
+    if (itemsIniciales && itemsIniciales.length > 0) return itemsIniciales
+    // Si no, calcular auto items
+    const auto = Object.entries(stockMinimos)
+      .filter(([prodId, min]) => min > 0 && (stock[prodId] ?? 0) < min && !pedidosActivosProdIds.has(prodId))
+      .map(([prodId, min]) => {
+        const p = productos.find(pr => pr.id === prodId)
+        if (!p) return null
+        const diff = Math.max(1, min - (stock[prodId] ?? 0))
+        const fardoSize = Math.max(1, p.fardo || 1)
+        const cantidad = Math.ceil(diff / fardoSize) * fardoSize
+        return { producto_id: prodId, nombre: p.nombre, cantidad, fardo: fardoSize, origen: 'auto' }
+      })
+      .filter(Boolean)
+    return auto
+  })
   const [notas, setNotas]       = useState('')
   const [busq, setBusq]         = useState('')
   const [catFiltro, setCatFiltro] = useState('Todos')
@@ -720,7 +735,7 @@ function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, show
         const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
       }
       if (delta <= 0) return prev
-      return [...prev, { producto_id: p.id, nombre: p.nombre, cantidad: delta }]
+      return [...prev, { producto_id: p.id, nombre: p.nombre, cantidad: delta, fardo: Math.max(1, p.fardo || 1), origen: 'manual' }]
     })
   }
 
@@ -744,7 +759,7 @@ function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, show
   }
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose(items)}>
       <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
         <div className="mt-modal">📦 Nuevo Pedido</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
@@ -843,6 +858,9 @@ function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, show
                       <span style={{ color: 'var(--tx2)', opacity: .7 }}>{p.categoria}</span>
                       <span style={{ color: 'var(--tx2)', opacity: .6 }}>{fmt(p.precio)}</span>
                       {enPedido > 0 && <span style={{ color: 'var(--ac)', fontWeight: 700, marginLeft: 'auto' }}>En pedido: {enPedido}</span>}
+                      {items.find(i => i.producto_id === p.id)?.origen === 'auto' && enPedido > 0 && (
+                        <span style={{ fontSize: '.62rem', background: 'rgba(96,165,250,.15)', color: 'var(--blue)', border: '1px solid rgba(96,165,250,.3)', borderRadius: 6, padding: '1px 5px', fontWeight: 700 }}>auto</span>
+                      )}
                     </div>
                   </div>
                 )
@@ -872,10 +890,18 @@ function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, show
                 </div>
               ) : items.map(item => (
                 <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--bd)' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '.85rem', fontWeight: 600 }}>{item.nombre}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      {item.nombre}
+                      {item.origen === 'auto'
+                        ? <span style={{ fontSize: '.62rem', background: 'rgba(96,165,250,.15)', color: 'var(--blue)', border: '1px solid rgba(96,165,250,.3)', borderRadius: 6, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>auto</span>
+                        : <span style={{ fontSize: '.62rem', background: 'rgba(144,144,168,.1)', color: 'var(--tx2)', border: '1px solid rgba(144,144,168,.2)', borderRadius: 6, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>manual</span>
+                      }
+                    </div>
                     <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>
-                      Stock actual: {stock[item.producto_id] ?? 0}
+                      Stock: {stock[item.producto_id] ?? 0}
+                      {item.origen === 'auto' && ` · mín. ${stockMinimos[item.producto_id] || 0}`}
+                      {(item.fardo || 1) > 1 && ` · fardo ${item.fardo} uds → ${Math.ceil(item.cantidad / item.fardo)} fardos`}
                     </div>
                   </div>
                   <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad - 1)}>−</button>
@@ -901,14 +927,14 @@ function ModalPedido({ caseta, perfil, productos, stock, onClose, onCreado, show
           </>
         )}
 
-        <button className="btn-s" onClick={onClose}>Cancelar</button>
+        <button className="btn-s" onClick={() => onClose(items)}>Cancelar</button>
       </div>
     </div>
   )
 }
 
 // ─── MODAL MIS PEDIDOS ────────────────────────────────────────
-function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
+function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onRecibido }) {
   const [pedidos, setPedidos]       = useState([])
   const [loading, setLoading]       = useState(true)
   const [recibiendo, setRecibiendo] = useState(null)
@@ -945,6 +971,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
         ? { ...p, estado: hayIncidencia ? 'INCIDENCIA' : 'RECIBIDO' }
         : p))
       setRecibiendo(null)
+      onRecibido && onRecibido()
     } catch (e) { showToast('Error: ' + e.message, 'error') }
     setSaving(false)
   }
@@ -955,6 +982,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
     EN_CAMINO:  'var(--ac)',
     RECIBIDO:   'var(--green)',
     INCIDENCIA: 'var(--red)',
+    RECHAZADO:  'var(--red)',
   }
   const ESTADO_LABEL = {
     PENDIENTE:  '⏳ Pendiente',
@@ -962,6 +990,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast }) {
     EN_CAMINO:  '🚚 En camino',
     RECIBIDO:   '📦 Recibido',
     INCIDENCIA: '⚠️ Incidencia',
+    RECHAZADO:  '❌ Rechazado',
   }
 
   return (
@@ -1786,20 +1815,15 @@ function generarTicketHTML(datos) {
 
 function imprimirTicket(datos) {
   const html = generarTicketHTML(datos)
-  const ventana = window.open('', '_blank', 'width=400,height=700,scrollbars=yes')
+  const blob = new Blob([html], { type: 'text/html' })
+  const url  = URL.createObjectURL(blob)
+  const ventana = window.open(url, '_blank')
   if (!ventana) {
     alert('El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para esta página.')
+    URL.revokeObjectURL(url)
     return
   }
-  ventana.document.write(html)
-  ventana.document.close()
-  // Imprimir automáticamente tras cargar
-  ventana.onload = () => {
-    ventana.focus()
-    ventana.print()
-    // Cerrar tras imprimir (en algunos navegadores)
-    ventana.onafterprint = () => ventana.close()
-  }
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
 }
 
 export default function EmpleadoPanel({ perfil, casetas }) {
@@ -1835,6 +1859,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [prodModal,      setProdModal]      = useState(null)
   // Persistir panel abierto (pedidos/inventario) para que al volver no pierdan su posición
   const [showPedido,     setShowPedido]     = useState(false)
+  const [pedidoBorrador, setPedidoBorrador] = useState(null) // items guardados al cerrar sin enviar
   const [showMisPedidos, setShowMisPedidos] = useState(()=>sessionStorage.getItem('tpv_panel')==='pedidos')
   const [showInventario, setShowInventario] = useState(()=>sessionStorage.getItem('tpv_panel')==='inventario')
   const [showFichajes,   setShowFichajes]   = useState(false)
@@ -1843,9 +1868,31 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [otrosActivos,   setOtrosActivos]   = useState([]) // otros empleados activos en la caseta
   const [kgPolvora,      setKgPolvora]      = useState(0)
   const [kgLimite,       setKgLimite]       = useState(10)
-  const [pedidosPend,    setPedidosPend]    = useState(0)
+  const [pedidosPend,          setPedidosPend]          = useState(0)
+  const [stockMinimos,         setStockMinimos]         = useState({})
+  const [pedidoActivo,         setPedidoActivo]         = useState(false)
+  const [pedidosActivosProdIds,setPedidosActivosProdIds]= useState(new Set())
+  const [countdown,            setCountdown]            = useState('')
+  const [minsRestantes,        setMinsRestantes]        = useState(9999)
 
   const showToast = (msg, type = 'ok') => { setToast({ msg, type }); setTimeout(() => setToast(null), 2800) }
+
+  const refrescarTras = () => {
+    Promise.all([
+      getStockCaseta(caseta.id),
+      getStockMinimos(caseta.id).catch(() => null),
+      getPedidos({ casetaId: caseta.id, activos: true }).catch(() => []),
+    ]).then(([stk, mins, peds]) => {
+      setStock(stk)
+      if (mins) setStockMinimos(mins)
+      const pedsArr = peds || []
+      setPedidosPend(pedsArr.filter(p => p.estado === 'EN_CAMINO').length)
+      setPedidoActivo(pedsArr.some(p => ['PENDIENTE','ACEPTADO','EN_CAMINO'].includes(p.estado)))
+      const ids = new Set()
+      pedsArr.forEach(p => (p.pedido_items || []).forEach(i => ids.add(i.producto_id)))
+      setPedidosActivosProdIds(ids)
+    })
+  }
 
   // Persistir estado simple en sessionStorage
   useEffect(() => { sessionStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
@@ -1861,11 +1908,18 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       getProductos(), getStockCaseta(caseta.id),
       getOfertas(), getCajaAbierta(caseta.id),
       getKgPolvora(caseta.id), getLimitePolvora(caseta.id),
-      getPedidos({ casetaId: caseta.id, activos: true }),
-    ]).then(([prods, stk, ofs, cajaAbierta, kg, limite, peds]) => {
+      getPedidos({ casetaId: caseta.id, activos: true }).catch(() => []),
+      getStockMinimos(caseta.id).catch(() => {}),
+    ]).then(([prods, stk, ofs, cajaAbierta, kg, limite, peds, mins]) => {
       setProductos(prods); setStock(stk); setOfertas(ofs)
       setKgPolvora(kg); setKgLimite(limite)
-      setPedidosPend(peds.filter(p => p.estado === 'EN_CAMINO').length)
+      setStockMinimos(mins || {})
+      const pedsArr = peds || []
+      setPedidosPend(pedsArr.filter(p => p.estado === 'EN_CAMINO').length)
+      setPedidoActivo(pedsArr.some(p => ['PENDIENTE','ACEPTADO','EN_CAMINO'].includes(p.estado)))
+      const ids = new Set()
+      pedsArr.forEach(p => (p.pedido_items || []).forEach(i => ids.add(i.producto_id)))
+      setPedidosActivosProdIds(ids)
       if (cajaAbierta) { setCaja(cajaAbierta); getResumenCaja(cajaAbierta.id).then(setVentas) }
     }).finally(() => setLoading(false))
     // Cargar último fichaje y otros empleados activos en caseta
@@ -1886,6 +1940,77 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       .subscribe()
     return () => supabase.removeChannel(ch)
   }, [caseta?.id])
+
+  // Refs para el auto-envío (evitan closures stale en el interval)
+  const stockRef              = useRef({})
+  const stockMinimosRef       = useRef({})
+  const productosRef          = useRef([])
+  const pedidoActivoRef       = useRef(false)
+  const pedidosActivoProdRef  = useRef(new Set())
+  const autoEnviadoRef        = useRef(null) // "YYYY-MM-DD" del último auto-envío
+  useEffect(() => { stockRef.current = stock },                         [stock])
+  useEffect(() => { stockMinimosRef.current = stockMinimos },           [stockMinimos])
+  useEffect(() => { productosRef.current = productos },                 [productos])
+  useEffect(() => { pedidoActivoRef.current = pedidoActivo },          [pedidoActivo])
+  useEffect(() => { pedidosActivoProdRef.current = pedidosActivosProdIds }, [pedidosActivosProdIds])
+
+  useEffect(() => {
+    const horaCorte = caseta?.hora_corte_pedidos
+    if (!horaCorte || !caseta?.pedidos_auto_activos) return
+
+    const tick = () => {
+      const now  = new Date()
+      const [h, m] = horaCorte.slice(0, 5).split(':').map(Number)
+      const corte = new Date(now); corte.setHours(h, m, 0, 0)
+
+      // ¿Acabamos de pasar la hora de corte? (ventana de 90 s)
+      const msPasados = now - corte
+      if (msPasados >= 0 && msPasados < 90000) {
+        const hoyStr = now.toISOString().slice(0, 10)
+        if (autoEnviadoRef.current !== hoyStr && !pedidoActivoRef.current) {
+          autoEnviadoRef.current = hoyStr
+          // Calcular items necesarios
+          const autoItems = productosRef.current.filter(p => {
+            const min = stockMinimosRef.current[p.id] || 0
+            return min > 0 && (stockRef.current[p.id] ?? 0) < min && !pedidosActivoProdRef.current.has(p.id)
+          }).map(p => {
+            const min  = stockMinimosRef.current[p.id]
+            const diff = Math.max(1, min - (stockRef.current[p.id] ?? 0))
+            const fardoSize = Math.max(1, p.fardo || 1)
+            return { producto_id: p.id, nombre: p.nombre, cantidad: Math.ceil(diff / fardoSize) * fardoSize, fardo: fardoSize, origen: 'auto' }
+          })
+          if (autoItems.length > 0) {
+            crearPedido(caseta.id, perfil.id, autoItems, 'Pedido automático generado a la hora de corte')
+              .then(() => {
+                showToast('🤖 Pedido automático enviado al administrador')
+                refrescarTras()
+              })
+              .catch(e => {
+                showToast('Error en pedido automático: ' + e.message, 'error')
+              })
+          }
+        }
+        // Después de la hora de corte el countdown apunta a mañana
+        corte.setDate(corte.getDate() + 1)
+      } else if (now < corte) {
+        // Nada — corte es hoy en el futuro
+      } else {
+        // Pasó hace > 90 s, apuntamos a mañana
+        corte.setDate(corte.getDate() + 1)
+      }
+
+      const diff     = corte - now
+      const totalMins = Math.floor(diff / 60000)
+      setMinsRestantes(totalMins)
+      const hs = Math.floor(totalMins / 60)
+      const ms = totalMins % 60
+      setCountdown(`${hs}h ${ms}m`)
+    }
+
+    tick()
+    const iv = setInterval(tick, 30000) // cada 30 s para no perdernos la ventana
+    return () => clearInterval(iv)
+  }, [caseta?.hora_corte_pedidos, caseta?.pedidos_auto_activos, caseta?.id, perfil?.id])
 
   const handleAbrirCaja = async () => {
     try {
@@ -2155,7 +2280,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               </span>
             )}
           </button>
-          <button className="btn-o subbar-btn" onClick={() => setShowPedido(true)}>
+          <button className="btn-o subbar-btn" onClick={() => !pedidoActivo && setShowPedido(true)}
+            disabled={pedidoActivo} title={pedidoActivo ? 'Ya hay un pedido activo' : undefined}
+            style={pedidoActivo ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}>
             <span className="btn-icon">📤</span><span className="btn-label"> Pedir</span>
           </button>
           <button className="btn-o subbar-btn" onClick={() => { setShowInventario(true); sessionStorage.setItem('tpv_panel','inventario') }}>
@@ -2175,6 +2302,41 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       </div>
 
       <div className="cnt">
+        {/* ── Banner pedido automático ── */}
+        {(() => {
+          if (!caseta?.pedidos_auto_activos) return null
+          if (pedidoActivo) return null
+          if (minsRestantes > 120) return null
+          const autoItems = productos.filter(p => {
+            const min = stockMinimos[p.id] || 0
+            return min > 0 && (stock[p.id] ?? 0) < min && !pedidosActivosProdIds.has(p.id)
+          })
+          if (autoItems.length === 0) return null
+          const urgente = minsRestantes <= 30
+          return (
+            <div style={{
+              background: urgente ? 'rgba(239,68,68,.08)' : 'rgba(255,77,28,.08)',
+              border: `1px solid ${urgente ? 'rgba(239,68,68,.35)' : 'rgba(255,77,28,.35)'}`,
+              borderRadius: 'var(--r)', padding: '10px 14px', marginBottom: 12,
+              display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: '.84rem', marginBottom: 2 }}>
+                  {urgente ? '🚨' : '🤖'} {autoItems.length} producto{autoItems.length !== 1 ? 's' : ''} por debajo del mínimo
+                </div>
+                <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
+                  Hora de corte: {caseta.hora_corte_pedidos?.slice(0,5)} · faltan {countdown}
+                </div>
+              </div>
+              <button onClick={() => setShowPedido(true)} style={{
+                flexShrink: 0, padding: '7px 14px', borderRadius: 'var(--rs)',
+                background: 'var(--ac)', border: '1px solid var(--ac)', color: 'white',
+                fontWeight: 700, cursor: 'pointer', fontSize: '.8rem', fontFamily: "'DM Sans',sans-serif",
+              }} disabled={pedidoActivo}>Generar pedido →</button>
+            </div>
+          )
+        })()}
+
         <div className="tpvg">
           {/* Panel productos */}
           <div className="pp">
@@ -2453,14 +2615,18 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       )}
       {showPedido && (
         <ModalPedido caseta={caseta} perfil={perfil} productos={productos} stock={stock}
+          stockMinimos={stockMinimos}
+          pedidosActivosProdIds={pedidosActivosProdIds}
+          itemsIniciales={pedidoBorrador}
           showToast={showToast}
-          onClose={() => setShowPedido(false)}
-          onCreado={() => { setShowPedido(false) }} />
+          onClose={(itemsActuales) => { setPedidoBorrador(itemsActuales?.length ? itemsActuales : null); setShowPedido(false) }}
+          onCreado={() => { setPedidoBorrador(null); setShowPedido(false); setPedidoActivo(true); refrescarTras() }} />
       )}
       {showMisPedidos && (
         <ModalMisPedidos caseta={caseta} perfil={perfil} productos={productos}
           showToast={showToast}
-          onClose={() => { setShowMisPedidos(false); sessionStorage.removeItem('tpv_panel'); getKgPolvora(caseta.id).then(setKgPolvora) }} />
+          onRecibido={refrescarTras}
+          onClose={() => { setShowMisPedidos(false); sessionStorage.removeItem('tpv_panel'); refrescarTras() }} />
       )}
       {showInventario && (
         <ModalInventario caseta={caseta} perfil={perfil} productos={productos} stockActual={stock}

@@ -5,9 +5,9 @@ import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
   getOfertas, upsertOferta, deleteOferta,
   getPerfiles, updatePerfil, eliminarPerfil, crearUsuario, actualizarCredenciales,
-  getCasetas, upsertCaseta, deleteCaseta,
+  getCasetas, upsertCaseta, deleteCaseta, updateAllPedidosAuto,
   getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota,
-  setStock, ajustarStock, getStockCaseta,
+  setStock, ajustarStock, getStockCaseta, getStockMinimos, setStockMinimo,
   getVentasPorDia,
   getPedidos, updatePedido, updatePedidoItems,
   getFichajesAdmin, editarFichaje, deleteFichaje, calcularTurnos, calcularEstado, fmtDuracion,
@@ -744,7 +744,50 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
   const [toast,setToast]=useState(null)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
 
-  useEffect(()=>{ getPedidos({}).then(setPedidos).finally(()=>setLoading(false)) },[])
+  useEffect(()=>{ getPedidos({}).then(setPedidos).catch(e=>{ setPedidos([]); console.error('getPedidos:',e.message) }).finally(()=>setLoading(false)) },[])
+
+  const imprimirPedidoPDF=(p)=>{
+    const items=p.pedido_items||[]
+    const byEmpresa={}
+    items.forEach(i=>{
+      const emp=i.productos?.empresa||'Sin empresa'
+      if(!byEmpresa[emp]) byEmpresa[emp]=[]
+      const fardo=i.productos?.fardo||1
+      const fardos=fardo>1?Math.ceil(i.cantidad/fardo):null
+      byEmpresa[emp].push({nombre:i.productos?.nombre||'?',cantidad:i.cantidad,fardo,fardos})
+    })
+    const fecha=new Date().toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric'})
+    const estilos=`
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:Arial,sans-serif;font-size:13px;color:#111;padding:20px}
+      h1{font-size:18px;margin-bottom:4px}
+      .sub{color:#555;font-size:12px;margin-bottom:16px}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      th{text-align:left;padding:5px 8px;border-bottom:2px solid #ddd;font-size:11px;color:#555}
+      td{padding:5px 8px;border-bottom:1px solid #eee}
+      .notas{margin-top:16px;padding:10px;background:#fafafa;border:1px solid #ddd;font-size:12px;border-radius:4px}
+      @media print{body{padding:10px}}`
+    Object.entries(byEmpresa).forEach(([emp,prods])=>{
+      const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${emp} — ${p.casetas?.nombre}</title>
+      <style>${estilos}</style></head><body>
+      <h1>${emp}</h1>
+      <div class="sub">Caseta: ${p.casetas?.nombre} · Fecha: ${fecha}</div>
+      <table>
+        <thead><tr><th>Producto</th><th>Fardos</th><th>Uds. totales</th></tr></thead>
+        <tbody>${prods.map(pr=>`<tr>
+          <td>${pr.nombre}</td>
+          <td>${pr.fardos!=null?pr.fardos:'—'}</td>
+          <td><strong>${pr.cantidad}</strong></td>
+        </tr>`).join('')}</tbody>
+      </table>
+      ${p.notas?`<div class="notas"><strong>Notas:</strong> ${p.notas}</div>`:''}
+      </body></html>`
+      const blob=new Blob([html],{type:'text/html'})
+      const url=URL.createObjectURL(blob)
+      const w=window.open(url,'_blank')
+      if(w) setTimeout(()=>URL.revokeObjectURL(url),30000)
+    })
+  }
 
   const ESTATE_COLOR={PENDIENTE:'var(--gold)',ACEPTADO:'var(--blue)',EN_CAMINO:'var(--ac)',RECIBIDO:'var(--green)',INCIDENCIA:'var(--red)',RECHAZADO:'var(--red)'}
   const ESTADO_LABEL={PENDIENTE:'⏳ Pendiente',ACEPTADO:'✅ Aceptado',EN_CAMINO:'🚚 En camino',RECIBIDO:'📦 Recibido',INCIDENCIA:'⚠️ Incidencia',RECHAZADO:'❌ Rechazado'}
@@ -811,16 +854,25 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
             </div>
             <span style={{fontWeight:700,fontSize:'.82rem',color:ESTATE_COLOR[p.estado]}}>{ESTADO_LABEL[p.estado]}</span>
           </div>
-          <div style={{fontSize:'.82rem',color:'var(--tx2)',marginBottom:6}}>
-            {p.pedido_items?.map(i=>(
-              <span key={i.id} style={{marginRight:10}}>
-                {i.productos?.nombre} <strong style={{color:'var(--tx)'}}>×{i.cantidad}</strong>
-                {i.cantidad_recibida!=null&&i.cantidad_recibida!==i.cantidad&&<span style={{color:i.cantidad_recibida<i.cantidad?'var(--red)':'var(--green)',marginLeft:4}}>(rec:{i.cantidad_recibida})</span>}
-                {i.notas_item&&<span style={{color:'var(--red)',marginLeft:4}}>⚠️ {i.notas_item}</span>}
-              </span>
-            ))}
-          </div>
-          {p.notas&&<div style={{fontSize:'.78rem',color:'var(--tx2)',fontStyle:'italic',marginBottom:4}}>📝 {p.notas}</div>}
+          {/* Resumen de items agrupados por empresa */}
+          {(()=>{
+            const byEmp={}
+            ;(p.pedido_items||[]).forEach(i=>{const e=i.productos?.empresa||'Sin empresa';if(!byEmp[e])byEmp[e]=[];byEmp[e].push(i)})
+            return Object.entries(byEmp).map(([emp,items])=>(
+              <div key={emp} style={{marginBottom:4}}>
+                <span style={{fontSize:'.7rem',fontWeight:700,color:'var(--blue)',marginRight:6}}>{emp}</span>
+                {items.map(i=>(
+                  <span key={i.id} style={{fontSize:'.8rem',color:'var(--tx2)',marginRight:10}}>
+                    {i.productos?.nombre} <strong style={{color:'var(--tx)'}}>×{i.cantidad}</strong>
+                    {(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} fardos)</span>}
+                    {i.cantidad_recibida!=null&&i.cantidad_recibida!==i.cantidad&&<span style={{color:i.cantidad_recibida<i.cantidad?'var(--red)':'var(--green)',marginLeft:4}}>(rec:{i.cantidad_recibida})</span>}
+                    {i.notas_item&&<span style={{color:'var(--red)',marginLeft:4}}>⚠️ {i.notas_item}</span>}
+                  </span>
+                ))}
+              </div>
+            ))
+          })()}
+          {p.notas&&<div style={{fontSize:'.78rem',color:'var(--tx2)',fontStyle:'italic',marginBottom:4,marginTop:4}}>📝 {p.notas}</div>}
           {p.notas_admin&&<div style={{fontSize:'.78rem',color:'var(--blue)',marginBottom:4}}>🔵 Admin: {p.notas_admin}</div>}
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8}}>
             {p.estado==='PENDIENTE'&&(
@@ -836,18 +888,28 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
             {(p.estado==='RECIBIDO'||p.estado==='INCIDENCIA'||p.estado==='RECHAZADO')&&(
               <button className="btn-edit" style={{fontSize:'.72rem'}} onClick={()=>setExpandido(expandido===p.id?null:p.id)}>{expandido===p.id?'Ocultar detalles':'Ver detalles'}</button>
             )}
+            <button onClick={()=>imprimirPedidoPDF(p)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'rgba(59,130,246,.1)',border:'1px solid rgba(59,130,246,.3)',color:'var(--blue)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}>🖨️ Imprimir PDF</button>
           </div>
           {expandido===p.id&&(
             <div style={{marginTop:10,borderTop:'1px solid var(--bd)',paddingTop:10,fontSize:'.8rem'}}>
-              <div style={{fontWeight:700,marginBottom:6,color:p.estado==='INCIDENCIA'?'var(--red)':'var(--green)'}}>Recepción {p.estado==='INCIDENCIA'?'— CON INCIDENCIAS':'— Sin incidencias'}</div>
-              {p.pedido_items?.map(i=>(
-                <div key={i.id} style={{padding:'4px 0',borderBottom:'1px solid var(--bd)',display:'flex',gap:12,flexWrap:'wrap'}}>
-                  <span style={{flex:1}}>{i.productos?.nombre}</span>
-                  <span>Pedido: <strong>{i.cantidad}</strong></span>
-                  <span>Recibido: <strong style={{color:i.cantidad_recibida!==i.cantidad?'var(--red)':'var(--green)'}}>{i.cantidad_recibida??'—'}</strong></span>
-                  {i.notas_item&&<span style={{color:'var(--red)'}}>⚠️ {i.notas_item}</span>}
-                </div>
-              ))}
+              <div style={{fontWeight:700,marginBottom:8,color:p.estado==='INCIDENCIA'?'var(--red)':'var(--green)'}}>Recepción {p.estado==='INCIDENCIA'?'— CON INCIDENCIAS':'— Sin incidencias'}</div>
+              {(()=>{
+                const byEmp={}
+                ;(p.pedido_items||[]).forEach(i=>{const e=i.productos?.empresa||'Sin empresa';if(!byEmp[e])byEmp[e]=[];byEmp[e].push(i)})
+                return Object.entries(byEmp).map(([emp,items])=>(
+                  <div key={emp} style={{marginBottom:10}}>
+                    <div style={{fontSize:'.72rem',fontWeight:700,color:'var(--blue)',marginBottom:4,paddingBottom:3,borderBottom:'1px solid var(--bd)'}}>{emp}</div>
+                    {items.map(i=>(
+                      <div key={i.id} style={{padding:'4px 0',borderBottom:'1px solid rgba(255,255,255,.04)',display:'flex',gap:12,flexWrap:'wrap'}}>
+                        <span style={{flex:1}}>{i.productos?.nombre}</span>
+                        <span>Pedido: <strong>{i.cantidad}</strong>{(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} fdos)</span>}</span>
+                        <span>Recibido: <strong style={{color:i.cantidad_recibida!==i.cantidad?'var(--red)':'var(--green)'}}>{i.cantidad_recibida??'—'}</strong></span>
+                        {i.notas_item&&<span style={{color:'var(--red)'}}>⚠️ {i.notas_item}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ))
+              })()}
             </div>
           )}
         </div>
@@ -975,8 +1037,9 @@ function GestionProductos() {
   const [soloActivos,setSoloActivos]=useState(true)
   const formRef=useRef(null)
   const CATS_FIJAS=['Petardos','Truenos','Bengalas','Cracker','Terrestres','Fuentes','Efectos','Packs','Accesorios']
-  const F0={nombre:'',precio:'',categoria:'Petardos',catNueva:'',edad_minima:'16',codigo_ean:'',gramos_polvora:'0'}
+  const F0={nombre:'',precio:'',categoria:'Petardos',catNueva:'',edad_minima:'16',codigo_ean:'',gramos_polvora:'0',empresa:'',fardo:'1'}
   const [form,setForm]=useState(F0)
+  const [empresaFiltro,setEmpresaFiltro]=useState('Todas')
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
   useEffect(()=>{ getProductos(false).then(setProductos).finally(()=>setLoading(false)) },[])
   const catsDinamicas=['Todos',...new Set([...CATS_FIJAS,...productos.map(p=>p.categoria)].sort())]
@@ -986,13 +1049,13 @@ function GestionProductos() {
     const categoria=form.categoria==='__nueva__'?form.catNueva.trim():form.categoria
     if(!categoria){ showToast('Introduce la categoría','error'); return }
     try{
-      const data=await upsertProducto({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),precio:parseFloat(form.precio),categoria,edad_minima:parseInt(form.edad_minima),codigo_ean:form.codigo_ean.trim(),gramos_polvora:parseFloat(form.gramos_polvora)||0,activo:true})
+      const data=await upsertProducto({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),precio:parseFloat(form.precio),categoria,edad_minima:parseInt(form.edad_minima),codigo_ean:form.codigo_ean.trim(),gramos_polvora:parseFloat(form.gramos_polvora)||0,empresa:form.empresa.trim()||null,fardo:Math.max(1,parseInt(form.fardo)||1),activo:true})
       if(editId){setProductos(prev=>prev.map(p=>p.id===editId?data:p));showToast('Producto actualizado ✓')}
       else{setProductos(prev=>[...prev,data]);showToast('Producto añadido ✓')}
       setForm(F0);setEditId(null)
     }catch(e){showToast(e.message,'error')}
   }
-  const editar=p=>{ setForm({nombre:p.nombre,precio:String(p.precio),categoria:p.categoria,catNueva:'',edad_minima:String(p.edad_minima),codigo_ean:p.codigo_ean,gramos_polvora:String(p.gramos_polvora??0)}); setEditId(p.id); setTimeout(()=>formRef.current?.scrollIntoView({behavior:'smooth',block:'start'}),50) }
+  const editar=p=>{ setForm({nombre:p.nombre,precio:String(p.precio),categoria:p.categoria,catNueva:'',edad_minima:String(p.edad_minima),codigo_ean:p.codigo_ean,gramos_polvora:String(p.gramos_polvora??0),empresa:p.empresa||'',fardo:String(p.fardo||1)}); setEditId(p.id); setTimeout(()=>formRef.current?.scrollIntoView({behavior:'smooth',block:'start'}),50) }
   const toggle=async(id,activo)=>{ await toggleProducto(id,!activo); setProductos(prev=>prev.map(p=>p.id===id?{...p,activo:!activo}:p)); showToast(!activo?'Producto activado ✓':'Producto desactivado') }
   const eliminar=async id=>{
     if(!window.confirm('¿Eliminar? Si tiene ventas se desactivará.')) return
@@ -1006,9 +1069,11 @@ function GestionProductos() {
   }
   const eaCl=m=>m===0?'cp':m===12?'cg':m===16?'cb2':'cr'
   const eaLbl=m=>m===0?'T1':m+'+'
+  const empresasDinamicas=['Todas',...new Set(productos.map(p=>p.empresa).filter(Boolean).sort())]
   const prods=productos.filter(p=>{
     if(soloActivos&&!p.activo) return false
     if(catFiltro!=='Todos'&&p.categoria!==catFiltro) return false
+    if(empresaFiltro!=='Todas'&&(p.empresa||'')!==empresaFiltro) return false
     if(busq&&!p.nombre.toLowerCase().includes(busq.toLowerCase())&&!p.codigo_ean?.includes(busq)) return false
     return true
   }).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'))
@@ -1039,6 +1104,11 @@ function GestionProductos() {
             <label>Gramos pólvora NEC <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— según etiqueta del producto</span></label>
             <input type="number" value={form.gramos_polvora} onChange={e=>setForm({...form,gramos_polvora:e.target.value})} placeholder="4.820" min="0" step=".001"/>
           </div>
+          <div className="fg"><label>Empresa / Proveedor</label><input value={form.empresa} onChange={e=>setForm({...form,empresa:e.target.value})} placeholder="Ej: Pirotecnia Zaragozana"/></div>
+          <div className="fg">
+            <label>Fardo <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— uds. por caja/bulto del proveedor</span></label>
+            <input type="number" value={form.fardo} onChange={e=>setForm({...form,fardo:e.target.value})} placeholder="12" min="1" step="1" inputMode="numeric"/>
+          </div>
         </div>
         <div style={{display:'flex',gap:9}}>
           <button className="btn-add" onClick={guardar}>{editId?'Guardar cambios':'Añadir producto'}</button>
@@ -1049,6 +1119,7 @@ function GestionProductos() {
         <div className="stit" style={{margin:0}}>Catálogo ({prods.length}/{productos.length})</div>
         <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
         <select value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{catsDinamicas.map(c=><option key={c}>{c}</option>)}</select>
+        <select value={empresaFiltro} onChange={e=>setEmpresaFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{empresasDinamicas.map(c=><option key={c}>{c}</option>)}</select>
         <div onClick={()=>setSoloActivos(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'6px 12px',borderRadius:'var(--rs)',border:'1px solid',borderColor:soloActivos?'var(--bd)':'var(--gold)',background:soloActivos?'transparent':'rgba(245,200,66,.1)'}}>
           <div style={{width:32,height:18,borderRadius:9,background:soloActivos?'var(--s3)':'var(--gold)',position:'relative',transition:'background .2s'}}>
             <div style={{position:'absolute',top:2,left:soloActivos?2:14,width:14,height:14,borderRadius:'50%',background:'white',transition:'left .2s'}}/>
@@ -1057,13 +1128,15 @@ function GestionProductos() {
         </div>
       </div>
       <div className="tw"><table>
-        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Precio</th><th>Pólvora NEC</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Empresa</th><th>Fardo</th><th>Precio</th><th>Pólvora NEC</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
           {prods.map(p=>(
             <tr key={p.id} style={{opacity:p.activo?1:.55}}>
               <td style={{fontWeight:600}}>{p.nombre}{!p.activo&&<span style={{marginLeft:6,fontSize:'.7rem',color:'var(--red)',background:'rgba(239,68,68,.1)',padding:'1px 5px',borderRadius:4}}>inactivo</span>}</td>
               <td style={{color:'var(--tx2)',fontSize:'.76rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
               <td style={{color:'var(--tx2)'}}>{p.categoria}</td>
+              <td style={{color:'var(--tx2)',fontSize:'.82rem'}}>{p.empresa||<span style={{opacity:.3}}>—</span>}</td>
+              <td style={{textAlign:'center',fontWeight:600,color:'var(--blue)'}}>{p.fardo>1?p.fardo:<span style={{opacity:.3}}>1</span>}</td>
               <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(p.precio)}</td>
               <td style={{color:'var(--tx2)',fontSize:'.82rem',textAlign:'center'}}>{p.gramos_polvora>0?<span style={{color:'var(--gold)',fontWeight:600}}>{p.gramos_polvora}g</span>:<span style={{opacity:.3}}>—</span>}</td>
               <td><span className={`chip ${eaCl(p.edad_minima)}`}>{eaLbl(p.edad_minima)}</span></td>
@@ -1085,11 +1158,14 @@ function GestionProductos() {
 function GestionStock({ casetas }) {
   const [productos,setProductos]=useState([])
   const [stockData,setStockData]=useState({})
+  const [minimoData,setMinimoData]=useState({})
   const [casetaSel,setCasetaSel]=useState('')
   const [kgActual,setKgActual]=useState(0)
   const [loading,setLoading]=useState(true)
   const [saving,setSaving]=useState(null)
+  const [savingMin,setSavingMin]=useState(null)
   const [editVals,setEditVals]=useState({})
+  const [editMinimos,setEditMinimos]=useState({})
   const [busq,setBusq]=useState('')
   const [catFiltro,setCatFiltro]=useState('Todos')
   const [toast,setToast]=useState(null)
@@ -1098,12 +1174,15 @@ function GestionStock({ casetas }) {
   useEffect(()=>{ getProductos(true).then(p=>{setProductos(p);if(casetas.length)setCasetaSel(casetas[0].id)}).finally(()=>setLoading(false)) },[])
   useEffect(()=>{
     if(!casetaSel) return; setLoading(true)
-    Promise.all([getStockCaseta(casetaSel),getKgPolvora(casetaSel)]).then(([stk,kg])=>{
-      setStockData(prev=>({...prev,[casetaSel]:stk})); setKgActual(kg); setEditVals({})
+    Promise.all([getStockCaseta(casetaSel),getKgPolvora(casetaSel),getStockMinimos(casetaSel)]).then(([stk,kg,mins])=>{
+      setStockData(prev=>({...prev,[casetaSel]:stk}))
+      setMinimoData(prev=>({...prev,[casetaSel]:mins}))
+      setKgActual(kg); setEditVals({}); setEditMinimos({})
     }).finally(()=>setLoading(false))
   },[casetaSel])
 
   const stockActual=stockData[casetaSel]||{}
+  const minimoActual=minimoData[casetaSel]||{}
   const CATS=['Todos',...new Set(productos.map(p=>p.categoria).sort())]
   const caseta=casetas.find(c=>c.id===casetaSel)
   const limite=caseta?.limite_kg_polvora||10
@@ -1120,6 +1199,18 @@ function GestionStock({ casetas }) {
       showToast(`Stock ${delta>0?'añadido':'restado'} ✓`)
       getKgPolvora(casetaSel).then(setKgActual)
     }catch(e){showToast(e.message,'error')}finally{setSaving(null)}
+  }
+
+  const guardarMinimo=async(productoId)=>{
+    const val=editMinimos[productoId]; if(val===undefined) return
+    const minimo=Math.max(0,parseInt(val)||0)
+    setSavingMin(productoId)
+    try{
+      await setStockMinimo(productoId,casetaSel,minimo)
+      setMinimoData(prev=>({...prev,[casetaSel]:{...prev[casetaSel],[productoId]:minimo}}))
+      setEditMinimos(prev=>{const n={...prev};delete n[productoId];return n})
+      showToast('Mínimo actualizado ✓')
+    }catch(e){showToast(e.message,'error')}finally{setSavingMin(null)}
   }
 
   const prods=productos.filter(p=>{
@@ -1166,19 +1257,32 @@ function GestionStock({ casetas }) {
         </div>
       )}
 
-      <div className="info-box" style={{marginBottom:12}}>Escribe la cantidad a <strong>sumar</strong> o <strong>restar</strong> y pulsa el botón correspondiente. Solo se muestran productos activos.</div>
+      <div className="info-box" style={{marginBottom:12}}>Escribe la cantidad a <strong>sumar</strong> o <strong>restar</strong> y pulsa el botón correspondiente. El <strong>mínimo</strong> define cuándo un producto aparece en el pedido automático.</div>
       {loading&&<div className="loading-row"><div className="spin-sm"/>Actualizando...</div>}
       <div className="tw"><table>
-        <thead><tr><th>Producto</th><th>Categoría</th><th>EAN</th><th style={{textAlign:'center'}}>Stock</th><th style={{textAlign:'center'}}>Ajustar</th></tr></thead>
+        <thead><tr><th>Producto</th><th>Categoría</th><th>EAN</th><th style={{textAlign:'center'}}>Stock</th><th style={{textAlign:'center'}}>Mínimo</th><th style={{textAlign:'center'}}>Ajustar</th></tr></thead>
         <tbody>
           {prods.map(p=>{
             const cant=stockActual[p.id]??0; const guardando=saving===p.id
+            const minimo=minimoActual[p.id]??0; const guardandoMin=savingMin===p.id
+            const bajominimo=minimo>0&&cant<minimo
             return(
-              <tr key={p.id}>
-                <td style={{fontWeight:600}}>{p.nombre}</td>
+              <tr key={p.id} style={bajominimo?{background:'rgba(239,68,68,.04)'}:{}}>
+                <td style={{fontWeight:600}}>{p.nombre}{bajominimo&&<span style={{marginLeft:6,fontSize:'.65rem',background:'rgba(239,68,68,.15)',color:'var(--red)',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'1px 5px',fontWeight:700}}>bajo mín.</span>}</td>
                 <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{p.categoria}</td>
                 <td style={{color:'var(--tx2)',fontSize:'.74rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
                 <td style={{textAlign:'center'}}><span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.2rem',color:colStock(cant)}}>{cant}</span></td>
+                <td style={{textAlign:'center'}}>
+                  <input type="number" min="0"
+                    value={editMinimos[p.id]!==undefined?editMinimos[p.id]:minimo}
+                    onChange={e=>setEditMinimos(prev=>({...prev,[p.id]:e.target.value}))}
+                    onFocus={e=>e.target.select()}
+                    onBlur={()=>guardarMinimo(p.id)}
+                    onKeyDown={e=>e.key==='Enter'&&guardarMinimo(p.id)}
+                    disabled={guardandoMin}
+                    style={{width:58,background:'var(--s2)',border:'1px solid',borderColor:editMinimos[p.id]!==undefined?'var(--ac)':'var(--bd)',borderRadius:'var(--rs)',padding:'5px 4px',color:'var(--tx)',fontSize:'.85rem',outline:'none',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}}
+                    inputMode="numeric"/>
+                </td>
                 <td style={{textAlign:'center'}}>
                   <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
                     <button onClick={()=>ajustar(p.id,-1)} disabled={guardando||!editVals[p.id]} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(239,68,68,.4)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'1rem',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',opacity:(!editVals[p.id]||guardando)?.4:1}}>−</button>
@@ -1317,7 +1421,7 @@ function GestionOfertas() {
 export function GestionCasetas({ casetas, setCasetas }) {
   const [toast,setToast]=useState(null)
   const [editId,setEditId]=useState(null)
-  const F0={nombre:'',direccion:'',limite_kg_polvora:'10',latitud:'',longitud:'',radio_metros:'150',geo_activo:false}
+  const F0={nombre:'',direccion:'',limite_kg_polvora:'10',latitud:'',longitud:'',radio_metros:'150',geo_activo:false,pedidos_auto_activos:false,hora_corte_pedidos:'20:00'}
   const [form,setForm]=useState(F0)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
   const guardar=async()=>{
@@ -1332,6 +1436,8 @@ export function GestionCasetas({ casetas, setCasetas }) {
         longitud:form.longitud?parseFloat(form.longitud):null,
         radio_metros:parseInt(form.radio_metros)||150,
         geo_activo:form.geo_activo,
+        pedidos_auto_activos:form.pedidos_auto_activos,
+        hora_corte_pedidos:form.hora_corte_pedidos||'20:00',
       })
       if(editId){setCasetas(prev=>prev.map(c=>c.id===editId?data:c));showToast('Caseta actualizada ✓')}
       else{setCasetas(prev=>[...prev,data]);showToast('Caseta creada ✓')}
@@ -1389,14 +1495,49 @@ export function GestionCasetas({ casetas, setCasetas }) {
             </div>
           )}
         </div>
+        {/* ── Pedidos automáticos ── */}
+        <div style={{background:'var(--s2)',borderRadius:'var(--rs)',padding:'12px 14px',border:'1px solid var(--bd)',marginBottom:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+            <div style={{fontWeight:700,fontSize:'.85rem'}}>🤖 Pedidos automáticos</div>
+            <div onClick={()=>setForm(f=>({...f,pedidos_auto_activos:!f.pedidos_auto_activos}))} style={{
+              width:38,height:20,borderRadius:10,cursor:'pointer',flexShrink:0,
+              background:form.pedidos_auto_activos?'var(--green)':'var(--s3)',position:'relative',marginLeft:'auto',transition:'background .2s',
+            }}>
+              <div style={{position:'absolute',top:2,left:form.pedidos_auto_activos?20:2,width:16,height:16,borderRadius:'50%',background:'white',transition:'left .2s'}}/>
+            </div>
+          </div>
+          {!form.pedidos_auto_activos&&<div style={{fontSize:'.78rem',color:'var(--tx2)'}}>Desactivado — los empleados crean pedidos manualmente</div>}
+          {form.pedidos_auto_activos&&(
+            <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+              <div className="fg" style={{margin:0,flex:'0 0 auto'}}>
+                <label>Hora de corte de pedidos</label>
+                <input type="time" value={form.hora_corte_pedidos} onChange={e=>setForm(f=>({...f,hora_corte_pedidos:e.target.value}))} style={{width:'auto'}}/>
+              </div>
+              <div style={{fontSize:'.75rem',color:'var(--tx2)',marginTop:12}}>Los empleados verán un aviso y podrán generar el pedido automático antes de esta hora.</div>
+            </div>
+          )}
+        </div>
+
         <div style={{display:'flex',gap:9}}>
           <button className="btn-add" onClick={guardar}>{editId?'Guardar':'Crear caseta'}</button>
           {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0)}}>Cancelar</button>}
         </div>
       </div>
-      <div className="stit">Casetas ({casetas.length})</div>
+      <div className="stit" style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <span>Casetas ({casetas.length})</span>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={async()=>{
+            try{await updateAllPedidosAuto(true);setCasetas(prev=>prev.map(c=>({...c,pedidos_auto_activos:true})));showToast('Pedidos auto activados en todas las casetas ✓')}
+            catch(e){showToast(e.message,'error')}
+          }} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(34,197,94,.12)',border:'1px solid rgba(34,197,94,.3)',color:'var(--green)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}>🤖 Activar todas</button>
+          <button onClick={async()=>{
+            try{await updateAllPedidosAuto(false);setCasetas(prev=>prev.map(c=>({...c,pedidos_auto_activos:false})));showToast('Pedidos auto desactivados en todas las casetas')}
+            catch(e){showToast(e.message,'error')}
+          }} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.25)',color:'var(--red)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}>⏹ Desactivar todas</button>
+        </div>
+      </div>
       <div className="tw"><table>
-        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Geo</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Geo</th><th>Pedidos auto</th><th>Acciones</th></tr></thead>
         <tbody>
           {casetas.map(c=>(
             <tr key={c.id}>
@@ -1408,8 +1549,13 @@ export function GestionCasetas({ casetas, setCasetas }) {
                   ?<span style={{color:'var(--green)',fontSize:'.78rem',fontWeight:700}}>📍 {c.radio_metros||150}m</span>
                   :<span style={{color:'var(--tx2)',fontSize:'.78rem',opacity:.5}}>—</span>}
               </td>
+              <td>
+                {c.pedidos_auto_activos
+                  ?<span style={{color:'var(--green)',fontSize:'.78rem',fontWeight:700}}>🤖 {c.hora_corte_pedidos?.slice(0,5)||'20:00'}</span>
+                  :<span style={{color:'var(--tx2)',fontSize:'.78rem',opacity:.5}}>—</span>}
+              </td>
               <td><div className="acell">
-                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10),latitud:c.latitud?String(c.latitud):'',longitud:c.longitud?String(c.longitud):'',radio_metros:String(c.radio_metros||150),geo_activo:c.geo_activo||false})}}>Editar</button>
+                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10),latitud:c.latitud?String(c.latitud):'',longitud:c.longitud?String(c.longitud):'',radio_metros:String(c.radio_metros||150),geo_activo:c.geo_activo||false,pedidos_auto_activos:c.pedidos_auto_activos||false,hora_corte_pedidos:c.hora_corte_pedidos?.slice(0,5)||'20:00'})}}>Editar</button>
                 <button className="btn-del" onClick={()=>eliminar(c.id)}>Eliminar</button>
               </div></td>
             </tr>
