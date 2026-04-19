@@ -48,7 +48,7 @@ export default function App() {
 
   if (loading) return (
     <div className="splash">
-      <img src={logoColor} alt="Caballer" style={{ width: 180, marginBottom: 12 }} />
+      <img src={logoColor} alt="Caballer" style={{ width: 260, marginBottom: 16 }} />
       <div className="spinner" />
     </div>
   )

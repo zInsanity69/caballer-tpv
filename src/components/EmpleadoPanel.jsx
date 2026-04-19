@@ -719,7 +719,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
   const cats = ['Todos', ...new Set(productos.map(p => p.categoria).sort())]
 
   const prodsFiltrados = productos.filter(p => {
-    const bOk = !busq || p.nombre.toLowerCase().includes(busq.toLowerCase())
+    const bOk = !busq || p.nombre.toLowerCase().includes(busq.toLowerCase()) || p.codigo_ean?.includes(busq)
     const cOk = catFiltro === 'Todos' || p.categoria === catFiltro
     return bOk && cOk
   }).sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
@@ -788,8 +788,14 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
         {vista === 'catalogo' && (
           <>
             {/* Buscador */}
-            <input className="si" placeholder="Buscar producto..."
-              value={busq} onChange={e => setBusq(e.target.value)} style={{ marginBottom: 8 }} />
+            <input className="si" placeholder="Buscar o escanear EAN..."
+              value={busq} onChange={e => setBusq(e.target.value)} style={{ marginBottom: 8 }}
+              onKeyDown={e => {
+                if (e.key !== 'Enter' || prodsFiltrados.length === 0) return
+                const prod = prodsFiltrados[0]
+                addItem(prod, 1)
+                setBusq('')
+              }} />
 
             {/* Filtro categorías — scroll horizontal con rueda del ratón */}
             <WheelScrollDiv style={{ overflowX: 'auto', display: 'flex', gap: 6, paddingBottom: 8, marginBottom: 6, flexShrink: 0 }}>
@@ -826,6 +832,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
                           <button className="qb" style={{ width: 30, height: 30 }} onClick={() => addItem(p, -1)}>−</button>
                           <input
                             type="number" min="1" defaultValue={enPedido} key={enPedido}
+                            onFocus={e => e.target.select()}
                             onBlur={e => {
                               const q = parseInt(e.target.value) || 0
                               if (q <= 0) { addItem(p, -enPedido) }
@@ -941,6 +948,8 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const [recItems, setRecItems]     = useState([])
   const [notasRec, setNotasRec]     = useState('')
   const [saving, setSaving]         = useState(false)
+  const [scanRec, setScanRec]       = useState('')
+  const recListRef                  = useRef(null)
 
   useEffect(() => {
     getPedidos({ casetaId: caseta.id }).then(setPedidos).finally(() => setLoading(false))
@@ -1064,7 +1073,36 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
               </span>
             </div>
 
-            <div style={{ overflowY: 'auto', flex: 1 }}>
+            {/* Buscador / escáner */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              <input className="si" style={{ flex: 1, marginBottom: 0 }}
+                placeholder="Escanea EAN o escribe nombre y pulsa Enter..."
+                value={scanRec} onChange={e => setScanRec(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' || !scanRec.trim()) return
+                  const q = scanRec.trim().toLowerCase()
+                  // buscar por EAN exacto primero, luego nombre parcial
+                  const prodMatch = productos.find(p => p.codigo_ean === scanRec.trim())
+                  const idx = prodMatch
+                    ? recItems.findIndex(r => r.producto_id === prodMatch.id)
+                    : recItems.findIndex(r => r.nombre.toLowerCase().includes(q))
+                  if (idx === -1) { showToast('Producto no encontrado en el pedido', 'error'); setScanRec(''); return }
+                  // Marcar como ok si estaba pendiente
+                  setRecItems(prev => prev.map((r, i) => {
+                    if (i !== idx) return r
+                    if (r.estado !== 'pendiente') return r
+                    return { ...r, estado: 'ok', cantidad_recibida: r.cantidad }
+                  }))
+                  setScanRec('')
+                  // Scroll al item
+                  setTimeout(() => {
+                    const el = recListRef.current?.querySelector(`[data-recidx="${idx}"]`)
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  }, 50)
+                }} />
+            </div>
+
+            <div ref={recListRef} style={{ overflowY: 'auto', flex: 1 }}>
               {recItems.map((item, idx) => {
                 const setBand = (estado) => setRecItems(prev => prev.map((r, i) => {
                   if (i !== idx) return r
@@ -1089,7 +1127,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                   : 'var(--s2)'
 
                 return (
-                  <div key={item.id} style={{ background: bgCol, border: `1px solid ${borderCol}`, borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10 }}>
+                  <div key={item.id} data-recidx={idx} style={{ background: bgCol, border: `1px solid ${borderCol}`, borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10 }}>
                     {/* Nombre + cantidad pedida */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                       <div style={{ fontWeight: 700, fontSize: '.9rem' }}>{item.nombre}</div>
@@ -1815,15 +1853,13 @@ function generarTicketHTML(datos) {
 
 function imprimirTicket(datos) {
   const html = generarTicketHTML(datos)
-  const blob = new Blob([html], { type: 'text/html' })
-  const url  = URL.createObjectURL(blob)
-  const ventana = window.open(url, '_blank')
+  const ventana = window.open('', '_blank', 'width=400,height=700,scrollbars=yes')
   if (!ventana) {
     alert('El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para esta página.')
-    URL.revokeObjectURL(url)
     return
   }
-  setTimeout(() => URL.revokeObjectURL(url), 30000)
+  ventana.document.write(html)
+  ventana.document.close()
 }
 
 export default function EmpleadoPanel({ perfil, casetas }) {
@@ -1840,6 +1876,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [ticket,         setTicket]         = useState([])
   const [descuento,      setDescuento]      = useState(0)
   const [busq,           setBusq]           = useState('')
+  const busqRef                             = useRef(null)
   const [cat,            setCat]            = useState('Todos')
   const [showScan,       setShowScan]       = useState(false)
   const [showPago,       setShowPago]       = useState(false)
@@ -2341,8 +2378,17 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           {/* Panel productos */}
           <div className="pp">
             <div className="srch">
-              <input className="si" placeholder="Buscar producto o EAN..."
-                value={busq} onChange={e => { setBusq(e.target.value); if (e.target.value) setTabTPV('todos') }} />
+              <input ref={busqRef} className="si" placeholder="Buscar producto o EAN..."
+                value={busq} onChange={e => { setBusq(e.target.value); if (e.target.value) setTabTPV('todos') }}
+                onKeyDown={e => {
+                  if (e.key !== 'Enter') return
+                  const matches = prodsFiltrados
+                  if (matches.length === 0) return
+                  const prod = matches[0]
+                  setBusq('')
+                  if (stock[prod.id] > 0) abrirModalCantidad(prod)
+                  else showToast('Sin stock disponible', 'error')
+                }} />
               <button className="bsc" onClick={() => setShowScan(true)}>📷</button>
             </div>
 
@@ -2554,8 +2600,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {prodModal && (
         <ModalCantidad producto={prodModal} stockDisp={stock[prodModal.id] ?? 0}
           ofertas={ofertas}
-          onConfirm={qty => { agregar(prodModal, qty); setProdModal(null) }}
-          onClose={() => setProdModal(null)} />
+          onConfirm={qty => { agregar(prodModal, qty); setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }}
+          onClose={() => { setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }} />
       )}
       {showScan && (
         <Scanner

@@ -746,47 +746,42 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
 
   useEffect(()=>{ getPedidos({}).then(setPedidos).catch(e=>{ setPedidos([]); console.error('getPedidos:',e.message) }).finally(()=>setLoading(false)) },[])
 
-  const imprimirPedidoPDF=(p)=>{
+  const imprimirPedidoPDF=(p,soloEmpresa=null)=>{
     const items=p.pedido_items||[]
     const byEmpresa={}
     items.forEach(i=>{
       const emp=i.productos?.empresa||'Sin empresa'
+      if(soloEmpresa&&emp!==soloEmpresa) return
       if(!byEmpresa[emp]) byEmpresa[emp]=[]
       const fardo=i.productos?.fardo||1
       const fardos=fardo>1?Math.ceil(i.cantidad/fardo):null
-      byEmpresa[emp].push({nombre:i.productos?.nombre||'?',cantidad:i.cantidad,fardo,fardos})
+      byEmpresa[emp].push({nombre:i.productos?.nombre||'?',cantidad:i.cantidad,fardos})
     })
     const fecha=new Date().toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric'})
-    const estilos=`
+    const seccionesHTML=Object.entries(byEmpresa).map(([emp,prods],idx)=>`
+      <div style="${idx>0?'page-break-before:always;':''}">
+        <h2 style="font-size:15px;margin-bottom:3px;border-left:4px solid #ff4d1c;padding-left:8px">${emp}</h2>
+        <div style="color:#555;font-size:11px;margin-bottom:10px">Caseta: ${p.casetas?.nombre} · Fecha: ${fecha}</div>
+        <table>
+          <thead><tr><th>Producto</th><th>Packs</th><th>Uds. totales</th></tr></thead>
+          <tbody>${prods.map(pr=>`<tr><td>${pr.nombre}</td><td>${pr.fardos!=null?pr.fardos:'—'}</td><td><strong>${pr.cantidad}</strong></td></tr>`).join('')}</tbody>
+        </table>
+      </div>`).join('')
+    const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Pedido — ${p.casetas?.nombre}</title>
+    <style>
       *{box-sizing:border-box;margin:0;padding:0}
       body{font-family:Arial,sans-serif;font-size:13px;color:#111;padding:20px}
-      h1{font-size:18px;margin-bottom:4px}
-      .sub{color:#555;font-size:12px;margin-bottom:16px}
-      table{width:100%;border-collapse:collapse;font-size:12px}
+      table{width:100%;border-collapse:collapse;margin-bottom:10px}
       th{text-align:left;padding:5px 8px;border-bottom:2px solid #ddd;font-size:11px;color:#555}
       td{padding:5px 8px;border-bottom:1px solid #eee}
-      .notas{margin-top:16px;padding:10px;background:#fafafa;border:1px solid #ddd;font-size:12px;border-radius:4px}
-      @media print{body{padding:10px}}`
-    Object.entries(byEmpresa).forEach(([emp,prods])=>{
-      const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${emp} — ${p.casetas?.nombre}</title>
-      <style>${estilos}</style></head><body>
-      <h1>${emp}</h1>
-      <div class="sub">Caseta: ${p.casetas?.nombre} · Fecha: ${fecha}</div>
-      <table>
-        <thead><tr><th>Producto</th><th>Fardos</th><th>Uds. totales</th></tr></thead>
-        <tbody>${prods.map(pr=>`<tr>
-          <td>${pr.nombre}</td>
-          <td>${pr.fardos!=null?pr.fardos:'—'}</td>
-          <td><strong>${pr.cantidad}</strong></td>
-        </tr>`).join('')}</tbody>
-      </table>
-      ${p.notas?`<div class="notas"><strong>Notas:</strong> ${p.notas}</div>`:''}
-      </body></html>`
-      const blob=new Blob([html],{type:'text/html'})
-      const url=URL.createObjectURL(blob)
-      const w=window.open(url,'_blank')
-      if(w) setTimeout(()=>URL.revokeObjectURL(url),30000)
-    })
+      @media print{@page{margin:15mm}}
+    </style></head><body>
+    ${p.notas?`<div style="margin-bottom:14px;padding:8px 12px;background:#fafafa;border:1px solid #ddd;font-size:12px"><strong>Notas:</strong> ${p.notas}</div>`:''}
+    ${seccionesHTML}
+    <script>window.onload=()=>window.print()<\/script>
+    </body></html>`
+    const w=window.open('','_blank','width=900,height=800,scrollbars=yes')
+    if(w){w.document.write(html);w.document.close()}
   }
 
   const ESTATE_COLOR={PENDIENTE:'var(--gold)',ACEPTADO:'var(--blue)',EN_CAMINO:'var(--ac)',RECIBIDO:'var(--green)',INCIDENCIA:'var(--red)',RECHAZADO:'var(--red)'}
@@ -843,6 +838,7 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
         </select>
         <span style={{fontSize:'.82rem',color:'var(--tx2)'}}>{filtrados.length} pedidos</span>
       </div>
+
       {filtrados.length===0?<div style={{textAlign:'center',color:'var(--tx2)',padding:40}}>Sin pedidos con estos filtros</div>
         :filtrados.map(p=>(
         <div key={p.id} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px 16px',marginBottom:12,border:'1px solid var(--bd)'}}>
@@ -854,45 +850,25 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
             </div>
             <span style={{fontWeight:700,fontSize:'.82rem',color:ESTATE_COLOR[p.estado]}}>{ESTADO_LABEL[p.estado]}</span>
           </div>
-          {/* Resumen de items agrupados por empresa */}
-          {(()=>{
-            const byEmp={}
-            ;(p.pedido_items||[]).forEach(i=>{const e=i.productos?.empresa||'Sin empresa';if(!byEmp[e])byEmp[e]=[];byEmp[e].push(i)})
-            return Object.entries(byEmp).map(([emp,items])=>(
-              <div key={emp} style={{marginBottom:4}}>
-                <span style={{fontSize:'.7rem',fontWeight:700,color:'var(--blue)',marginRight:6}}>{emp}</span>
-                {items.map(i=>(
-                  <span key={i.id} style={{fontSize:'.8rem',color:'var(--tx2)',marginRight:10}}>
-                    {i.productos?.nombre} <strong style={{color:'var(--tx)'}}>×{i.cantidad}</strong>
-                    {(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} fardos)</span>}
-                    {i.cantidad_recibida!=null&&i.cantidad_recibida!==i.cantidad&&<span style={{color:i.cantidad_recibida<i.cantidad?'var(--red)':'var(--green)',marginLeft:4}}>(rec:{i.cantidad_recibida})</span>}
-                    {i.notas_item&&<span style={{color:'var(--red)',marginLeft:4}}>⚠️ {i.notas_item}</span>}
-                  </span>
-                ))}
-              </div>
-            ))
-          })()}
-          {p.notas&&<div style={{fontSize:'.78rem',color:'var(--tx2)',fontStyle:'italic',marginBottom:4,marginTop:4}}>📝 {p.notas}</div>}
+          {p.notas&&<div style={{fontSize:'.78rem',color:'var(--tx2)',fontStyle:'italic',marginBottom:4}}>📝 {p.notas}</div>}
           {p.notas_admin&&<div style={{fontSize:'.78rem',color:'var(--blue)',marginBottom:4}}>🔵 Admin: {p.notas_admin}</div>}
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8}}>
-            {p.estado==='PENDIENTE'&&(
-              <>
-                <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0}} onClick={()=>cambiarEstado(p.id,'ACEPTADO')}>✅ Aceptar</button>
-                <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar</button>
-                <button className="btn-del" style={{padding:'6px 12px',borderRadius:'var(--rs)',height:'auto'}} onClick={()=>{if(window.confirm('¿Rechazar este pedido?'))cambiarEstado(p.id,'RECHAZADO')}}>❌ Rechazar</button>
-              </>
-            )}
+            {p.estado==='PENDIENTE'&&(<>
+              <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0}} onClick={()=>cambiarEstado(p.id,'ACEPTADO')}>✅ Aceptar</button>
+              <button className="btn-edit" onClick={()=>abrirEdicion(p)}>✏️ Editar</button>
+              <button className="btn-del" style={{padding:'6px 12px',borderRadius:'var(--rs)',height:'auto'}} onClick={()=>{if(window.confirm('¿Rechazar este pedido?'))cambiarEstado(p.id,'RECHAZADO')}}>❌ Rechazar</button>
+            </>)}
             {p.estado==='ACEPTADO'&&(
               <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0,background:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>cambiarEstado(p.id,'EN_CAMINO')}>🚚 En camino</button>
             )}
-            {(p.estado==='RECIBIDO'||p.estado==='INCIDENCIA'||p.estado==='RECHAZADO')&&(
-              <button className="btn-edit" style={{fontSize:'.72rem'}} onClick={()=>setExpandido(expandido===p.id?null:p.id)}>{expandido===p.id?'Ocultar detalles':'Ver detalles'}</button>
-            )}
-            <button onClick={()=>imprimirPedidoPDF(p)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'rgba(59,130,246,.1)',border:'1px solid rgba(59,130,246,.3)',color:'var(--blue)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}>🖨️ Imprimir PDF</button>
+            <button className="btn-edit" style={{fontSize:'.72rem'}} onClick={()=>setExpandido(expandido===p.id?null:p.id)}>{expandido===p.id?'▲ Ocultar':'▼ Ver productos'}</button>
+            <button onClick={()=>imprimirPedidoPDF(p)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'rgba(59,130,246,.1)',border:'1px solid rgba(59,130,246,.3)',color:'var(--blue)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}>🖨️ Todo</button>
+            {[...new Set((p.pedido_items||[]).map(i=>i.productos?.empresa||'Sin empresa'))].sort().map(emp=>(
+              <button key={emp} onClick={()=>imprimirPedidoPDF(p,emp)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'var(--s3)',border:'1px solid var(--bd)',color:'var(--tx2)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}>🖨️ {emp}</button>
+            ))}
           </div>
           {expandido===p.id&&(
             <div style={{marginTop:10,borderTop:'1px solid var(--bd)',paddingTop:10,fontSize:'.8rem'}}>
-              <div style={{fontWeight:700,marginBottom:8,color:p.estado==='INCIDENCIA'?'var(--red)':'var(--green)'}}>Recepción {p.estado==='INCIDENCIA'?'— CON INCIDENCIAS':'— Sin incidencias'}</div>
               {(()=>{
                 const byEmp={}
                 ;(p.pedido_items||[]).forEach(i=>{const e=i.productos?.empresa||'Sin empresa';if(!byEmp[e])byEmp[e]=[];byEmp[e].push(i)})
@@ -902,8 +878,8 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
                     {items.map(i=>(
                       <div key={i.id} style={{padding:'4px 0',borderBottom:'1px solid rgba(255,255,255,.04)',display:'flex',gap:12,flexWrap:'wrap'}}>
                         <span style={{flex:1}}>{i.productos?.nombre}</span>
-                        <span>Pedido: <strong>{i.cantidad}</strong>{(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} fdos)</span>}</span>
-                        <span>Recibido: <strong style={{color:i.cantidad_recibida!==i.cantidad?'var(--red)':'var(--green)'}}>{i.cantidad_recibida??'—'}</strong></span>
+                        <span>Pedido: <strong>{i.cantidad}</strong>{(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} packs)</span>}</span>
+                        {i.cantidad_recibida!=null&&<span>Recibido: <strong style={{color:i.cantidad_recibida!==i.cantidad?'var(--red)':'var(--green)'}}>{i.cantidad_recibida}</strong></span>}
                         {i.notas_item&&<span style={{color:'var(--red)'}}>⚠️ {i.notas_item}</span>}
                       </div>
                     ))}
@@ -1106,7 +1082,7 @@ function GestionProductos() {
           </div>
           <div className="fg"><label>Empresa / Proveedor</label><input value={form.empresa} onChange={e=>setForm({...form,empresa:e.target.value})} placeholder="Ej: Pirotecnia Zaragozana"/></div>
           <div className="fg">
-            <label>Fardo <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— uds. por caja/bulto del proveedor</span></label>
+            <label>Pack <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— uds. por caja/bulto del proveedor</span></label>
             <input type="number" value={form.fardo} onChange={e=>setForm({...form,fardo:e.target.value})} placeholder="12" min="1" step="1" inputMode="numeric"/>
           </div>
         </div>
@@ -1128,7 +1104,7 @@ function GestionProductos() {
         </div>
       </div>
       <div className="tw"><table>
-        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Empresa</th><th>Fardo</th><th>Precio</th><th>Pólvora NEC</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Empresa</th><th>Pack</th><th>Precio</th><th>Pólvora NEC</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
           {prods.map(p=>(
             <tr key={p.id} style={{opacity:p.activo?1:.55}}>
@@ -1215,7 +1191,7 @@ function GestionStock({ casetas }) {
 
   const prods=productos.filter(p=>{
     if(catFiltro!=='Todos'&&p.categoria!==catFiltro) return false
-    if(busq&&!p.nombre.toLowerCase().includes(busq.toLowerCase())) return false
+    if(busq&&!p.nombre.toLowerCase().includes(busq.toLowerCase())&&!p.codigo_ean?.includes(busq)) return false
     return true
   }).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'))
   const colStock=n=>n===0?'var(--red)':n<10?'var(--gold)':'var(--green)'
@@ -1230,6 +1206,7 @@ function GestionStock({ casetas }) {
             <button key={c.id} onClick={()=>setCasetaSel(c.id)} style={{padding:'7px 13px',borderRadius:'var(--rs)',border:'1px solid',borderColor:casetaSel===c.id?'var(--ac)':'var(--bd)',background:casetaSel===c.id?'rgba(255,77,28,.1)':'transparent',color:casetaSel===c.id?'var(--ac)':'var(--tx2)',fontSize:'.82rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif"}}>{c.nombre.replace('Caballer ','')}</button>
           ))}
         </div>
+        <button onClick={()=>{setLoading(true);Promise.all([getStockCaseta(casetaSel),getKgPolvora(casetaSel),getStockMinimos(casetaSel)]).then(([stk,kg,mins])=>{setStockData(prev=>({...prev,[casetaSel]:stk}));setMinimoData(prev=>({...prev,[casetaSel]:mins}));setKgActual(kg)}).finally(()=>setLoading(false))}} title="Recargar stock" style={{padding:'7px 12px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',background:'var(--s2)',color:'var(--tx2)',cursor:'pointer',fontSize:'.85rem',fontFamily:"'DM Sans',sans-serif",whiteSpace:'nowrap'}}>🔄 Actualizar</button>
         <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
         <WheelScrollDiv style={{display:'flex',gap:5,overflowX:'auto',flexShrink:0}}>
           {CATS.map(c=>(
@@ -1363,7 +1340,7 @@ function GestionOfertas() {
       {tipo==='pack'&&(
         <div className="iform">
           <div className="frow">
-            <div className="fg"><label>Producto</label><select value={formPack.producto_id} onChange={e=>setFormPack({...formPack,producto_id:e.target.value})}><option value="">-- Seleccionar --</option>{productos.filter(p=>p.activo).map(p=><option key={p.id} value={p.id}>{p.nombre} ({fmt(p.precio)})</option>)}</select></div>
+            <div className="fg"><label>Producto</label><select value={formPack.producto_id} onChange={e=>setFormPack({...formPack,producto_id:e.target.value})}><option value="">-- Seleccionar --</option>{[...productos.filter(p=>p.activo)].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')).map(p=><option key={p.id} value={p.id}>{p.nombre} ({fmt(p.precio)})</option>)}</select></div>
             <div className="fg"><label>Etiqueta</label><input value={formPack.etiqueta} onChange={e=>setFormPack({...formPack,etiqueta:e.target.value})} placeholder="4 x 5€"/></div>
             <div className="fg"><label>Unidades</label><input type="number" value={formPack.cantidad_pack} onChange={e=>setFormPack({...formPack,cantidad_pack:e.target.value})} placeholder="4" min="2"/></div>
             <div className="fg"><label>Precio (€)</label><input type="number" value={formPack.precio_pack} onChange={e=>setFormPack({...formPack,precio_pack:e.target.value})} placeholder="5.00" min="0" step=".01"/></div>
@@ -1382,7 +1359,7 @@ function GestionOfertas() {
             <div style={{fontSize:'.73rem',color:'var(--tx2)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:8}}>Productos incluidos</div>
             {formComb.lineas.map((l,i)=>(
               <div key={i} style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
-                <select value={l.producto_id} onChange={e=>setLinea(i,'producto_id',e.target.value)} style={{flex:2,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}><option value="">-- Producto --</option>{productos.filter(p=>p.activo).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
+                <select value={l.producto_id} onChange={e=>setLinea(i,'producto_id',e.target.value)} style={{flex:2,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}><option value="">-- Producto --</option>{[...productos.filter(p=>p.activo)].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
                 <div style={{display:'flex',alignItems:'center',gap:6,flex:1}}><label style={{fontSize:'.75rem',color:'var(--tx2)',whiteSpace:'nowrap'}}>Cant.</label><input type="number" min="1" value={l.cantidad} onChange={e=>setLinea(i,'cantidad',e.target.value)} style={{width:60,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}} inputMode="numeric"/></div>
                 {formComb.lineas.length>2&&<button onClick={()=>removeLinea(i)} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.85rem',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>}
               </div>

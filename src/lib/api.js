@@ -440,8 +440,6 @@ export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibido
       .eq('id', item.id)
   }
 
-  // Hay incidencia si: alguna línea tiene nota, cantidad distinta,
-  // O si hay notas generales de recepción
   const hayIncidencia =
     (notas && notas.trim() !== '') ||
     itemsRecibidos.some(i =>
@@ -455,19 +453,16 @@ export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibido
     actualizado_en: new Date().toISOString(),
   }).eq('id', pedidoId)
 
-  // Sumar stock recibido
+  // Sumar stock recibido — usa RPC para evitar problemas de RLS
   for (const item of itemsRecibidos) {
     const cant = item.cantidad_recibida ?? item.cantidad
     if (cant <= 0) continue
-    const { data: existing } = await supabase.from('stock')
-      .select('cantidad').eq('producto_id', item.producto_id).eq('caseta_id', casetaId).maybeSingle()
-    if (existing) {
-      await supabase.from('stock')
-        .update({ cantidad: existing.cantidad + cant })
-        .eq('producto_id', item.producto_id).eq('caseta_id', casetaId)
-    } else {
-      await supabase.from('stock').insert({ producto_id: item.producto_id, caseta_id: casetaId, cantidad: cant })
-    }
+    const { error: eRpc } = await supabase.rpc('incrementar_stock', {
+      p_producto_id: item.producto_id,
+      p_caseta_id:   casetaId,
+      p_cantidad:    cant,
+    })
+    if (eRpc) console.error('[recepcion] error RPC stock', item.nombre, eRpc)
   }
 }
 
