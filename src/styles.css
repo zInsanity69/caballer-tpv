@@ -257,10 +257,55 @@ tr:hover td { background: var(--s2); }
 /* ─── SUBBAR BOTONES RESPONSIVE ─────────────────────── */
 .subbar-btn { padding: 5px 11px; font-size: .76rem; display: flex; align-items: center; }
 .subbar-btn .btn-label { font-size: .74rem; }
-@media (max-width: 768px) {
-  .subbar-btn { padding: 5px 8px; }
-  .subbar-btn .btn-label { display: none; }
+
+/* Hamburger — oculto por defecto, visible solo en móvil */
+.hamburger-btn {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex-shrink: 0;
+  border-radius: 8px; border: 1px solid var(--bd);
+  background: var(--s2); color: var(--tx);
+  cursor: pointer; font-size: 1.1rem;
+  font-family: 'DM Sans', sans-serif;
 }
+
+/* Salir — oculto en móvil (va al menú hamburguesa) */
+.topbar-salir { display: inline-flex; }
+
+.subbar-desktop-btns { display: flex; }
+.admin-tab-label { display: none; font-size: .78rem; font-weight: 700; color: var(--tx2); }
+.hamburger-item--active { background: var(--s3); color: var(--ac) !important; }
+
+@media (max-width: 768px) {
+  .subbar-desktop-btns { display: none; }
+  .hamburger-btn { display: flex; }
+  .topbar-salir { display: none; }
+  .admin-navtabs { display: none; }
+  .admin-tab-label { display: inline; }
+}
+
+/* ─── DRAWER LATERAL MÓVIL ───────────────────────────── */
+.side-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 260px; z-index: 300;
+  background: var(--s1); border-left: 1px solid var(--bd);
+  box-shadow: -8px 0 32px rgba(0,0,0,.5);
+  transform: translateX(100%);
+  transition: transform .25s cubic-bezier(.4,0,.2,1);
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+}
+.side-drawer--open { transform: translateX(0); }
+
+.hamburger-item {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 14px 20px;
+  background: none; border: none; color: var(--tx);
+  font-size: .88rem; font-weight: 600; font-family: 'DM Sans', sans-serif;
+  cursor: pointer; text-align: left; transition: background .15s;
+}
+.hamburger-item:hover { background: var(--s2); }
+.hamburger-item:active { background: var(--s3); }
 
 @media (max-width: 1200px) { .pg { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 900px)  { .pg { grid-template-columns: repeat(3, 1fr); } }
@@ -289,10 +334,10 @@ tr:hover td { background: var(--s2); }
     width: 48px;
     height: 48px;
     border-radius: 50%;
-    background: var(--ac);
+    background: var(--s3);
     color: white;
     font-size: 1.25rem;
-    border: none;
+    border: 2px solid var(--ac);
     cursor: pointer;
     box-shadow: 0 4px 14px rgba(255,77,28,.45);
     z-index: 900;

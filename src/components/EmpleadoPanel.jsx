@@ -949,6 +949,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const [notasRec, setNotasRec]     = useState('')
   const [saving, setSaving]         = useState(false)
   const [scanRec, setScanRec]       = useState('')
+  const [expandido, setExpandido]   = useState(null)
   const recListRef                  = useRef(null)
 
   useEffect(() => {
@@ -1014,8 +1015,8 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                 <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30 }}>Sin pedidos realizados</div>
               )}
               {pedidos.map(p => (
-                <div key={p.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <div key={p.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10, border: '1px solid var(--bd)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: 700, fontSize: '.88rem' }}>
                       {new Date(p.creado_en).toLocaleDateString('es-ES')}
                       <span style={{ fontWeight: 400, color: 'var(--tx2)', fontSize: '.75rem', marginLeft: 6 }}>
@@ -1026,20 +1027,42 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                       {ESTADO_LABEL[p.estado]}
                     </span>
                   </div>
-                  <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 6 }}>
-                    {p.pedido_items?.map(i => `${i.productos?.nombre} ×${i.cantidad}`).join(' · ')}
-                  </div>
-                  {p.notas && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', fontStyle: 'italic' }}>📝 {p.notas}</div>}
-                  {p.notas_admin && (
-                    <div style={{ fontSize: '.75rem', marginTop: 4, color: 'var(--blue)' }}>
-                      🔵 Admin: {p.notas_admin}
-                    </div>
-                  )}
-                  {p.estado === 'EN_CAMINO' && (
-                    <button className="btn-p" style={{ marginTop: 8, padding: '7px 0', fontSize: '.82rem' }}
-                      onClick={() => abrirRecepcion(p)}>
-                      📦 Confirmar recepción
+                  {p.notas && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', fontStyle: 'italic', marginTop: 4 }}>📝 {p.notas}</div>}
+                  {p.notas_admin && <div style={{ fontSize: '.75rem', marginTop: 4, color: 'var(--blue)' }}>🔵 Admin: {p.notas_admin}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button onClick={() => setExpandido(expandido === p.id ? null : p.id)}
+                      style={{ flex: 1, padding: '6px 0', borderRadius: 'var(--rs)', background: 'transparent', border: '1px solid var(--bd)', color: 'var(--tx2)', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif" }}>
+                      {expandido === p.id ? '▲ Ocultar' : '▼ Ver productos'}
                     </button>
+                    {p.estado === 'EN_CAMINO' && (
+                      <button className="btn-p" style={{ flex: 2, padding: '6px 0', fontSize: '.82rem', marginTop: 0 }}
+                        onClick={() => abrirRecepcion(p)}>
+                        📦 Confirmar recepción
+                      </button>
+                    )}
+                  </div>
+                  {expandido === p.id && (
+                    <div style={{ marginTop: 10, borderTop: '1px solid var(--bd)', paddingTop: 10 }}>
+                      {(()=>{
+                        const byEmp = {}
+                        ;(p.pedido_items||[]).forEach(i => {
+                          const e = i.productos?.empresa || 'Sin empresa'
+                          if (!byEmp[e]) byEmp[e] = []
+                          byEmp[e].push(i)
+                        })
+                        return Object.entries(byEmp).map(([emp, items]) => (
+                          <div key={emp} style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: '.7rem', fontWeight: 700, color: 'var(--blue)', marginBottom: 3, paddingBottom: 2, borderBottom: '1px solid var(--bd)' }}>{emp}</div>
+                            {items.map(i => (
+                              <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.78rem', padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,.04)' }}>
+                                <span style={{ color: 'var(--tx)' }}>{i.productos?.nombre}</span>
+                                <span style={{ color: 'var(--tx2)' }}>×<strong style={{ color: 'var(--tx)' }}>{i.cantidad}</strong></span>
+                              </div>
+                            ))}
+                          </div>
+                        ))
+                      })()}
+                    </div>
                   )}
                 </div>
               ))}
@@ -1331,7 +1354,7 @@ function BadgeKgPolvora({ kgActual, kgLimite }) {
       <span style={{ color, fontWeight: 700 }}>💥 {kgActual.toFixed(2)}kg</span>
       <span style={{ color: 'var(--tx2)' }}>/ {kgLimite}kg</span>
       {pct >= 100
-        ? <span style={{ color: 'var(--red)', fontWeight: 800 }}>🚨 SUPERADO</span>
+        ? <span style={{ color: 'var(--red)', fontWeight: 800 }}>SUPERADO</span>
         : alerta && <span style={{ color, fontWeight: 800 }}>{icono}</span>
       }
     </div>
@@ -1911,6 +1934,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [pedidosActivosProdIds,setPedidosActivosProdIds]= useState(new Set())
   const [countdown,            setCountdown]            = useState('')
   const [minsRestantes,        setMinsRestantes]        = useState(9999)
+  const [showHamburger,        setShowHamburger]        = useState(false)
 
   const showToast = (msg, type = 'ok') => { setToast({ msg, type }); setTimeout(() => setToast(null), 2800) }
 
@@ -2228,7 +2252,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               </button>
             )
           })()}
-          <button className="btn-o" style={{padding:'5px 10px',fontSize:'.75rem'}} onClick={() => supabase.auth.signOut()}>Salir</button>
+          <button className="btn-o topbar-salir" style={{padding:'5px 10px',fontSize:'.75rem'}} onClick={() => supabase.auth.signOut()}>Salir</button>
         </div>
       </div>
 
@@ -2281,7 +2305,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       )}
 
       {/* Subbar caja — diseño compacto para móvil */}
-      <div style={{ padding: '6px 12px', background: 'var(--s1)', borderBottom: '1px solid var(--bd)', display: 'flex', alignItems: 'center', gap: 8, fontSize: '.78rem', overflowX: 'auto' }}>
+      <div style={{ padding: '6px 12px', background: 'var(--s1)', borderBottom: '1px solid var(--bd)', display: 'flex', alignItems: 'center', gap: 8, fontSize: '.78rem', overflowX: 'auto', position: 'relative' }}>
         {/* Info empleado + caja */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span style={{ color: 'var(--tx)', fontWeight: 700, whiteSpace: 'nowrap', fontSize: '.8rem' }}>
@@ -2300,8 +2324,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         </div>
         {/* Separador */}
         <div style={{ flex: 1 }} />
-        {/* Botones — con texto en escritorio, solo icono en móvil */}
-        <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+        {/* Botones escritorio — ocultos en móvil */}
+        <div className="subbar-desktop-btns" style={{ gap: 5, flexShrink: 0 }}>
           <button className="btn-o subbar-btn" onClick={() => {
               if (!caja) { showToast('Abre la caja para ver los tickets del turno', 'error'); return }
               setShowHistorial(true)
@@ -2335,6 +2359,63 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               <span className="btn-icon">🟢</span><span className="btn-label"> Abrir caja</span>
             </button>
           )}
+        </div>
+        {/* Botón hamburguesa — solo en móvil, visible via CSS */}
+        <button className="hamburger-btn" onClick={() => setShowHamburger(v => !v)}>
+          {showHamburger ? '✕' : '☰'}
+        </button>
+        {/* Drawer lateral móvil — overlay + panel deslizante */}
+        {showHamburger && (
+          <div onClick={() => setShowHamburger(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.55)' }} />
+        )}
+        <div className={`side-drawer${showHamburger ? ' side-drawer--open' : ''}`}>
+          <div style={{ padding: '16px 20px 10px', borderBottom: '1px solid var(--bd)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 800, fontSize: '.95rem', color: 'var(--tx)' }}>Menú</span>
+            <button onClick={() => setShowHamburger(false)}
+              style={{ background: 'none', border: 'none', color: 'var(--tx2)', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1 }}>✕</button>
+          </div>
+          <button className="hamburger-item" onClick={() => {
+              setShowHamburger(false)
+              if (!caja) { showToast('Abre la caja para ver los tickets del turno', 'error'); return }
+              setShowHistorial(true)
+            }}>
+            <span>🧾</span> Tickets
+          </button>
+          <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowMisPedidos(true); sessionStorage.setItem('tpv_panel','pedidos') }}>
+            <span>📋</span> Pedidos
+            {pedidosPend > 0 && (
+              <span style={{ marginLeft: 'auto', background: 'var(--ac)', color: 'white', borderRadius: 10, padding: '1px 7px', fontSize: '.65rem', fontWeight: 700 }}>
+                {pedidosPend}
+              </span>
+            )}
+          </button>
+          <button className="hamburger-item"
+            onClick={() => { setShowHamburger(false); !pedidoActivo && setShowPedido(true) }}
+            disabled={pedidoActivo}
+            style={pedidoActivo ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}>
+            <span>📤</span> Pedir
+          </button>
+          <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowInventario(true); sessionStorage.setItem('tpv_panel','inventario') }}>
+            <span>📊</span> Inventario
+          </button>
+          <div style={{ height: 1, background: 'var(--bd)', margin: '6px 16px' }} />
+          {caja ? (
+            <button className="hamburger-item" style={{ color: 'var(--red)' }}
+              onClick={() => { setShowHamburger(false); setShowCierre(true) }}>
+              <span>🔒</span> Cerrar caja
+            </button>
+          ) : (
+            <button className="hamburger-item" style={{ color: 'var(--green)' }}
+              onClick={() => { setShowHamburger(false); estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true)) }}>
+              <span>🟢</span> Abrir caja
+            </button>
+          )}
+          <div style={{ height: 1, background: 'var(--bd)', margin: '6px 16px' }} />
+          <button className="hamburger-item" style={{ color: 'var(--tx2)' }}
+            onClick={() => { setShowHamburger(false); supabase.auth.signOut() }}>
+            <span>🚪</span> Cerrar sesión
+          </button>
         </div>
       </div>
 

@@ -1,0 +1,16 @@
+{
+  "name": "Caballer TPV",
+  "short_name": "Caballer TPV",
+  "description": "Sistema TPV Caballer",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "/icon.jpeg",
+      "sizes": "any",
+      "type": "image/jpeg"
+    }
+  ]
+}

@@ -1206,8 +1206,7 @@ function GestionStock({ casetas }) {
             <button key={c.id} onClick={()=>setCasetaSel(c.id)} style={{padding:'7px 13px',borderRadius:'var(--rs)',border:'1px solid',borderColor:casetaSel===c.id?'var(--ac)':'var(--bd)',background:casetaSel===c.id?'rgba(255,77,28,.1)':'transparent',color:casetaSel===c.id?'var(--ac)':'var(--tx2)',fontSize:'.82rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif"}}>{c.nombre.replace('Caballer ','')}</button>
           ))}
         </div>
-        <button onClick={()=>{setLoading(true);Promise.all([getStockCaseta(casetaSel),getKgPolvora(casetaSel),getStockMinimos(casetaSel)]).then(([stk,kg,mins])=>{setStockData(prev=>({...prev,[casetaSel]:stk}));setMinimoData(prev=>({...prev,[casetaSel]:mins}));setKgActual(kg)}).finally(()=>setLoading(false))}} title="Recargar stock" style={{padding:'7px 12px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',background:'var(--s2)',color:'var(--tx2)',cursor:'pointer',fontSize:'.85rem',fontFamily:"'DM Sans',sans-serif",whiteSpace:'nowrap'}}>🔄 Actualizar</button>
-        <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
+<input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
         <WheelScrollDiv style={{display:'flex',gap:5,overflowX:'auto',flexShrink:0}}>
           {CATS.map(c=>(
             <button key={c} onClick={()=>setCatFiltro(c)} style={{flexShrink:0,padding:'6px 12px',borderRadius:20,fontSize:'.75rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif",background:catFiltro===c?'var(--ac)':'var(--s2)',border:`1px solid ${catFiltro===c?'var(--ac)':'var(--bd)'}`,color:catFiltro===c?'white':'var(--tx2)',whiteSpace:'nowrap'}}>{c}</button>
@@ -1937,6 +1936,7 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
   const [casetas,setCasetas]=useState(casetasInit)
   const [ticketFiltro,setTicketFiltro]=useState(null)
   const [pedidosPend,setPedidosPend]=useState(0)
+  const [showAdminMenu,setShowAdminMenu]=useState(false)
 
   // Contar pedidos pendientes para badge
   useEffect(()=>{
@@ -1953,12 +1953,51 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
       <div className="topbar">
         <div className="tl">CABALLER</div>
         <div className="ti">
-          <span style={{fontSize:'.8rem',color:'var(--tx2)'}}>{perfil.nombre}</span>
-          <span className="badge ba">Admin</span>
-          <button className="btn-o" onClick={()=>supabase.auth.signOut()}>Salir</button>
+          <span style={{fontSize:'.8rem',color:'var(--tx2)'}} className="hide-mobile">{perfil.nombre}</span>
+          <span className="badge ba hide-mobile">Admin</span>
+          {/* Tab activo en móvil */}
+          <span className="admin-tab-label">{TABS.find(([k])=>k===tab)?.[1]}</span>
+          <button className="btn-o topbar-salir" onClick={()=>supabase.auth.signOut()}>Salir</button>
+          <button className="hamburger-btn" onClick={()=>setShowAdminMenu(v=>!v)}>
+            {showAdminMenu?'✕':'☰'}
+          </button>
         </div>
       </div>
-      <WheelScrollDiv className="navtabs">
+
+      {/* Drawer lateral admin */}
+      {showAdminMenu&&(
+        <div onClick={()=>setShowAdminMenu(false)}
+          style={{position:'fixed',inset:0,zIndex:299,background:'rgba(0,0,0,.55)'}}/>
+      )}
+      <div className={`side-drawer${showAdminMenu?' side-drawer--open':''}`}>
+        <div style={{padding:'16px 20px 10px',borderBottom:'1px solid var(--bd)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:'.95rem',color:'var(--tx)'}}>{perfil.nombre}</div>
+            <span className="badge ba" style={{marginTop:4,display:'inline-block'}}>Admin</span>
+          </div>
+          <button onClick={()=>setShowAdminMenu(false)}
+            style={{background:'none',border:'none',color:'var(--tx2)',cursor:'pointer',fontSize:'1.2rem',lineHeight:1}}>✕</button>
+        </div>
+        {TABS.map(([k,l])=>(
+          <button key={k} className={`hamburger-item${tab===k?' hamburger-item--active':''}`}
+            style={{position:'relative'}}
+            onClick={()=>{cambiarTab(k);setShowAdminMenu(false)}}>
+            {l}
+            {k==='pedidos'&&pedidosPend>0&&(
+              <span style={{marginLeft:'auto',background:'var(--red)',color:'white',borderRadius:10,padding:'1px 7px',fontSize:'.65rem',fontWeight:700}}>
+                {pedidosPend}
+              </span>
+            )}
+          </button>
+        ))}
+        <div style={{height:1,background:'var(--bd)',margin:'6px 16px'}}/>
+        <button className="hamburger-item" style={{color:'var(--tx2)'}}
+          onClick={()=>{setShowAdminMenu(false);supabase.auth.signOut()}}>
+          <span>🚪</span> Cerrar sesión
+        </button>
+      </div>
+
+      <WheelScrollDiv className="navtabs admin-navtabs">
         {TABS.map(([k,l])=>(
           <button key={k} className={`ntab ${tab===k?'on':''}`} onClick={()=>cambiarTab(k)}
             style={{position:'relative',flexShrink:0}}>
