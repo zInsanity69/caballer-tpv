@@ -516,7 +516,10 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
     if (!notaIncidencia.trim()) return
     setGuardandoNota(true)
     try {
-      await updateTicketNota(incidenciaTicket.id, notaIncidencia.trim())
+      await updateTicketNota(incidenciaTicket.id, notaIncidencia.trim(), {
+        nombreCaseta: caseta.nombre,
+        numeroTicket: incidenciaTicket.numero_ticket,
+      })
       setTickets(prev => prev.map(t => t.id === incidenciaTicket.id ? { ...t, notas: notaIncidencia.trim() } : t))
       setIncidenciaTicket(null); setNotaIncidencia('')
     } catch { alert('No se pudo guardar la incidencia. Contacta con el administrador.') }
@@ -751,7 +754,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
     if (items.length === 0) { showToast('Añade al menos un producto', 'error'); return }
     setLoading(true)
     try {
-      await crearPedido(caseta.id, perfil.id, items, notas)
+      await crearPedido(caseta.id, perfil.id, items, notas, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       showToast('✓ Pedido enviado al administrador')
       onCreado()
     } catch (e) { showToast('Error: ' + e.message, 'error') }
@@ -973,7 +976,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const confirmarRec = async () => {
     setSaving(true)
     try {
-      await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec)
+      await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       const hayIncidencia = notasRec?.trim() ||
         recItems.some(i => i.estado === 'no_llegado' || i.estado === 'diferencia' || i.notas_item?.trim())
       showToast(hayIncidencia ? '⚠️ Recepción con incidencias — stock actualizado' : '✓ Recepción confirmada, stock actualizado')
@@ -1436,7 +1439,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
     // ────────────────────────────────────────────────────────
 
     try {
-      const f = await fichar(perfil.id, caseta.id, tipo, notas, geoData)
+      const f = await fichar(perfil.id, caseta.id, tipo, notas, geoData, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       const mensajes = {
         ENTRADA:          '🟢 Entrada registrada',
         SALIDA:           '🔴 Salida registrada — ¡Hasta mañana!',
@@ -2075,7 +2078,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   const handleAbrirCaja = async () => {
     try {
-      const c = await abrirCaja(caseta.id, perfil.id, parseFloat(apertura) || 0)
+      const c = await abrirCaja(caseta.id, perfil.id, parseFloat(apertura) || 0, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       setCaja(c); setVentas([])
     } catch (e) { showToast('Error: ' + e.message, 'error') }
   }
@@ -2175,7 +2178,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   const confirmarCierre = async (contado) => {
     try {
-      await cerrarCaja(caja.id, perfil.id, contado)
+      const totalEfectivoCierre = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + v.total, 0)
+      const esperadoCierre = (caja.apertura_dinero || 0) + totalEfectivoCierre
+      await cerrarCaja(caja.id, perfil.id, contado, { nombreCaseta: caseta.nombre, esperado: esperadoCierre })
       // Cerrar modales y resetear caja inmediatamente
       setShowCierre(false)
       setShowFichajes(false)
@@ -2716,7 +2721,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             </div>
             <button className="btn-p" style={{ marginTop: 16 }} onClick={async () => {
               try {
-                const c = await abrirCaja(caseta.id, perfil.id, parseFloat(apertura) || 0)
+                const c = await abrirCaja(caseta.id, perfil.id, parseFloat(apertura) || 0, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
                 setCaja(c)
                 setVentas([])
                 setApertura('')

@@ -396,6 +396,54 @@ insert into ofertas (producto_id, etiqueta, cantidad_pack, precio_pack) values
 on conflict do nothing;
 
 -- ============================================================
+-- ALERTAS TELEGRAM
+-- ============================================================
+
+create table if not exists alertas_config (
+  tipo               text primary key,
+  activa             boolean default true,
+  modo_repeticion    text default 'una_vez',  -- 'una_vez' | 'repetir'
+  cooldown_minutos   integer default 30,
+  ultimo_envio       timestamptz
+);
+
+insert into alertas_config (tipo) values
+  ('stock_bajo'),
+  ('stock_agotado'),
+  ('login_usuario'),
+  ('fichaje'),
+  ('nuevo_pedido'),
+  ('inventario_enviado'),
+  ('incidencia_pedido'),
+  ('incidencia_ticket'),
+  ('caja_cerrada_descuadre'),
+  ('pedido_recibido'),
+  ('limite_polvora')
+on conflict do nothing;
+
+alter table alertas_config enable row level security;
+create policy alertas_config_admin on alertas_config
+  using (exists (
+    select 1 from perfiles where id = auth.uid() and rol = 'ADMIN'
+  ))
+  with check (exists (
+    select 1 from perfiles where id = auth.uid() and rol = 'ADMIN'
+  ));
+
+-- Anti-spam por producto: evita repetir alertas de stock para el mismo producto
+create table if not exists alertas_stock_enviadas (
+  producto_id  uuid references productos(id) on delete cascade,
+  caseta_id    uuid references casetas(id)   on delete cascade,
+  tipo         text,  -- 'stock_bajo' | 'stock_agotado'
+  enviado_en   timestamptz default now(),
+  primary key (producto_id, caseta_id, tipo)
+);
+
+alter table alertas_stock_enviadas enable row level security;
+create policy alertas_stock_log_service on alertas_stock_enviadas
+  using (true) with check (true);
+
+-- ============================================================
 -- FIN DEL SCHEMA
 -- SIGUIENTE PASO: Crear usuarios desde Supabase Dashboard
 -- Authentication > Users > Invite user

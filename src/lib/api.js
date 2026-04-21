@@ -4,6 +4,8 @@ import { supabase } from './supabase.js'
 export async function login(email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
   if (error) throw error
+  // Pasar el token directamente para evitar race condition con getSession()
+  triggerAlerta('login_usuario', `🔐 <b>Login detectado</b>\n${email}`, {}, data.session?.access_token)
   return data
 }
 export async function logout() { await supabase.auth.signOut() }
@@ -83,11 +85,49 @@ export async function setStock(productoId, casetaId, cantidad) {
 
 export async function ajustarStock(productoId, casetaId, delta) {
   const { data: row } = await supabase
-    .from('stock').select('cantidad').eq('producto_id', productoId).eq('caseta_id', casetaId).maybeSingle()
+    .from('stock')
+    .select('cantidad, stock_minimo, productos(nombre, gramos_polvora), casetas(nombre)')
+    .eq('producto_id', productoId).eq('caseta_id', casetaId).maybeSingle()
   const actual = row?.cantidad ?? 0
+  const minimo = row?.stock_minimo ?? 0
   const nueva = Math.max(0, actual + delta)
   await setStock(productoId, casetaId, nueva)
+
+  const nombreProd   = row?.productos?.nombre  || 'Producto'
+  const nombreCaseta = row?.casetas?.nombre    || ''
+
+  // Limpiar anti-spam si el stock volvió a la normalidad
+  if (nueva > minimo && actual <= minimo) limpiarAlertaStock(productoId, casetaId)
+
+  if (nueva <= 0 && actual > 0) {
+    triggerAlerta('stock_agotado',
+      `🚨 <b>AGOTADO:</b> ${nombreProd} en ${nombreCaseta}`,
+      { producto_id: productoId, caseta_id: casetaId })
+  } else if (minimo > 0 && nueva > 0 && nueva <= minimo) {
+    triggerAlerta('stock_bajo',
+      `⚠️ <b>Stock bajo:</b> ${nombreProd} en ${nombreCaseta}\nQuedan <b>${nueva}</b> ud. (mínimo: ${minimo})`,
+      { producto_id: productoId, caseta_id: casetaId })
+  }
+
+  // Alerta pólvora si el producto la contiene
+  if (row?.productos?.gramos_polvora > 0) {
+    _checkPolvoraAlerta(casetaId, nombreCaseta)
+  }
+
   return nueva
+}
+
+async function _checkPolvoraAlerta(casetaId, nombreCaseta) {
+  try {
+    const [kgActual, limite] = await Promise.all([getKgPolvora(casetaId), getLimitePolvora(casetaId)])
+    if (limite > 0) {
+      const pct = Math.round((kgActual / limite) * 100)
+      if (pct >= 90) {
+        triggerAlerta('limite_polvora',
+          `💥 <b>Límite de pólvora al ${pct}%</b> en ${nombreCaseta}\n${kgActual.toFixed(2)} kg / ${limite} kg`)
+      }
+    }
+  } catch (_) { /* silencioso */ }
 }
 
 // ─── KILOS PÓLVORA ───────────────────────────────────────────
@@ -170,9 +210,16 @@ export async function getPerfilesEmpleados() {
   return data
 }
 
-export async function updateTicketNota(ticketId, notas) {
+export async function updateTicketNota(ticketId, notas, ctx = null) {
   const { error } = await supabase.from('tickets').update({ notas }).eq('id', ticketId)
   if (error) throw error
+  // Solo alerta cuando se añade una nota (incidencia), no cuando se limpia
+  if (notas) {
+    const caseta = ctx?.nombreCaseta  || ''
+    const ticket = ctx?.numeroTicket  ? ` #${ctx.numeroTicket}` : ''
+    triggerAlerta('incidencia_ticket',
+      `📝 <b>Incidencia en ticket${ticket}</b>${caseta ? ` · ${caseta}` : ''}\n${notas}`)
+  }
 }
 
 export async function crearUsuario({ nombre, email, password, rol, caseta_id }) {
@@ -248,7 +295,7 @@ export async function getCajasAbiertas() {
   }))
 }
 
-export async function abrirCaja(casetaId, empleadoId, aperturaDinero) {
+export async function abrirCaja(casetaId, empleadoId, aperturaDinero, ctx = null) {
   const existente = await getCajaAbierta(casetaId)
   if (existente) return existente
   const { data, error } = await supabase
@@ -257,14 +304,26 @@ export async function abrirCaja(casetaId, empleadoId, aperturaDinero) {
   if (error) throw error
   // Recargar con join de perfiles para tener el nombre de quien abrió
   const cajaCon = await getCajaAbierta(casetaId)
+  const nombre = ctx?.nombreEmpleado || ''
+  const caseta = ctx?.nombreCaseta  || ''
+  triggerAlerta('fichaje', `🏪 <b>Caja abierta</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}`)
   return cajaCon || data
 }
 
-export async function cerrarCaja(cajaId, empleadoId, dineroContado) {
+export async function cerrarCaja(cajaId, empleadoId, dineroContado, ctx = null) {
   const { error } = await supabase.from('cajas')
     .update({ estado: 'CERRADA', cerrada_por: empleadoId, cerrada_en: new Date().toISOString(), dinero_contado: dineroContado })
     .eq('id', cajaId)
   if (error) throw error
+  if (ctx?.esperado !== undefined) {
+    const descuadre = dineroContado - ctx.esperado
+    if (Math.abs(descuadre) > 0.01) {
+      const caseta = ctx.nombreCaseta || ''
+      const signo  = descuadre > 0 ? '+' : ''
+      triggerAlerta('caja_cerrada_descuadre',
+        `💰 <b>Descuadre de caja</b>${caseta ? ` en ${caseta}` : ''}\nEsperado: <b>${ctx.esperado.toFixed(2)}€</b> · Contado: <b>${dineroContado.toFixed(2)}€</b> · Diferencia: <b>${signo}${descuadre.toFixed(2)}€</b>`)
+    }
+  }
 }
 
 export async function getResumenCaja(cajaId) {
@@ -294,7 +353,42 @@ export async function crearTicket(payload) {
     .select('id, numero_ticket')
     .eq('id', ticketId)
     .single()
+
+  // Comprobar alertas de stock para los productos vendidos
+  _checkStockAlertasTicket(payload.casetaId, payload.items.map(i => i.producto_id))
+
   return ticket || { id: ticketId, numero_ticket: ticketId?.slice(-8).toUpperCase() }
+}
+
+async function _checkStockAlertasTicket(casetaId, productoIds) {
+  try {
+    const { data: rows } = await supabase
+      .from('stock')
+      .select('cantidad, stock_minimo, producto_id, productos(nombre, gramos_polvora), casetas(nombre)')
+      .in('producto_id', productoIds)
+      .eq('caseta_id', casetaId)
+    if (!rows) return
+    let hayPolvora = false
+    let nombreCaseta = ''
+    for (const row of rows) {
+      const minimo = row.stock_minimo ?? 0
+      const nombre = row.productos?.nombre || 'Producto'
+      nombreCaseta = row.casetas?.nombre || ''
+      if (row.productos?.gramos_polvora > 0) hayPolvora = true
+      if (row.cantidad <= 0) {
+        triggerAlerta('stock_agotado',
+          `🚨 <b>AGOTADO:</b> ${nombre} en ${nombreCaseta}`,
+          { producto_id: row.producto_id, caseta_id: casetaId })
+      } else if (minimo > 0 && row.cantidad <= minimo) {
+        triggerAlerta('stock_bajo',
+          `⚠️ <b>Stock bajo:</b> ${nombre} en ${nombreCaseta}\nQuedan <b>${row.cantidad}</b> ud. (mínimo: ${minimo})`,
+          { producto_id: row.producto_id, caseta_id: casetaId })
+      } else if (minimo > 0 && row.cantidad > minimo) {
+        limpiarAlertaStock(row.producto_id, casetaId)
+      }
+    }
+    if (hayPolvora && nombreCaseta) _checkPolvoraAlerta(casetaId, nombreCaseta)
+  } catch (_) { /* silencioso */ }
 }
 
 export async function getTicketsTurno(cajaId) {
@@ -387,7 +481,7 @@ export async function getPedidos(filtros = {}) {
   return data || []
 }
 
-export async function crearPedido(casetaId, empleadoId, items, notas = '') {
+export async function crearPedido(casetaId, empleadoId, items, notas = '', ctx = null) {
   const { data: pedido, error: e1 } = await supabase.from('pedidos')
     .insert({ caseta_id: casetaId, empleado_id: empleadoId, notas, estado: 'PENDIENTE' })
     .select().single()
@@ -402,6 +496,10 @@ export async function crearPedido(casetaId, empleadoId, items, notas = '') {
       if (e3) throw e3
     } else throw e2
   }
+  const caseta  = ctx?.nombreCaseta  || ''
+  const nombre  = ctx?.nombreEmpleado || ''
+  triggerAlerta('nuevo_pedido',
+    `📦 <b>Nuevo pedido enviado</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}\n${items.length} producto(s) solicitado(s)`)
   return pedido
 }
 
@@ -418,10 +516,15 @@ export async function setStockMinimo(productoId, casetaId, minimo) {
   if (error) throw error
 }
 
-export async function updatePedido(pedidoId, cambios) {
+export async function updatePedido(pedidoId, cambios, ctx = null) {
   const { error } = await supabase.from('pedidos')
     .update({ ...cambios, actualizado_en: new Date().toISOString() }).eq('id', pedidoId)
   if (error) throw error
+  if (cambios.estado === 'INCIDENCIA') {
+    const caseta = ctx?.nombreCaseta || ''
+    triggerAlerta('incidencia_pedido',
+      `🚨 <b>Incidencia en pedido</b>${caseta ? ` de ${caseta}` : ''}\n${cambios.notas || ''}`.trim())
+  }
 }
 
 export async function updatePedidoItems(pedidoId, items) {
@@ -432,7 +535,7 @@ export async function updatePedidoItems(pedidoId, items) {
   if (e2) throw e2
 }
 
-export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibidos, notas = '') {
+export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibidos, notas = '', ctx = null) {
   // Guarda cantidades recibidas e incidencias por item
   for (const item of itemsRecibidos) {
     await supabase.from('pedido_items')
@@ -463,6 +566,16 @@ export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibido
       p_cantidad:    cant,
     })
     if (eRpc) console.error('[recepcion] error RPC stock', item.nombre, eRpc)
+  }
+
+  const caseta = ctx?.nombreCaseta  || ''
+  const nombre = ctx?.nombreEmpleado || ''
+  if (hayIncidencia) {
+    triggerAlerta('incidencia_pedido',
+      `🚨 <b>Incidencia en recepción de pedido</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` (${nombre})` : ''}`)
+  } else {
+    triggerAlerta('pedido_recibido',
+      `✅ <b>Pedido recibido</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}`)
   }
 }
 
@@ -496,9 +609,13 @@ export async function crearInventario(casetaId, empleadoId, items) {
   return inv
 }
 
-export async function confirmarInventario(inventarioId) {
+export async function confirmarInventario(inventarioId, ctx = null) {
   const { error } = await supabase.rpc('aplicar_inventario', { p_inventario_id: inventarioId })
   if (error) throw error
+  const caseta = ctx?.nombreCaseta  || ''
+  const nombre = ctx?.nombreEmpleado || ''
+  triggerAlerta('inventario_enviado',
+    `📋 <b>Inventario confirmado</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}`)
 }
 
 // ─── STATS ADMIN ─────────────────────────────────────────────
@@ -622,7 +739,7 @@ export async function getUltimoFichaje(empleadoId) {
   return data
 }
 
-export async function fichar(empleadoId, casetaId, tipo, notas = '', geoData = null) {
+export async function fichar(empleadoId, casetaId, tipo, notas = '', geoData = null, ctx = null) {
   const fila = {
     empleado_id: empleadoId,
     caseta_id:   casetaId,
@@ -642,6 +759,11 @@ export async function fichar(empleadoId, casetaId, tipo, notas = '', geoData = n
     .select()
     .single()
   if (error) throw error
+  const nombre = ctx?.nombreEmpleado || ''
+  const caseta = ctx?.nombreCaseta  || ''
+  const tipoLabel = { ENTRADA: '🟢 Entrada', SALIDA: '🔴 Salida', INICIO_DESCANSO: '☕ Inicio descanso', FIN_DESCANSO: '✅ Fin descanso' }[tipo] || tipo
+  triggerAlerta('fichaje',
+    `⏱️ <b>${tipoLabel}</b>${nombre ? ` · ${nombre}` : ''}${caseta ? ` en ${caseta}` : ''}`)
   return data
 }
 
@@ -868,4 +990,47 @@ export function fmtDuracion(minutos) {
   const h = Math.floor(minutos / 60)
   const m = Math.round(minutos % 60)
   return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+// ─── ALERTAS TELEGRAM ────────────────────────────────────────
+
+export async function triggerAlerta(tipo, mensaje, extra = {}, accessToken = null) {
+  try {
+    let token = accessToken
+    if (!token) {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      token = session.access_token
+    }
+    await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/notificar-telegram`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({ tipo, mensaje, ...extra }),
+    })
+  } catch (_) { /* silencioso, no interrumpe el flujo principal */ }
+}
+
+export async function getAlertasConfig() {
+  const { data } = await supabase.from('alertas_config').select('*').order('tipo')
+  return data || []
+}
+
+export async function updateAlertaConfig(tipo, cambios) {
+  const { error } = await supabase.from('alertas_config').update(cambios).eq('tipo', tipo)
+  if (error) throw error
+}
+
+// Borra el registro de "ya enviada" para un producto cuando su stock se recupera
+export async function limpiarAlertaStock(productoId, casetaId) {
+  try {
+    await supabase
+      .from('alertas_stock_enviadas')
+      .delete()
+      .eq('producto_id', productoId)
+      .eq('caseta_id', casetaId)
+  } catch (_) { /* silencioso */ }
 }

@@ -13,6 +13,7 @@ import {
   getFichajesAdmin, editarFichaje, deleteFichaje, calcularTurnos, calcularEstado, fmtDuracion,
   getInventarios, confirmarInventario,
   getKgPolvora,
+  getAlertasConfig, updateAlertaConfig,
 } from '../lib/api.js'
 import { fmt, calcularPrecio, calcularTotalTicket } from '../lib/precios.js'
 
@@ -28,6 +29,7 @@ const TABS = [
   ['ofertas',     '🏷️ Ofertas'],
   ['casetas',     '🏪 Casetas'],
   ['usuarios',    '👥 Usuarios'],
+  ['alertas',     '🔔 Alertas'],
 ]
 
 // ─── SCROLL HORIZONTAL CON RUEDA ─────────────────────────────
@@ -923,7 +925,7 @@ function PanelInventarios({ casetas }) {
   const confirmar=async inv=>{
     setSaving(true)
     try{
-      await confirmarInventario(inv.id)
+      await confirmarInventario(inv.id, { nombreCaseta: inv.casetas?.nombre || '', nombreEmpleado: inv.perfiles?.nombre || '' })
       setInventarios(prev=>prev.map(i=>i.id===inv.id?{...i,estado:'CONFIRMADO'}:i))
       setConfirmando(null); showToast('✓ Inventario confirmado — stock actualizado')
     }catch(e){showToast('Error: '+e.message,'error')}
@@ -1930,6 +1932,170 @@ export function PanelFichajes({ casetas, adminId }) {
   )
 }
 
+// ─── GESTIÓN ALERTAS TELEGRAM ────────────────────────────────
+const ALERTA_LABELS = {
+  caja_cerrada_descuadre: '💰 Caja cerrada con descuadre',
+  fichaje:                '⏱️ Fichaje / Apertura de caja',
+  incidencia_pedido:      '🚨 Incidencia en pedido',
+  incidencia_ticket:      '📝 Incidencia en ticket de venta',
+  inventario_enviado:     '📋 Inventario confirmado',
+  limite_polvora:         '💥 Límite de pólvora cerca',
+  nuevo_pedido:           '📦 Nuevo pedido enviado',
+  login_usuario:          '🔐 Login de usuario',
+  pedido_recibido:        '✅ Pedido recibido',
+  stock_agotado:          '🚨 Producto agotado',
+  stock_bajo:             '⚠️ Stock bajo en producto',
+}
+
+function GestionAlertas() {
+  const [alertas,     setAlertas]     = useState([])
+  const [saving,      setSaving]      = useState({})
+  const [savingAll,   setSavingAll]   = useState(false)
+  const [loading,     setLoading]     = useState(true)
+
+  useEffect(() => {
+    getAlertasConfig().then(d => { setAlertas(d); setLoading(false) })
+  }, [])
+
+  async function guardar(tipo, cambios) {
+    setSaving(s => ({ ...s, [tipo]: true }))
+    try {
+      await updateAlertaConfig(tipo, cambios)
+      setAlertas(prev => prev.map(a => a.tipo === tipo ? { ...a, ...cambios } : a))
+    } finally {
+      setSaving(s => ({ ...s, [tipo]: false }))
+    }
+  }
+
+  async function toggleTodas(activa) {
+    setSavingAll(true)
+    try {
+      await Promise.all(alertas.map(a => updateAlertaConfig(a.tipo, { activa })))
+      setAlertas(prev => prev.map(a => ({ ...a, activa })))
+    } finally {
+      setSavingAll(false)
+    }
+  }
+
+  if (loading) return <div style={{padding:32,textAlign:'center',color:'var(--tx2)'}}>Cargando…</div>
+
+  const todasActivas   = alertas.every(a => a.activa)
+  const todasInactivas = alertas.every(a => !a.activa)
+
+  return (
+    <div style={{maxWidth:700,margin:'0 auto',padding:'24px 16px'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:4}}>
+        <h2 style={{margin:0}}>🔔 Alertas Telegram</h2>
+        <div style={{display:'flex',gap:8}}>
+          <button
+            onClick={() => toggleTodas(true)}
+            disabled={savingAll || todasActivas}
+            style={{padding:'6px 14px',borderRadius:'var(--rs)',border:'1px solid var(--ac)',background: todasActivas?'var(--s2)':'var(--ac)',color: todasActivas?'var(--tx2)':'white',fontSize:'.8rem',cursor: todasActivas?'default':'pointer',opacity: savingAll?.5:1}}
+          >
+            {savingAll ? '…' : '✅ Activar todas'}
+          </button>
+          <button
+            onClick={() => toggleTodas(false)}
+            disabled={savingAll || todasInactivas}
+            style={{padding:'6px 14px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',background: todasInactivas?'var(--s2)':'var(--s1)',color: todasInactivas?'var(--tx2)':'var(--tx)',fontSize:'.8rem',cursor: todasInactivas?'default':'pointer',opacity: savingAll?.5:1}}
+          >
+            {savingAll ? '…' : '🔕 Desactivar todas'}
+          </button>
+        </div>
+      </div>
+      <p style={{color:'var(--tx2)',fontSize:'.85rem',marginBottom:24,lineHeight:1.6}}>
+        Configura qué eventos envían un mensaje al administrador por Telegram.<br/>
+      </p>
+
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {alertas.map(a => {
+          const label = ALERTA_LABELS[a.tipo] || a.tipo
+          const esStock = a.tipo === 'stock_bajo' || a.tipo === 'stock_agotado'
+          return (
+            <div key={a.tipo} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rc)',padding:'14px 16px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+                <span style={{fontWeight:600,fontSize:'.92rem'}}>{label}</span>
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',userSelect:'none'}}>
+                  <span style={{fontSize:'.8rem',color:'var(--tx2)'}}>
+                    {saving[a.tipo] ? '…' : (a.activa ? 'Activada' : 'Desactivada')}
+                  </span>
+                  <div
+                    onClick={() => guardar(a.tipo, { activa: !a.activa })}
+                    style={{
+                      width:42,height:24,borderRadius:12,cursor:'pointer',
+                      background: a.activa ? 'var(--ac)' : 'var(--bd)',
+                      position:'relative',transition:'background .2s',flexShrink:0,
+                    }}
+                  >
+                    <div style={{
+                      position:'absolute',top:3,
+                      left: a.activa ? 20 : 3,
+                      width:18,height:18,borderRadius:'50%',
+                      background:'white',transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.3)',
+                    }}/>
+                  </div>
+                </label>
+              </div>
+
+              {a.activa && (
+                <div style={{marginTop:12,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+                  <div style={{display:'flex',gap:6}}>
+                    <button
+                      onClick={() => guardar(a.tipo, { modo_repeticion: 'una_vez' })}
+                      style={{
+                        padding:'4px 12px',borderRadius:6,border:'1px solid var(--bd)',cursor:'pointer',fontSize:'.78rem',
+                        background: a.modo_repeticion === 'una_vez' ? 'var(--ac)' : 'var(--s1)',
+                        color: a.modo_repeticion === 'una_vez' ? 'white' : 'var(--tx)',
+                      }}
+                    >
+                      Solo una vez
+                    </button>
+                    <button
+                      onClick={() => guardar(a.tipo, { modo_repeticion: 'repetir' })}
+                      style={{
+                        padding:'4px 12px',borderRadius:6,border:'1px solid var(--bd)',cursor:'pointer',fontSize:'.78rem',
+                        background: a.modo_repeticion === 'repetir' ? 'var(--ac)' : 'var(--s1)',
+                        color: a.modo_repeticion === 'repetir' ? 'white' : 'var(--tx)',
+                      }}
+                    >
+                      Repetir con cooldown
+                    </button>
+                  </div>
+
+                  {a.modo_repeticion === 'repetir' && (
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontSize:'.78rem',color:'var(--tx2)'}}>Cooldown:</span>
+                      <input
+                        type="number" min={1} max={1440}
+                        defaultValue={a.cooldown_minutos}
+                        onBlur={e => {
+                          const val = parseInt(e.target.value, 10)
+                          if (!isNaN(val) && val > 0) guardar(a.tipo, { cooldown_minutos: val })
+                        }}
+                        style={{
+                          width:56,padding:'3px 6px',borderRadius:6,border:'1px solid var(--bd)',
+                          background:'var(--s1)',color:'var(--tx)',fontSize:'.78rem',textAlign:'center',
+                        }}
+                      />
+                      <span style={{fontSize:'.78rem',color:'var(--tx2)'}}>min</span>
+                    </div>
+                  )}
+
+                  {esStock && a.modo_repeticion === 'una_vez' && (
+                    <span style={{fontSize:'.75rem',color:'var(--tx2)',fontStyle:'italic'}}>
+                      Se envía una sola vez por producto hasta que el stock se recupere
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function AdminPanel({ perfil, casetas: casetasInit }) {
   // Persistir tab activo — sobrevive a cambios de página
   const [tab,setTab]=useState(()=>sessionStorage.getItem('admin_tab')||'dashboard')
@@ -2022,6 +2188,7 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
         {tab==='ofertas'     && <GestionOfertas/>}
         {tab==='casetas'     && <GestionCasetas casetas={casetas} setCasetas={setCasetas}/>}
         {tab==='usuarios'    && <GestionUsuarios casetas={casetas}/>}
+        {tab==='alertas'     && <GestionAlertas/>}
       </div>
     </div>
   )
