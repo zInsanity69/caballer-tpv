@@ -4,7 +4,7 @@ import logoMonoSVG from '../assets/logo_caballer_monoV2.svg?raw'
 import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
-  getResumenCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
+  getResumenCaja, getRetiradas, registrarRetirada, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
   getFavoritos, toggleFavorito,
   getPedidos, crearPedido, confirmarRecepcionPedido, getStockMinimos,
   crearInventario, getInventarios, confirmarInventario,
@@ -251,12 +251,14 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 6, marginBottom: 12 }}>
           {[1, 2, 3, 4, 5, 6, 8, 10, 15, 20].map(n => (
-            <button key={n} onClick={() => setQty(n)} style={{
+            <button key={n} onClick={() => setQty(n)} disabled={n > stockDisp} style={{
               padding: '8px 4px', borderRadius: 'var(--rs)',
               background: qty === n ? 'var(--ac)' : 'var(--s2)',
               border: '1px solid', borderColor: qty === n ? 'var(--ac)' : 'var(--bd)',
               color: qty === n ? 'white' : 'var(--tx)', fontWeight: 700,
-              cursor: 'pointer', fontSize: '.9rem', fontFamily: "'DM Sans',sans-serif",
+              cursor: n > stockDisp ? 'not-allowed' : 'pointer',
+              opacity: n > stockDisp ? 0.3 : 1,
+              fontSize: '.9rem', fontFamily: "'DM Sans',sans-serif",
             }}>{n}</button>
           ))}
         </div>
@@ -354,25 +356,109 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
   )
 }
 
+// ─── MODAL RETIRADA DE CAJA ──────────────────────────────────
+function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
+  const [cantidad,  setCantidad]  = useState('')
+  const [motivo,    setMotivo]    = useState('')
+  const [loading,   setLoading]   = useState(false)
+  const [retiradas, setRetiradas] = useState([])
+
+  useEffect(() => {
+    getRetiradas(caja.id).then(setRetiradas).catch(() => {})
+  }, [caja.id])
+
+  const totalRetiradas = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
+
+  const handleConfirmar = async () => {
+    const imp = parseFloat(cantidad)
+    if (!imp || imp <= 0) return
+    setLoading(true)
+    try {
+      await registrarRetirada(caja.id, caseta.id, perfil.id, imp, motivo.trim() || null, {
+        nombreEmpleado: perfil.nombre,
+        nombreCaseta:   caseta.nombre,
+      })
+      onDone()
+    } catch (e) {
+      alert('Error al registrar retirada: ' + e.message)
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="mc">
+        <div className="mt-modal">💸 Retirada de Caja</div>
+        <p style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 16 }}>
+          Saca dinero de la caja por seguridad. Se registra con tu nombre y queda anotado para el cuadre final.
+        </p>
+        {retiradas.length > 0 && (
+          <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 14, fontSize: '.78rem' }}>
+            <div style={{ color: 'var(--tx2)', marginBottom: 6, fontWeight: 600 }}>Retiradas anteriores este turno</div>
+            {retiradas.map(r => (
+              <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--bd)' }}>
+                <span style={{ color: 'var(--tx2)' }}>{new Date(r.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })} · {r.perfiles?.nombre}</span>
+                <span style={{ color: 'var(--gold)', fontWeight: 600 }}>{fmt(r.cantidad)}</span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 0', fontWeight: 700 }}>
+              <span>Total retirado</span>
+              <span style={{ color: 'var(--gold)' }}>{fmt(totalRetiradas)}</span>
+            </div>
+          </div>
+        )}
+        <div className="fg">
+          <label>Importe a retirar (€)</label>
+          <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }}
+            value={cantidad} onChange={e => setCantidad(e.target.value)}
+            placeholder="0,00" min="0.01" step=".01" autoFocus inputMode="decimal" />
+        </div>
+        <div className="fg" style={{ marginTop: 10 }}>
+          <label>Motivo (opcional)</label>
+          <input type="text" value={motivo} onChange={e => setMotivo(e.target.value)}
+            placeholder="Ej: mucho efectivo, envío a caja fuerte..." />
+        </div>
+        <button className="btn-p" style={{ background: 'var(--gold)', color: '#000' }}
+          disabled={loading || !cantidad || parseFloat(cantidad) <= 0}
+          onClick={handleConfirmar}>
+          {loading ? 'Registrando...' : 'Confirmar retirada'}
+        </button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
 // ─── MODAL CIERRE CAJA ────────────────────────────────────────
 function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
-  const [contado, setContado] = useState('')
-  const [loading, setLoading] = useState(false)
-  const totalEfectivo = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + v.total, 0)
-  const totalTarjeta  = ventas.filter(v => v.metodo_pago === 'tarjeta').reduce((s, v) => s + v.total, 0)
-  const esperado      = (caja.apertura_dinero || 0) + totalEfectivo
-  const diferencia    = (parseFloat(contado) || 0) - esperado
+  const [contado,   setContado]   = useState('')
+  const [loading,   setLoading]   = useState(false)
+  const [retiradas, setRetiradas] = useState([])
+
+  useEffect(() => {
+    getRetiradas(caja.id).then(setRetiradas).catch(() => {})
+  }, [caja.id])
+
+  const totalEfectivo  = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + v.total, 0)
+  const totalTarjeta   = ventas.filter(v => v.metodo_pago === 'tarjeta').reduce((s, v) => s + v.total, 0)
+  const totalRetiradas = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
+  const esperado       = (caja.apertura_dinero || 0) + totalEfectivo - totalRetiradas
+  const diferencia     = (parseFloat(contado) || 0) - esperado
+
+  const filas = [
+    ['Apertura',        fmt(caja.apertura_dinero || 0), 'var(--tx)'],
+    ['Ventas efectivo', `+${fmt(totalEfectivo)}`,        'var(--green)'],
+    ['Ventas tarjeta',  fmt(totalTarjeta),               'var(--blue)'],
+    ['Total tickets',   String(ventas.length),           'var(--tx)'],
+    ...(totalRetiradas > 0 ? [['Retiradas de caja', `−${fmt(totalRetiradas)}`, 'var(--gold)']] : []),
+  ]
+
   return (
     <div className="mo">
       <div className="mc wide">
         <div className="mt-modal">🏦 Cierre de Caja</div>
         <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 13, marginBottom: 16, fontSize: '.83rem' }}>
-          {[
-            ['Apertura', fmt(caja.apertura_dinero || 0), 'var(--tx)'],
-            ['Ventas efectivo', `+${fmt(totalEfectivo)}`, 'var(--green)'],
-            ['Ventas tarjeta', fmt(totalTarjeta), 'var(--blue)'],
-            ['Total tickets', String(ventas.length), 'var(--tx)'],
-          ].map(([l, v, c]) => (
+          {filas.map(([l, v, c]) => (
             <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--bd)' }}>
               <span style={{ color: 'var(--tx2)' }}>{l}</span>
               <span style={{ color: c, fontWeight: 600 }}>{v}</span>
@@ -398,7 +484,7 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
           </div>
         )}
         <button className="btn-p" disabled={loading}
-          onClick={async () => { setLoading(true); await onCerrar(parseFloat(contado) || 0); setLoading(false) }}>
+          onClick={async () => { setLoading(true); await onCerrar(parseFloat(contado) || 0, esperado); setLoading(false) }}>
           {loading ? 'Cerrando...' : 'Confirmar cierre'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
@@ -437,7 +523,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
   })
 
   const eliminar = async (id) => {
-    if (!window.confirm('¿Eliminar este ticket? El stock NO se restaura automáticamente.')) return
+    if (!window.confirm('¿Eliminar este ticket? El stock se restaurará automáticamente.')) return
     await deleteTicket(id)
     setTickets(prev => prev.filter(t => t.id !== id))
   }
@@ -460,20 +546,6 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
       const ticketParaCalculo = editItems.map(i => ({ id: i.producto_id, cantidad: i.cantidad, precio: i.precio }))
       const nuevoTotal = calcularTotalTicket(ticketParaCalculo, ofertas)
       await updateTicket(editando.id, nuevoTotal, editItems)
-
-      // Ajustar stock: calcular diferencia entre items originales y nuevos
-      const itemsOriginales = editando.ticket_items || []
-      const stockDelta = {}
-      // Devolver stock de lo que había antes
-      itemsOriginales.forEach(i => {
-        stockDelta[i.producto_id] = (stockDelta[i.producto_id] || 0) + i.cantidad
-      })
-      // Restar stock de lo que queda ahora
-      editItems.forEach(i => {
-        stockDelta[i.producto_id] = (stockDelta[i.producto_id] || 0) - i.cantidad
-      })
-      // Aplicar delta al stock local (positivo = devuelto, negativo = añadido)
-      onStockChange && onStockChange(stockDelta)
 
       setTickets(prev => prev.map(t => t.id === editando.id
         ? { ...t, total: nuevoTotal, ticket_items: editItems.map(i => ({ ...i, nombre_producto: i.nombre, precio_unitario: i.precio })) }
@@ -1907,6 +1979,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [showScan,       setShowScan]       = useState(false)
   const [showPago,       setShowPago]       = useState(false)
   const [showCierre,       setShowCierre]       = useState(false)
+  const [showRetirada,     setShowRetirada]     = useState(false)
   const [showAperturaCaja, setShowAperturaCaja] = useState(false)
   const [showHistorial,  setShowHistorial]  = useState(false)
   const [showOk,         setShowOk]         = useState(null)
@@ -2114,6 +2187,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         if (nuevaCant > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
         const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
       }
+      if (cantidad > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
       return [...prev, { ...prod, cantidad, gramos_polvora: prod.gramos_polvora || 0 }]
     })
     setShowScan(false)
@@ -2176,10 +2250,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
   }
 
-  const confirmarCierre = async (contado) => {
+  const confirmarCierre = async (contado, esperadoCierre) => {
     try {
-      const totalEfectivoCierre = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + v.total, 0)
-      const esperadoCierre = (caja.apertura_dinero || 0) + totalEfectivoCierre
       await cerrarCaja(caja.id, perfil.id, contado, { nombreCaseta: caseta.nombre, esperado: esperadoCierre })
       // Cerrar modales y resetear caja inmediatamente
       setShowCierre(false)
@@ -2355,9 +2427,14 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             <span className="btn-icon">📊</span><span className="btn-label"> Inventario</span>
           </button>
           {caja ? (
-            <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(239,68,68,.3)', color: 'var(--red)' }} onClick={() => setShowCierre(true)}>
-              <span className="btn-icon">🔒</span><span className="btn-label"> Cerrar caja</span>
-            </button>
+            <>
+              <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(245,200,66,.3)', color: 'var(--gold)' }} onClick={() => setShowRetirada(true)}>
+                <span className="btn-icon">💸</span><span className="btn-label"> Retirada</span>
+              </button>
+              <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(239,68,68,.3)', color: 'var(--red)' }} onClick={() => setShowCierre(true)}>
+                <span className="btn-icon">🔒</span><span className="btn-label"> Cerrar caja</span>
+              </button>
+            </>
           ) : (
             <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(34,197,94,.4)', color: 'var(--green)' }}
               onClick={() => estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true))}>
@@ -2406,10 +2483,16 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           </button>
           <div style={{ height: 1, background: 'var(--bd)', margin: '6px 16px' }} />
           {caja ? (
-            <button className="hamburger-item" style={{ color: 'var(--red)' }}
-              onClick={() => { setShowHamburger(false); setShowCierre(true) }}>
-              <span>🔒</span> Cerrar caja
-            </button>
+            <>
+              <button className="hamburger-item" style={{ color: 'var(--gold)' }}
+                onClick={() => { setShowHamburger(false); setShowRetirada(true) }}>
+                <span>💸</span> Retirada de caja
+              </button>
+              <button className="hamburger-item" style={{ color: 'var(--red)' }}
+                onClick={() => { setShowHamburger(false); setShowCierre(true) }}>
+                <span>🔒</span> Cerrar caja
+              </button>
+            </>
           ) : (
             <button className="hamburger-item" style={{ color: 'var(--green)' }}
               onClick={() => { setShowHamburger(false); estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true)) }}>
@@ -2684,7 +2767,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
       {/* ─── Modales ─── */}
       {prodModal && (
-        <ModalCantidad producto={prodModal} stockDisp={stock[prodModal.id] ?? 0}
+        <ModalCantidad producto={prodModal}
+          stockDisp={Math.max(0, (stock[prodModal.id] ?? 0) - (ticket.find(i => i.id === prodModal.id)?.cantidad ?? 0))}
           ofertas={ofertas}
           onConfirm={qty => { agregar(prodModal, qty); setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }}
           onClose={() => { setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }} />
@@ -2703,6 +2787,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {showCierre && (
         <ModalCierreCaja caja={caja} caseta={caseta?.nombre} ventas={ventas}
           onClose={() => setShowCierre(false)} onCerrar={confirmarCierre} />
+      )}
+      {showRetirada && (
+        <ModalRetirada caja={caja} perfil={perfil} caseta={caseta}
+          onClose={() => setShowRetirada(false)}
+          onDone={() => { setShowRetirada(false); showToast('✓ Retirada registrada') }} />
       )}
 
       {/* Modal apertura de caja */}

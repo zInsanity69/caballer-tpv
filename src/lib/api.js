@@ -285,14 +285,56 @@ export async function getCajasAbiertas() {
     .select('id, apertura_dinero, caseta_id, casetas(nombre), tickets(metodo_pago, total)')
     .eq('estado', 'ABIERTA')
   if (error) throw error
-  return (data || []).map(c => ({
-    casetaNombre: c.casetas?.nombre || '?',
-    casetaId: c.caseta_id,
-    apertura: c.apertura_dinero || 0,
-    ventasEfectivo: (c.tickets || []).filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + (t.total || 0), 0),
-    totalEfectivo: (c.apertura_dinero || 0) + (c.tickets || []).filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + (t.total || 0), 0),
-    numTickets: (c.tickets || []).length,
-  }))
+  const cajas = data || []
+
+  // Cargamos retiradas por separado para no romper si la tabla aún no existe
+  const retiradaPorCaja = {}
+  try {
+    const ids = cajas.map(c => c.id)
+    if (ids.length > 0) {
+      const { data: rets } = await supabase
+        .from('retiradas_caja').select('caja_id, cantidad').in('caja_id', ids)
+      ;(rets || []).forEach(r => {
+        retiradaPorCaja[r.caja_id] = (retiradaPorCaja[r.caja_id] || 0) + (r.cantidad || 0)
+      })
+    }
+  } catch (_) { /* tabla aún no existe, ignorar */ }
+
+  return cajas.map(c => {
+    const ventasEfectivo = (c.tickets || []).filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + (t.total || 0), 0)
+    const totalRetiradas = retiradaPorCaja[c.id] || 0
+    return {
+      casetaNombre: c.casetas?.nombre || '?',
+      casetaId: c.caseta_id,
+      apertura: c.apertura_dinero || 0,
+      ventasEfectivo,
+      totalRetiradas,
+      // totalEfectivo = solo ventas del día − retiradas (sin apertura, que no es dinero ganado hoy)
+      totalEfectivo: ventasEfectivo - totalRetiradas,
+      numTickets: (c.tickets || []).length,
+    }
+  })
+}
+
+export async function getRetiradas(cajaId) {
+  const { data, error } = await supabase
+    .from('retiradas_caja')
+    .select('*, perfiles(nombre)')
+    .eq('caja_id', cajaId)
+    .order('creado_en', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
+export async function registrarRetirada(cajaId, casetaId, empleadoId, cantidad, motivo, ctx = null) {
+  const { error } = await supabase
+    .from('retiradas_caja')
+    .insert({ caja_id: cajaId, caseta_id: casetaId, empleado_id: empleadoId, cantidad, motivo: motivo || null })
+  if (error) throw error
+  const nombre = ctx?.nombreEmpleado || ''
+  const caseta = ctx?.nombreCaseta  || ''
+  triggerAlerta('retirada_caja',
+    `💸 <b>Retirada de caja</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}\nImporte: <b>${cantidad.toFixed(2)}€</b>${motivo ? `\nMotivo: ${motivo}` : ''}`)
 }
 
 export async function abrirCaja(casetaId, empleadoId, aperturaDinero, ctx = null) {
@@ -335,6 +377,7 @@ export async function getResumenCaja(cajaId) {
 
 // ─── TICKETS ─────────────────────────────────────────────────
 export async function crearTicket(payload) {
+  console.log('[crearTicket] items a descontar:', payload.items)
   // Llama a la función RPC que genera el número secuencial y crea el ticket
   const { data: ticketId, error } = await supabase.rpc('crear_ticket', {
     p_caja_id:     payload.cajaId,
@@ -346,6 +389,7 @@ export async function crearTicket(payload) {
     p_cambio:      payload.cambio,
     p_items:       payload.items,
   })
+  console.log('[crearTicket] resultado RPC:', { ticketId, error })
   if (error) throw error
   // Recuperar el número de ticket asignado
   const { data: ticket } = await supabase
@@ -423,29 +467,31 @@ export async function getTicketsAdmin(desde, hasta, casetaId) {
 }
 
 export async function deleteTicket(id) {
-  const { error } = await supabase.from('tickets').delete().eq('id', id)
+  console.log('[deleteTicket] llamando cancelar_ticket con id:', id)
+  const { data, error } = await supabase.rpc('cancelar_ticket', { p_ticket_id: id })
+  console.log('[deleteTicket] resultado:', { data, error })
   if (error) throw error
 }
 
-// Editar ticket: reemplaza items y recalcula total
+// Editar ticket: ajusta stock de forma atómica (devuelve lo anterior, descuenta lo nuevo)
 export async function updateTicket(ticketId, nuevoTotal, nuevosItems) {
-  const { error: e1 } = await supabase.from('ticket_items').delete().eq('ticket_id', ticketId)
-  if (e1) throw e1
-  if (nuevosItems.length > 0) {
-    const items = nuevosItems.map(i => ({
-      ticket_id:       ticketId,
-      producto_id:     i.producto_id,
-      nombre_producto: i.nombre || i.nombre_producto,
-      precio_unitario: i.precio || i.precio_unitario,
-      cantidad:        i.cantidad,
-      total_linea:     i.total_linea,
-      con_oferta:      i.con_oferta || false,
-    }))
-    const { error: e2 } = await supabase.from('ticket_items').insert(items)
-    if (e2) throw e2
-  }
-  const { error: e3 } = await supabase.from('tickets').update({ total: nuevoTotal }).eq('id', ticketId)
-  if (e3) throw e3
+  const items = nuevosItems.map(i => ({
+    producto_id:     i.producto_id,
+    nombre_producto: i.nombre || i.nombre_producto,
+    precio_unitario: +(i.precio ?? i.precio_unitario),
+    cantidad:        i.cantidad,
+    total_linea:     i.total_linea,
+    con_oferta:      i.con_oferta || false,
+    detalle_oferta:  i.detalle_oferta || null,
+  }))
+  console.log('[updateTicket] llamando actualizar_ticket:', { ticketId, nuevoTotal, items })
+  const { data, error } = await supabase.rpc('actualizar_ticket', {
+    p_ticket_id:    ticketId,
+    p_nuevo_total:  nuevoTotal,
+    p_nuevos_items: items,
+  })
+  console.log('[updateTicket] resultado:', { data, error })
+  if (error) throw error
 }
 
 export async function getTicketsHoy(casetaId) {

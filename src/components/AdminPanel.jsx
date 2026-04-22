@@ -226,6 +226,7 @@ function Dashboard({ casetas }) {
       .finally(() => setLoading(false))
   }, [])
   if (loading) return <div className="loading-row"><div className="spin-sm" /> Cargando...</div>
+  if (!stats) return <div className="loading-row" style={{color:'var(--red)'}}>Error al cargar el dashboard — recarga la página</div>
   const totalHoy = stats.tickets.reduce((s,t) => s+t.total, 0)
   const efectivoHoy = stats.tickets.filter(t=>t.metodo_pago==='efectivo').reduce((s,t)=>s+t.total,0)
   const tarjetaHoy = stats.tickets.filter(t=>t.metodo_pago==='tarjeta').reduce((s,t)=>s+t.total,0)
@@ -251,8 +252,8 @@ function Dashboard({ casetas }) {
               {i>=2&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--tx2)',background:'transparent',borderRadius:20,padding:'1px 7px'}}>#{i+1}</div>}
               <div style={{fontSize:'.7rem',color:'var(--tx2)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:4}}>{c.casetaNombre.replace('Caballer ','')}</div>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'2rem',color:'var(--green)',letterSpacing:1}}>{fmt(c.totalEfectivo)}</div>
-              <div style={{fontSize:'.7rem',color:'var(--tx2)',marginTop:2}}>Apertura {fmt(c.apertura)} · Ventas {fmt(c.ventasEfectivo)}</div>
-              <div style={{fontSize:'.7rem',color:'var(--tx2)'}}>{c.numTickets} tickets</div>
+              {c.totalRetiradas>0&&<div style={{fontSize:'.7rem',color:'var(--gold)',marginTop:2}}>Retiradas −{fmt(c.totalRetiradas)}</div>}
+              <div style={{fontSize:'.7rem',color:'var(--tx2)',marginTop:2}}>{c.numTickets} tickets · Apertura {fmt(c.apertura)}</div>
             </div>
           ))}
         </div>
@@ -1934,17 +1935,48 @@ export function PanelFichajes({ casetas, adminId }) {
 
 // ─── GESTIÓN ALERTAS TELEGRAM ────────────────────────────────
 const ALERTA_LABELS = {
-  caja_cerrada_descuadre: '💰 Caja cerrada con descuadre',
-  fichaje:                '⏱️ Fichaje / Apertura de caja',
-  incidencia_pedido:      '🚨 Incidencia en pedido',
-  incidencia_ticket:      '📝 Incidencia en ticket de venta',
-  inventario_enviado:     '📋 Inventario confirmado',
-  limite_polvora:         '💥 Límite de pólvora cerca',
-  nuevo_pedido:           '📦 Nuevo pedido enviado',
-  login_usuario:          '🔐 Login de usuario',
-  pedido_recibido:        '✅ Pedido recibido',
-  stock_agotado:          '🚨 Producto agotado',
-  stock_bajo:             '⚠️ Stock bajo en producto',
+  caja_cerrada_descuadre: { icon: '💰', label: 'Caja cerrada con descuadre' },
+  retirada_caja:          { icon: '💸', label: 'Retirada de efectivo en caja' },
+  fichaje:                { icon: '⏱️', label: 'Fichaje / Apertura de caja' },
+  incidencia_pedido:      { icon: '🚨', label: 'Incidencia en pedido' },
+  incidencia_ticket:      { icon: '📝', label: 'Incidencia en ticket de venta' },
+  inventario_enviado:     { icon: '📋', label: 'Inventario confirmado' },
+  limite_polvora:         { icon: '💥', label: 'Límite de pólvora cerca' },
+  nuevo_pedido:           { icon: '📦', label: 'Nuevo pedido enviado' },
+  login_usuario:          { icon: '🔐', label: 'Login de usuario' },
+  pedido_recibido:        { icon: '✅', label: 'Pedido recibido' },
+  stock_agotado:          { icon: '🚨', label: 'Producto agotado' },
+  stock_bajo:             { icon: '⚠️', label: 'Stock bajo en producto' },
+}
+
+const ALERTA_GRUPOS = [
+  { titulo: '💼 Caja & Fichajes',     tipos: ['caja_cerrada_descuadre', 'retirada_caja', 'fichaje'] },
+  { titulo: '📦 Pedidos',             tipos: ['nuevo_pedido', 'pedido_recibido', 'incidencia_pedido'] },
+  { titulo: '📝 Tickets & Inventario',tipos: ['incidencia_ticket', 'inventario_enviado'] },
+  { titulo: '📊 Stock & Pólvora',     tipos: ['stock_bajo', 'stock_agotado', 'limite_polvora'] },
+  { titulo: '👤 Usuarios',            tipos: ['login_usuario'] },
+]
+
+function AlertaToggle({ activa, saving, onChange }) {
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+      <span style={{fontSize:'.78rem',color: activa ? 'var(--green)' : 'var(--tx2)', fontWeight:600, minWidth:70, textAlign:'right'}}>
+        {saving ? '…' : (activa ? 'Activada' : 'Desactivada')}
+      </span>
+      <div onClick={onChange} style={{
+        width:38,height:20,borderRadius:10,cursor:'pointer',flexShrink:0,
+        background: activa ? 'var(--green)' : 'var(--s3)',
+        position:'relative',transition:'background .2s',
+      }}>
+        <div style={{
+          position:'absolute',top:2,
+          left: activa ? 20 : 2,
+          width:16,height:16,borderRadius:'50%',
+          background:'white',transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.4)',
+        }}/>
+      </div>
+    </div>
+  )
 }
 
 function GestionAlertas() {
@@ -1979,115 +2011,155 @@ function GestionAlertas() {
 
   if (loading) return <div style={{padding:32,textAlign:'center',color:'var(--tx2)'}}>Cargando…</div>
 
-  const todasActivas   = alertas.every(a => a.activa)
-  const todasInactivas = alertas.every(a => !a.activa)
+  const totalActivas   = alertas.filter(a => a.activa).length
+  const todasActivas   = totalActivas === alertas.length
+  const todasInactivas = totalActivas === 0
+  const mapaAlertas    = Object.fromEntries(alertas.map(a => [a.tipo, a]))
 
   return (
-    <div style={{maxWidth:700,margin:'0 auto',padding:'24px 16px'}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10,marginBottom:4}}>
-        <h2 style={{margin:0}}>🔔 Alertas Telegram</h2>
-        <div style={{display:'flex',gap:8}}>
+    <div style={{maxWidth:720,margin:'0 auto'}}>
+
+      {/* ── Cabecera ── */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12,marginBottom:6}}>
+        <div>
+          <div className="stit" style={{marginBottom:4}}>🔔 Alertas Telegram</div>
+          <div style={{fontSize:'.82rem',color:'var(--tx2)'}}>
+            Configura qué eventos envían un mensaje al administrador por Telegram.
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span className="chip" style={{
+            background: totalActivas > 0 ? 'rgba(34,197,94,.15)' : 'var(--s2)',
+            color: totalActivas > 0 ? 'var(--green)' : 'var(--tx2)',
+            border: `1px solid ${totalActivas > 0 ? 'rgba(34,197,94,.3)' : 'var(--bd)'}`,
+          }}>
+            {totalActivas}/{alertas.length} activas
+          </span>
           <button
             onClick={() => toggleTodas(true)}
             disabled={savingAll || todasActivas}
-            style={{padding:'6px 14px',borderRadius:'var(--rs)',border:'1px solid var(--ac)',background: todasActivas?'var(--s2)':'var(--ac)',color: todasActivas?'var(--tx2)':'white',fontSize:'.8rem',cursor: todasActivas?'default':'pointer',opacity: savingAll?.5:1}}
+            className="btn-o"
+            style={{padding:'6px 14px',fontSize:'.8rem',opacity: (savingAll || todasActivas) ? .45 : 1}}
           >
-            {savingAll ? '…' : '✅ Activar todas'}
+            {savingAll ? '…' : 'Activar todas'}
           </button>
           <button
             onClick={() => toggleTodas(false)}
             disabled={savingAll || todasInactivas}
-            style={{padding:'6px 14px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',background: todasInactivas?'var(--s2)':'var(--s1)',color: todasInactivas?'var(--tx2)':'var(--tx)',fontSize:'.8rem',cursor: todasInactivas?'default':'pointer',opacity: savingAll?.5:1}}
+            style={{
+              padding:'6px 14px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',
+              background:'var(--s1)',color:'var(--tx)',fontSize:'.8rem',cursor: todasInactivas ? 'default' : 'pointer',
+              opacity: (savingAll || todasInactivas) ? .45 : 1,
+            }}
           >
-            {savingAll ? '…' : '🔕 Desactivar todas'}
+            {savingAll ? '…' : 'Desactivar todas'}
           </button>
         </div>
       </div>
-      <p style={{color:'var(--tx2)',fontSize:'.85rem',marginBottom:24,lineHeight:1.6}}>
-        Configura qué eventos envían un mensaje al administrador por Telegram.<br/>
-      </p>
 
-      <div style={{display:'flex',flexDirection:'column',gap:12}}>
-        {alertas.map(a => {
-          const label = ALERTA_LABELS[a.tipo] || a.tipo
-          const esStock = a.tipo === 'stock_bajo' || a.tipo === 'stock_agotado'
+      {/* ── Grupos de alertas ── */}
+      <div style={{display:'flex',flexDirection:'column',gap:16,marginTop:20}}>
+        {ALERTA_GRUPOS.map(grupo => {
+          const items = grupo.tipos.map(t => mapaAlertas[t]).filter(Boolean)
+          if (!items.length) return null
+          const activasGrupo = items.filter(a => a.activa).length
           return (
-            <div key={a.tipo} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rc)',padding:'14px 16px'}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
-                <span style={{fontWeight:600,fontSize:'.92rem'}}>{label}</span>
-                <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',userSelect:'none'}}>
-                  <span style={{fontSize:'.8rem',color:'var(--tx2)'}}>
-                    {saving[a.tipo] ? '…' : (a.activa ? 'Activada' : 'Desactivada')}
-                  </span>
-                  <div
-                    onClick={() => guardar(a.tipo, { activa: !a.activa })}
-                    style={{
-                      width:42,height:24,borderRadius:12,cursor:'pointer',
-                      background: a.activa ? 'var(--ac)' : 'var(--bd)',
-                      position:'relative',transition:'background .2s',flexShrink:0,
-                    }}
-                  >
-                    <div style={{
-                      position:'absolute',top:3,
-                      left: a.activa ? 20 : 3,
-                      width:18,height:18,borderRadius:'50%',
-                      background:'white',transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.3)',
-                    }}/>
-                  </div>
-                </label>
+            <div key={grupo.titulo} className="iform" style={{padding:0,overflow:'hidden'}}>
+              {/* Cabecera grupo */}
+              <div style={{
+                display:'flex',alignItems:'center',justifyContent:'space-between',
+                padding:'12px 16px',borderBottom:'1px solid var(--bd)',
+                background:'var(--s1)',
+              }}>
+                <span style={{fontWeight:700,fontSize:'.88rem'}}>{grupo.titulo}</span>
+                <span style={{fontSize:'.75rem',color: activasGrupo > 0 ? 'var(--green)' : 'var(--tx2)'}}>
+                  {activasGrupo}/{items.length} activas
+                </span>
               </div>
 
-              {a.activa && (
-                <div style={{marginTop:12,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
-                  <div style={{display:'flex',gap:6}}>
-                    <button
-                      onClick={() => guardar(a.tipo, { modo_repeticion: 'una_vez' })}
-                      style={{
-                        padding:'4px 12px',borderRadius:6,border:'1px solid var(--bd)',cursor:'pointer',fontSize:'.78rem',
-                        background: a.modo_repeticion === 'una_vez' ? 'var(--ac)' : 'var(--s1)',
-                        color: a.modo_repeticion === 'una_vez' ? 'white' : 'var(--tx)',
-                      }}
-                    >
-                      Solo una vez
-                    </button>
-                    <button
-                      onClick={() => guardar(a.tipo, { modo_repeticion: 'repetir' })}
-                      style={{
-                        padding:'4px 12px',borderRadius:6,border:'1px solid var(--bd)',cursor:'pointer',fontSize:'.78rem',
-                        background: a.modo_repeticion === 'repetir' ? 'var(--ac)' : 'var(--s1)',
-                        color: a.modo_repeticion === 'repetir' ? 'white' : 'var(--tx)',
-                      }}
-                    >
-                      Repetir con cooldown
-                    </button>
-                  </div>
+              {/* Filas de alerta */}
+              <div style={{display:'flex',flexDirection:'column'}}>
+                {items.map((a, idx) => {
+                  const meta  = ALERTA_LABELS[a.tipo] || { icon: '🔔', label: a.tipo }
+                  const esStock = a.tipo === 'stock_bajo' || a.tipo === 'stock_agotado'
+                  return (
+                    <div key={a.tipo} style={{
+                      borderTop: idx > 0 ? '1px solid var(--bd)' : 'none',
+                      padding:'12px 16px',
+                      borderLeft: `3px solid ${a.activa ? 'var(--green)' : 'transparent'}`,
+                      transition:'border-color .2s',
+                    }}>
+                      {/* Fila principal */}
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:10}}>
+                          <span style={{fontSize:'1.1rem',lineHeight:1}}>{meta.icon}</span>
+                          <span style={{fontWeight:600,fontSize:'.88rem'}}>{meta.label}</span>
+                        </div>
+                        <AlertaToggle
+                          activa={a.activa}
+                          saving={saving[a.tipo]}
+                          onChange={() => guardar(a.tipo, { activa: !a.activa })}
+                        />
+                      </div>
 
-                  {a.modo_repeticion === 'repetir' && (
-                    <div style={{display:'flex',alignItems:'center',gap:6}}>
-                      <span style={{fontSize:'.78rem',color:'var(--tx2)'}}>Cooldown:</span>
-                      <input
-                        type="number" min={1} max={1440}
-                        defaultValue={a.cooldown_minutos}
-                        onBlur={e => {
-                          const val = parseInt(e.target.value, 10)
-                          if (!isNaN(val) && val > 0) guardar(a.tipo, { cooldown_minutos: val })
-                        }}
-                        style={{
-                          width:56,padding:'3px 6px',borderRadius:6,border:'1px solid var(--bd)',
-                          background:'var(--s1)',color:'var(--tx)',fontSize:'.78rem',textAlign:'center',
-                        }}
-                      />
-                      <span style={{fontSize:'.78rem',color:'var(--tx2)'}}>min</span>
+                      {/* Opciones de repetición */}
+                      {a.activa && (
+                        <div style={{
+                          marginTop:10,paddingTop:10,borderTop:'1px solid var(--bd)',
+                          display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',
+                        }}>
+                          <span style={{fontSize:'.75rem',color:'var(--tx2)',marginRight:2}}>Repetición:</span>
+                          <div style={{display:'flex',gap:6}}>
+                            <button
+                              onClick={() => guardar(a.tipo, { modo_repeticion: 'una_vez' })}
+                              style={{
+                                padding:'3px 10px',borderRadius:6,border:'1px solid var(--bd)',cursor:'pointer',fontSize:'.76rem',
+                                background: a.modo_repeticion === 'una_vez' ? 'var(--ac)' : 'var(--s2)',
+                                color: a.modo_repeticion === 'una_vez' ? 'white' : 'var(--tx)',
+                                transition:'background .15s,color .15s',
+                              }}
+                            >Solo una vez</button>
+                            <button
+                              onClick={() => guardar(a.tipo, { modo_repeticion: 'repetir' })}
+                              style={{
+                                padding:'3px 10px',borderRadius:6,border:'1px solid var(--bd)',cursor:'pointer',fontSize:'.76rem',
+                                background: a.modo_repeticion === 'repetir' ? 'var(--ac)' : 'var(--s2)',
+                                color: a.modo_repeticion === 'repetir' ? 'white' : 'var(--tx)',
+                                transition:'background .15s,color .15s',
+                              }}
+                            >Repetir con cooldown</button>
+                          </div>
+
+                          {a.modo_repeticion === 'repetir' && (
+                            <div style={{display:'flex',alignItems:'center',gap:6,marginLeft:4}}>
+                              <span style={{fontSize:'.76rem',color:'var(--tx2)'}}>Cooldown:</span>
+                              <input
+                                type="number" min={1} max={1440}
+                                defaultValue={a.cooldown_minutos}
+                                onBlur={e => {
+                                  const val = parseInt(e.target.value, 10)
+                                  if (!isNaN(val) && val > 0) guardar(a.tipo, { cooldown_minutos: val })
+                                }}
+                                style={{
+                                  width:52,padding:'3px 6px',borderRadius:6,border:'1px solid var(--bd)',
+                                  background:'var(--s2)',color:'var(--tx)',fontSize:'.76rem',textAlign:'center',
+                                }}
+                              />
+                              <span style={{fontSize:'.76rem',color:'var(--tx2)'}}>min</span>
+                            </div>
+                          )}
+
+                          {esStock && a.modo_repeticion === 'una_vez' && (
+                            <span style={{fontSize:'.73rem',color:'var(--tx2)',fontStyle:'italic'}}>
+                              💡 Una vez por producto hasta que el stock se recupere
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  )}
-
-                  {esStock && a.modo_repeticion === 'una_vez' && (
-                    <span style={{fontSize:'.75rem',color:'var(--tx2)',fontStyle:'italic'}}>
-                      Se envía una sola vez por producto hasta que el stock se recupere
-                    </span>
-                  )}
-                </div>
-              )}
+                  )
+                })}
+              </div>
             </div>
           )
         })}
