@@ -326,6 +326,17 @@ export async function getRetiradas(cajaId) {
   return data || []
 }
 
+export async function getRetiradasHoy() {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
+  const { data, error } = await supabase
+    .from('retiradas_caja')
+    .select('*, perfiles(nombre), casetas(nombre)')
+    .gte('creado_en', hoy.toISOString())
+    .order('creado_en', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
 export async function registrarRetirada(cajaId, casetaId, empleadoId, cantidad, motivo, ctx = null) {
   const { error } = await supabase
     .from('retiradas_caja')

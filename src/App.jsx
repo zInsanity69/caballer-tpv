@@ -55,7 +55,7 @@ export default function App() {
 
   if (error) return (
     <div className="splash">
-      <div style={{ color: 'var(--red)', marginBottom: 12 }}>⚠️ Error de conexión</div>
+      <div style={{ color: 'var(--red)', marginBottom: 12 }}><i className="fi fi-rr-triangle-warning"/> Error de conexión</div>
       <div style={{ fontSize: '.85rem', color: 'var(--tx2)', textAlign: 'center', maxWidth: 320 }}>{error}</div>
       <button className="btn-p" style={{ marginTop: 20, width: 'auto', padding: '10px 24px' }}
         onClick={() => window.location.reload()}>Reintentar</button>
@@ -66,7 +66,7 @@ export default function App() {
 
   if (!perfil.activo) return (
     <div className="splash">
-      <div style={{ color: 'var(--red)' }}>🚫 Usuario desactivado</div>
+      <div style={{ color: 'var(--red)' }}><i className="fi fi-rr-ban"/> Usuario desactivado</div>
       <div style={{ fontSize: '.85rem', color: 'var(--tx2)', marginTop: 8 }}>Contacta con el administrador.</div>
       <button className="btn-p" style={{ marginTop: 20, width: 'auto', padding: '10px 24px' }}
         onClick={() => supabase.auth.signOut()}>Cerrar sesión</button>

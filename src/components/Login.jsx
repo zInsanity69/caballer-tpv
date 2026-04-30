@@ -53,7 +53,7 @@ export default function Login() {
               placeholder="••••••••"
               style={{paddingRight:38}}
             />
-            <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?'🙈':'👁️'}</button>
+            <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass ? <i className="fi fi-rr-eye-crossed"/> : <i className="fi fi-rr-eye"/>}</button>
           </div>
         </div>
 

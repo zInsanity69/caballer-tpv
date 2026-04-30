@@ -19,9 +19,9 @@ function WheelScrollDiv({ children, className, style }) {
 }
 
 const TABS = [
-  ['fichajes',  '⏱️ Fichajes'],
-  ['usuarios',  '👥 Usuarios'],
-  ['casetas',   '🏪 Casetas'],
+  ['fichajes', 'fi-rr-clock', 'Fichajes'],
+  ['usuarios', 'fi-rr-users', 'Usuarios'],
+  ['casetas',  'fi-rr-shop',  'Casetas'],
 ]
 
 export default function RRHHPanel({ perfil }) {
@@ -42,8 +42,8 @@ export default function RRHHPanel({ perfil }) {
       </div>
 
       <WheelScrollDiv className="navtabs">
-        {TABS.map(([k, l]) => (
-          <button key={k} className={`ntab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)} style={{ flexShrink: 0 }}>{l}</button>
+        {TABS.map(([k, ic, l]) => (
+          <button key={k} className={`ntab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)} style={{ flexShrink: 0 }}><i className={`fi ${ic}`}/>{' '}{l}</button>
         ))}
       </WheelScrollDiv>
 

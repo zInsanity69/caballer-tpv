@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import logoMonoSVG from '../assets/logo_caballer_monoV2.svg?raw'
+import logoColor from '../assets/logo_caballer_color.svg'
 import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
@@ -77,7 +78,7 @@ function BtnScroll() {
       title={estado === 'ticket' ? 'Ver ticket' : 'Subir arriba'}
       aria-label={estado === 'ticket' ? 'Ver ticket' : 'Subir arriba'}
     >
-      {estado === 'ticket' ? '🧾' : '↑'}
+      {estado === 'ticket' ? <i className="fi fi-rr-receipt"/> : <i className="fi fi-rr-angle-up"/>}
     </button>
   )
 }
@@ -221,8 +222,9 @@ function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong,
       <EaBadge edad={p.edad_minima} />
       <button data-nobubble="1" onClick={(e) => { e.stopPropagation(); onFav(p.id) }} style={{
         position: 'absolute', top: 5, left: 5, background: 'transparent', border: 'none',
-        cursor: 'pointer', fontSize: '.72rem', opacity: esFav ? 1 : .25, padding: 0, lineHeight: 1,
-      }}>⭐</button>
+        cursor: 'pointer', fontSize: '.85rem', padding: 0, lineHeight: 1,
+      color: esFav ? 'var(--gold)' : 'rgba(255,255,255,.3)',
+      }}><i className={`fi ${esFav ? 'fi-sr-star' : 'fi-rr-star'}`}/></button>
       <div className="pn">{p.nombre}</div>
       <div className="pp2">{fmt(p.precio)}</div>
       <div className="pst">
@@ -266,6 +268,7 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
           <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
           <input ref={inputRef} type="number" min="1" max={stockDisp} value={qty}
             onChange={e => setQty(Math.max(1, Math.min(stockDisp, parseInt(e.target.value) || 1)))}
+            onFocus={e => e.target.select()}
             onKeyDown={e => e.key === 'Enter' && onConfirm(qty)}
             style={{ flex: 1, background: 'var(--s2)', border: '2px solid var(--ac)', borderRadius: 'var(--rs)', padding: '10px', color: 'var(--tx)', fontSize: '1.4rem', fontWeight: 700, textAlign: 'center', outline: 'none', fontFamily: "'DM Sans',sans-serif" }}
             inputMode="numeric" />
@@ -303,10 +306,10 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
         <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '2.8rem', color: 'var(--ac)', marginBottom: 16 }}>{fmt(total)}</div>
         <div className="mg2">
           <div className={`mb ${metodo === 'efectivo' ? 'on' : ''}`} onClick={() => setMetodo('efectivo')}>
-            <div className="mi2">💵</div><div className="ml">Efectivo</div>
+            <div className="mi2"><i className="fi fi-rr-coins"/></div><div className="ml">Efectivo</div>
           </div>
           <div className={`mb ${metodo === 'tarjeta' ? 'on' : ''}`} onClick={() => setMetodo('tarjeta')}>
-            <div className="mi2">💳</div><div className="ml">Tarjeta</div>
+            <div className="mi2"><i className="fi fi-rr-credit-card"/></div><div className="ml">Tarjeta</div>
           </div>
         </div>
         {metodo === 'efectivo' && (
@@ -331,7 +334,7 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
           }}>
             <div style={{ position: 'absolute', top: 3, left: modoRapido ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
           </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>⚡ Venta rápida — nuevo ticket automático</span>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-bolt"/> Venta rápida — nuevo ticket automático</span>
         </div>
         {/* Toggle impresión de ticket */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', marginBottom: 4 }}>
@@ -341,7 +344,7 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
           }}>
             <div style={{ position: 'absolute', top: 3, left: ticketActivo ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
           </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>🖨️ Mostrar opción de imprimir ticket</span>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-print"/> Mostrar opción de imprimir ticket</span>
         </div>
         <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={async () => {
           setLoading(true)
@@ -362,16 +365,30 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
   const [motivo,    setMotivo]    = useState('')
   const [loading,   setLoading]   = useState(false)
   const [retiradas, setRetiradas] = useState([])
+  const [ventas,    setVentas]    = useState([])
 
   useEffect(() => {
-    getRetiradas(caja.id).then(setRetiradas).catch(() => {})
+    Promise.all([
+      getRetiradas(caja.id).catch(() => []),
+      getResumenCaja(caja.id).catch(() => []),
+    ]).then(([r, v]) => { setRetiradas(r); setVentas(v) })
   }, [caja.id])
 
-  const totalRetiradas = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
+  const MIN_RETIRADA = 100  // mínimo por retirada
+  const apertura         = caja.apertura_dinero || 0
+  const totalRetiradas   = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
+  const ventasEfectivo   = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + (v.total || 0), 0)
+  // Saldo real = apertura + ventas efectivo − retiradas anteriores
+  const saldoActual      = apertura + ventasEfectivo - totalRetiradas
+  // Máximo retirable = lo que hay por encima de la apertura (la apertura siempre debe quedar)
+  const maxRetirable     = saldoActual - apertura
+  const imp              = parseFloat(cantidad) || 0
+  const errMin           = imp > 0 && imp < MIN_RETIRADA
+  const errMax           = imp > maxRetirable
+  const puedeConfirmar   = imp >= MIN_RETIRADA && !errMax && !loading
 
   const handleConfirmar = async () => {
-    const imp = parseFloat(cantidad)
-    if (!imp || imp <= 0) return
+    if (!puedeConfirmar) return
     setLoading(true)
     try {
       await registrarRetirada(caja.id, caseta.id, perfil.id, imp, motivo.trim() || null, {
@@ -388,10 +405,30 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="mc">
-        <div className="mt-modal">💸 Retirada de Caja</div>
-        <p style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 16 }}>
-          Saca dinero de la caja por seguridad. Se registra con tu nombre y queda anotado para el cuadre final.
-        </p>
+        <div className="mt-modal"><i className="fi fi-rr-coins"/> Retirada de Caja</div>
+
+        {/* Saldo disponible */}
+        <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 14px', marginBottom: 6, fontSize: '.82rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ color: 'var(--tx2)' }}>Total en caja ahora</span>
+            <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '1.4rem', color: 'var(--green)', letterSpacing: 1 }}>{fmt(saldoActual)}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: 'var(--tx2)' }}>Mínimo a dejar (apertura)</span>
+            <span style={{ color: 'var(--tx2)', fontWeight: 600 }}>{fmt(apertura)}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--bd)', fontWeight: 700 }}>
+            <span>Máximo retirable</span>
+            <span style={{ color: maxRetirable >= MIN_RETIRADA ? 'var(--ac)' : 'var(--red)' }}>{fmt(Math.max(0, maxRetirable))}</span>
+          </div>
+        </div>
+        {maxRetirable < MIN_RETIRADA && (
+          <div style={{ fontSize: '.8rem', color: 'var(--red)', marginBottom: 12, padding: '6px 10px', background: 'rgba(239,68,68,.08)', borderRadius: 'var(--rs)' }}>
+            No hay suficiente efectivo para hacer una retirada — necesitas al menos {fmt(apertura + MIN_RETIRADA)} en caja
+          </div>
+        )}
+        <div style={{ height: 10 }} />
+
         {retiradas.length > 0 && (
           <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 14, fontSize: '.78rem' }}>
             <div style={{ color: 'var(--tx2)', marginBottom: 6, fontWeight: 600 }}>Retiradas anteriores este turno</div>
@@ -408,18 +445,31 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
           </div>
         )}
         <div className="fg">
-          <label>Importe a retirar (€)</label>
-          <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }}
+          <label>Importe a retirar (€) — mínimo {fmt(MIN_RETIRADA)}</label>
+          <input type="number" className="bi"
+            style={{ fontSize: '1.4rem', marginBottom: 0, borderColor: (errMin || errMax) && imp > 0 ? 'var(--red)' : undefined }}
             value={cantidad} onChange={e => setCantidad(e.target.value)}
-            placeholder="0,00" min="0.01" step=".01" autoFocus inputMode="decimal" />
+            placeholder="0,00" min={MIN_RETIRADA} max={Math.max(0, maxRetirable)} step="1"
+            autoFocus inputMode="decimal"
+            disabled={maxRetirable < MIN_RETIRADA} />
         </div>
+        {errMin && (
+          <div style={{ fontSize: '.8rem', color: 'var(--red)', marginTop: 4, marginBottom: 4 }}>
+            El importe mínimo por retirada es {fmt(MIN_RETIRADA)}
+          </div>
+        )}
+        {errMax && (
+          <div style={{ fontSize: '.8rem', color: 'var(--red)', marginTop: 4, marginBottom: 4 }}>
+            No puedes retirar {fmt(imp)} — el máximo es {fmt(maxRetirable)} (debe quedar la apertura de {fmt(apertura)})
+          </div>
+        )}
         <div className="fg" style={{ marginTop: 10 }}>
           <label>Motivo (opcional)</label>
           <input type="text" value={motivo} onChange={e => setMotivo(e.target.value)}
             placeholder="Ej: mucho efectivo, envío a caja fuerte..." />
         </div>
         <button className="btn-p" style={{ background: 'var(--gold)', color: '#000' }}
-          disabled={loading || !cantidad || parseFloat(cantidad) <= 0}
+          disabled={!puedeConfirmar}
           onClick={handleConfirmar}>
           {loading ? 'Registrando...' : 'Confirmar retirada'}
         </button>
@@ -456,7 +506,7 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
   return (
     <div className="mo">
       <div className="mc wide">
-        <div className="mt-modal">🏦 Cierre de Caja</div>
+        <div className="mt-modal"><i className="fi fi-rr-lock"/> Cierre de Caja</div>
         <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 13, marginBottom: 16, fontSize: '.83rem' }}>
           {filas.map(([l, v, c]) => (
             <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--bd)' }}>
@@ -603,7 +653,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
-        <div className="mt-modal">🧾 Tickets del turno</div>
+        <div className="mt-modal"><i className="fi fi-rr-receipt"/> Tickets del turno</div>
 
         {/* Buscador */}
         <input className="si" placeholder="Buscar por empleado, producto, importe..."
@@ -628,7 +678,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                           {t.numero_ticket && <span style={{ color: 'var(--ac)', fontWeight: 700, marginRight: 4 }}>{t.numero_ticket}</span>}
                           {new Date(t.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                           {' · '}{t.perfiles?.nombre}
-                          {' · '}{t.metodo_pago === 'efectivo' ? '💵' : '💳'}
+                          {' · '}{t.metodo_pago === 'efectivo' ? <><i className="fi fi-rr-coins"/></> : <><i className="fi fi-rr-credit-card"/></>}
                         </div>
                         <div style={{ fontWeight: 700, color: 'var(--ac)', fontSize: '1rem' }}>{fmt(t.total)}</div>
                       </div>
@@ -642,15 +692,15 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                           caseta, perfil: t.perfiles,
                           fecha: new Date(t.creado_en),
                           ticketNum: t.numero_ticket || `TVN-${t.id.slice(-6).toUpperCase()}`,
-                        })}>🖨️</button>
+                        })}><i className="fi fi-rr-print"/></button>
                       <button className="btn-o" style={{ fontSize: '.7rem', borderColor: t.notas ? 'var(--red)' : 'var(--gold)', color: t.notas ? 'var(--red)' : 'var(--gold)' }}
                         onClick={() => { setIncidenciaTicket(t); setNotaIncidencia(t.notas || '') }}>
-                        {t.notas ? '⚠️' : '+ Incidencia'}
+                        {t.notas ? <i className="fi fi-rr-triangle-warning"/> : '+ Incidencia'}
                       </button>
                     </div>
                     {t.notas && (
                       <div style={{ marginTop: 6, fontSize: '.75rem', color: 'var(--red)', background: 'rgba(239,68,68,.08)', borderRadius: 'var(--rs)', padding: '4px 8px' }}>
-                        ⚠️ Incidencia: {t.notas}
+                        <i className="fi fi-rr-triangle-warning"/> Incidencia: {t.notas}
                       </div>
                     )}
                     {expanded === t.id && t.ticket_items && (
@@ -676,7 +726,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
       {incidenciaTicket && (
         <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setIncidenciaTicket(null)}>
           <div className="mc">
-            <div className="mt-modal">⚠️ Incidencia en ticket</div>
+            <div className="mt-modal"><i className="fi fi-rr-triangle-warning"/> Incidencia en ticket</div>
             <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 12 }}>
               {incidenciaTicket.numero_ticket} · {fmt(incidenciaTicket.total)}
             </div>
@@ -698,7 +748,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
       {editando && (
         <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setEditando(null)}>
           <div className="mc wide" style={{ maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-            <div className="mt-modal">✏️ Editar Ticket</div>
+            <div className="mt-modal"><i className="fi fi-rr-pencil"/> Editar Ticket</div>
             <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 12 }}>
               {new Date(editando.creado_en).toLocaleString('es-ES')} · {editando.perfiles?.nombre}
             </div>
@@ -836,7 +886,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose(items)}>
       <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
-        <div className="mt-modal">📦 Nuevo Pedido</div>
+        <div className="mt-modal"><i className="fi fi-rr-truck-side"/> Nuevo Pedido</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
           {caseta.nombre} · {perfil.nombre}
         </div>
@@ -848,14 +898,14 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
             background: 'transparent', border: 'none', fontFamily: "'DM Sans',sans-serif",
             borderBottom: `2px solid ${vista === 'catalogo' ? 'var(--ac)' : 'transparent'}`,
             color: vista === 'catalogo' ? 'var(--ac)' : 'var(--tx2)',
-          }}>📋 Ver productos y stock</button>
+          }}><i className="fi fi-rr-box"/> Ver productos y stock</button>
           <button onClick={() => setVista('pedido')} style={{
             flex: 1, padding: '9px 4px', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer',
             background: 'transparent', border: 'none', fontFamily: "'DM Sans',sans-serif",
             borderBottom: `2px solid ${vista === 'pedido' ? 'var(--ac)' : 'transparent'}`,
             color: vista === 'pedido' ? 'var(--ac)' : 'var(--tx2)',
           }}>
-            📤 Mi pedido {items.length > 0 && <span style={{ background: 'var(--ac)', color: 'white', borderRadius: 10, padding: '1px 7px', fontSize: '.7rem', marginLeft: 4 }}>{items.reduce((s, i) => s + i.cantidad, 0)}</span>}
+            <i className="fi fi-rr-paper-plane"/> Mi pedido {items.length > 0 && <span style={{ background: 'var(--ac)', color: 'white', borderRadius: 10, padding: '1px 7px', fontSize: '.7rem', marginLeft: 4 }}>{items.reduce((s, i) => s + i.cantidad, 0)}</span>}
           </button>
         </div>
 
@@ -931,9 +981,9 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
                     {/* Fila 2: stock + info */}
                     <div style={{ fontSize: '.7rem', display: 'flex', gap: 6, marginTop: 3, alignItems: 'center' }}>
                       {stockDisp === 0 ? (
-                        <span style={{ background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.4)', color: 'var(--red)', fontWeight: 800, padding: '1px 6px', borderRadius: 8 }}>❌ Agotado</span>
+                        <span style={{ background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.4)', color: 'var(--red)', fontWeight: 800, padding: '1px 6px', borderRadius: 8 }}><i className="fi fi-rr-cross-circle"/> Agotado</span>
                       ) : stockDisp < 10 ? (
-                        <span style={{ background: 'rgba(245,200,66,.15)', border: '1px solid rgba(245,200,66,.4)', color: 'var(--gold)', fontWeight: 700, padding: '1px 6px', borderRadius: 8 }}>⚠️ {stockDisp} uds</span>
+                        <span style={{ background: 'rgba(245,200,66,.15)', border: '1px solid rgba(245,200,66,.4)', color: 'var(--gold)', fontWeight: 700, padding: '1px 6px', borderRadius: 8 }}><i className="fi fi-rr-triangle-warning"/> {stockDisp} uds</span>
                       ) : (
                         <span style={{ color: 'var(--green)', fontWeight: 600 }}>Stock: {stockDisp}</span>
                       )}
@@ -1004,7 +1054,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
             </div>
 
             <button className="btn-p" disabled={loading || items.length === 0} onClick={enviar}>
-              {loading ? 'Enviando...' : `📤 Enviar pedido (${items.reduce((s,i)=>s+i.cantidad,0)} uds)`}
+              {loading ? 'Enviando...' : `Enviar pedido (${items.reduce((s,i)=>s+i.cantidad,0)} uds)`}
             </button>
           </>
         )}
@@ -1051,7 +1101,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
       await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       const hayIncidencia = notasRec?.trim() ||
         recItems.some(i => i.estado === 'no_llegado' || i.estado === 'diferencia' || i.notas_item?.trim())
-      showToast(hayIncidencia ? '⚠️ Recepción con incidencias — stock actualizado' : '✓ Recepción confirmada, stock actualizado')
+      showToast(hayIncidencia ? 'Recepción con incidencias — stock actualizado' : 'Recepción confirmada, stock actualizado')
       setPedidos(prev => prev.map(p => p.id === recibiendo.id
         ? { ...p, estado: hayIncidencia ? 'INCIDENCIA' : 'RECIBIDO' }
         : p))
@@ -1069,19 +1119,13 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
     INCIDENCIA: 'var(--red)',
     RECHAZADO:  'var(--red)',
   }
-  const ESTADO_LABEL = {
-    PENDIENTE:  '⏳ Pendiente',
-    ACEPTADO:   '✅ Aceptado',
-    EN_CAMINO:  '🚚 En camino',
-    RECIBIDO:   '📦 Recibido',
-    INCIDENCIA: '⚠️ Incidencia',
-    RECHAZADO:  '❌ Rechazado',
-  }
+  const ESTADO_ICON = {PENDIENTE:'fi-rr-clock', ACEPTADO:'fi-rr-check', EN_CAMINO:'fi-rr-truck-side', RECIBIDO:'fi-rr-box', INCIDENCIA:'fi-rr-triangle-warning', RECHAZADO:'fi-rr-cross'}
+  const ESTADO_LABEL = {PENDIENTE:'Pendiente', ACEPTADO:'Aceptado', EN_CAMINO:'En camino', RECIBIDO:'Recibido', INCIDENCIA:'Incidencia', RECHAZADO:'Rechazado'}
 
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
-        <div className="mt-modal">📋 Mis Pedidos</div>
+        <div className="mt-modal"><i className="fi fi-rr-truck-side"/> Mis Pedidos</div>
         {loading
           ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
           : (
@@ -1099,20 +1143,20 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                       </span>
                     </span>
                     <span style={{ fontWeight: 700, fontSize: '.82rem', color: ESTADO_COLOR[p.estado] }}>
-                      {ESTADO_LABEL[p.estado]}
+                      <i className={`fi ${ESTADO_ICON[p.estado]}`}/>{' '}{ESTADO_LABEL[p.estado]}
                     </span>
                   </div>
-                  {p.notas && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', fontStyle: 'italic', marginTop: 4 }}>📝 {p.notas}</div>}
-                  {p.notas_admin && <div style={{ fontSize: '.75rem', marginTop: 4, color: 'var(--blue)' }}>🔵 Admin: {p.notas_admin}</div>}
+                  {p.notas && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', fontStyle: 'italic', marginTop: 4 }}><i className="fi fi-rr-note"/> {p.notas}</div>}
+                  {p.notas_admin && <div style={{ fontSize: '.75rem', marginTop: 4, color: 'var(--blue)' }}><i className="fi fi-rr-shield"/> Admin: {p.notas_admin}</div>}
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                     <button onClick={() => setExpandido(expandido === p.id ? null : p.id)}
                       style={{ flex: 1, padding: '6px 0', borderRadius: 'var(--rs)', background: 'transparent', border: '1px solid var(--bd)', color: 'var(--tx2)', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif" }}>
-                      {expandido === p.id ? '▲ Ocultar' : '▼ Ver productos'}
+                      <i className={`fi ${expandido === p.id ? 'fi-rr-angle-up' : 'fi-rr-angle-down'}`}/>{expandido === p.id ? ' Ocultar' : ' Ver productos'}
                     </button>
                     {p.estado === 'EN_CAMINO' && (
                       <button className="btn-p" style={{ flex: 2, padding: '6px 0', fontSize: '.82rem', marginTop: 0 }}
                         onClick={() => abrirRecepcion(p)}>
-                        📦 Confirmar recepción
+                        <i className="fi fi-rr-check"/> Confirmar recepción
                       </button>
                     )}
                   </div>
@@ -1151,7 +1195,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
       {recibiendo && (
         <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setRecibiendo(null)}>
           <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
-            <div className="mt-modal">📦 Confirmar Recepción</div>
+            <div className="mt-modal"><i className="fi fi-rr-box"/> Confirmar Recepción</div>
             <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 4 }}>
               Revisa cada producto. Confirma lo que ha llegado o marca lo que no vino.
             </div>
@@ -1295,7 +1339,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
             {/* Aviso si hay pendientes */}
             {recItems.some(i => i.estado === 'pendiente') && (
               <div style={{ fontSize: '.75rem', color: 'var(--gold)', marginTop: 8, padding: '6px 10px', background: 'rgba(245,200,66,.1)', borderRadius: 'var(--rs)' }}>
-                ⚠️ Quedan {recItems.filter(i => i.estado === 'pendiente').length} productos sin revisar. Márcalos antes de confirmar.
+                <i className="fi fi-rr-triangle-warning"/> Quedan {recItems.filter(i => i.estado === 'pendiente').length} productos sin revisar. Márcalos antes de confirmar.
               </div>
             )}
 
@@ -1349,7 +1393,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
   if (enviado) return (
     <div className="mo">
       <div className="mc" style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: '3rem', marginBottom: 12 }}>✅</div>
+        <div style={{ fontSize: '2.5rem', marginBottom: 12, color: 'var(--green)' }}><i className="fi fi-rr-check-circle"/></div>
         <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>Inventario enviado</div>
         <div style={{ color: 'var(--tx2)', fontSize: '.85rem', marginBottom: 20 }}>
           El administrador revisará el inventario y actualizará el stock.
@@ -1362,7 +1406,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
-        <div className="mt-modal">📋 Inventario de Cierre</div>
+        <div className="mt-modal"><i className="fi fi-rr-clipboard-list"/> Inventario de Cierre</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
           {caseta.nombre} · Cuenta el stock físico restante
         </div>
@@ -1394,6 +1438,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
               <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad_real - 1)}>−</button>
               <input type="number" value={item.cantidad_real} min="0"
                 onChange={e => setQty(item.producto_id, e.target.value)}
+                onFocus={e => e.target.select()}
                 style={{ width: 60, background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '5px', textAlign: 'center', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
                 inputMode="numeric" />
               <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad_real + 1)}>+</button>
@@ -1406,7 +1451,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
         </div>
 
         <button className="btn-p" disabled={loading} onClick={enviar}>
-          {loading ? 'Enviando...' : '📤 Enviar inventario para revisión'}
+          {loading ? 'Enviando...' : 'Enviar inventario para revisión'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
@@ -1419,18 +1464,17 @@ function BadgeKgPolvora({ kgActual, kgLimite }) {
   const pct = kgLimite > 0 ? (kgActual / kgLimite) * 100 : 0
   const color = pct >= 100 ? 'var(--red)' : pct >= 90 ? 'var(--red)' : pct >= 75 ? 'var(--gold)' : 'var(--green)'
   const alerta = pct >= 80
-  const icono = pct >= 100 ? '🚨' : pct >= 90 ? '⚠️' : '⚠️'
   return (
     <div title={`${kgActual.toFixed(2)} kg / ${kgLimite} kg permitidos (${pct.toFixed(0)}%)`} style={{
       display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px',
       background: alerta ? `rgba(${pct >= 90 ? '239,68,68' : '245,200,66'},.15)` : 'var(--s2)',
       border: `1px solid ${color}`, borderRadius: 20, fontSize: '.72rem', cursor: 'default',
     }}>
-      <span style={{ color, fontWeight: 700 }}>💥 {kgActual.toFixed(2)}kg</span>
+      <span style={{ color, fontWeight: 700 }}><i className="fi fi-rr-flame"/> {kgActual.toFixed(2)}kg</span>
       <span style={{ color: 'var(--tx2)' }}>/ {kgLimite}kg</span>
       {pct >= 100
         ? <span style={{ color: 'var(--red)', fontWeight: 800 }}>SUPERADO</span>
-        : alerta && <span style={{ color, fontWeight: 800 }}>{icono}</span>
+        : alerta && <span style={{ color, fontWeight: 800 }}><i className="fi fi-rr-triangle-warning"/></span>
       }
     </div>
   )
@@ -1513,10 +1557,10 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
     try {
       const f = await fichar(perfil.id, caseta.id, tipo, notas, geoData, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       const mensajes = {
-        ENTRADA:          '🟢 Entrada registrada',
-        SALIDA:           '🔴 Salida registrada — ¡Hasta mañana!',
-        INICIO_DESCANSO:  '☕ Descanso iniciado',
-        FIN_DESCANSO:     '▶️ Volviendo al trabajo',
+        ENTRADA:          'Entrada registrada',
+        SALIDA:           'Salida registrada — ¡Hasta mañana!',
+        INICIO_DESCANSO:  'Descanso iniciado',
+        FIN_DESCANSO:     'Volviendo al trabajo',
       }
       showToast(mensajes[tipo] || '✓ Fichaje registrado')
       onFichar({ tipo, timestamp: f.timestamp })
@@ -1551,7 +1595,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
   return (
     <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="mc wide" style={{maxHeight:'93vh',display:'flex',flexDirection:'column'}}>
-        <div className="mt-modal">⏱ Control de Presencia</div>
+        <div className="mt-modal"><i className="fi fi-rr-clock"/> Control de Presencia</div>
         <div style={{fontSize:'.8rem',color:'var(--tx2)',marginBottom:14}}>{perfil.nombre} · {caseta.nombre}</div>
 
         {/* ── Tarjeta de estado ── */}
@@ -1586,7 +1630,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
             {estado==='libre'&&(
               <button className="btn-p" style={{flex:1,marginTop:0,padding:'10px 0'}}
                 disabled={loading2} onClick={()=>handleFichar('ENTRADA')}>
-                {fichandoType==='ENTRADA'?'...':'🟢 Fichar entrada'}
+                {fichandoType==='ENTRADA'?'...':<><i className="fi fi-rr-circle" style={{color:'var(--green)'}}/> Fichar entrada</>}
               </button>
             )}
             {estado==='trabajando'&&(<>
@@ -1594,24 +1638,24 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
                 flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(245,200,66,.5)',
                 background:'rgba(245,200,66,.1)',color:'var(--gold)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
-              }}>{fichandoType==='INICIO_DESCANSO'?'...':'☕ Iniciar descanso'}</button>
+              }}>{fichandoType==='INICIO_DESCANSO'?'...':<><i className="fi fi-rr-mug-hot" style={{color:'var(--gold)'}}/> Iniciar descanso</>}</button>
               <button onClick={()=>handleFichar('SALIDA')} disabled={loading2} style={{
                 flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(239,68,68,.4)',
                 background:'rgba(239,68,68,.1)',color:'var(--red)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
-              }}>{fichandoType==='SALIDA'?'...':'🔴 Fichar salida'}</button>
+              }}>{fichandoType==='SALIDA'?'...':<><i className="fi fi-rr-circle" style={{color:'var(--red)'}}/> Fichar salida</>}</button>
             </>)}
             {estado==='descanso'&&(<>
               <button onClick={()=>handleFichar('FIN_DESCANSO')} disabled={loading2} style={{
                 flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(34,197,94,.4)',
                 background:'rgba(34,197,94,.1)',color:'var(--green)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
-              }}>{fichandoType==='FIN_DESCANSO'?'...':'▶️ Volver al trabajo'}</button>
+              }}>{fichandoType==='FIN_DESCANSO'?'...':<><i className="fi fi-rr-circle" style={{color:'var(--green)'}}/> Volver al trabajo</>}</button>
               <button onClick={()=>handleFichar('SALIDA')} disabled={loading2} style={{
                 flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(239,68,68,.4)',
                 background:'rgba(239,68,68,.1)',color:'var(--red)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
-              }}>{fichandoType==='SALIDA'?'...':'🔴 Salida directa'}</button>
+              }}>{fichandoType==='SALIDA'?'...':<><i className="fi fi-rr-sign-out-alt" style={{color:'var(--red)'}}/> Salida directa</>}</button>
             </>)}
             {/* Feedback de geolocalización */}
           {geoEstado === 'obteniendo' && (
@@ -1622,17 +1666,17 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
           )}
           {geoEstado === 'ok' && geoMsg && (
             <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(34,197,94,.1)',border:'1px solid rgba(34,197,94,.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--green)'}}>
-              📍 {geoMsg}
+              <i className="fi fi-rr-map-marker"/> {geoMsg}
             </div>
           )}
           {geoEstado === 'fuera' && (
             <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.4)',borderRadius:'var(--rs)',fontSize:'.8rem',color:'var(--red)',fontWeight:600}}>
-              📍 {geoMsg}
+              <i className="fi fi-rr-map-marker"/> {geoMsg}
             </div>
           )}
           {geoEstado === 'error' && (
             <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.4)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--red)'}}>
-              ⚠️ {geoMsg}
+              <i className="fi fi-rr-triangle-warning"/> {geoMsg}
             </div>
           )}
 
@@ -1641,7 +1685,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
               <div style={{width:'100%',marginTop:4,fontSize:'.72rem',color:'var(--gold)',
                 background:'rgba(245,200,66,.08)',border:'1px solid rgba(245,200,66,.2)',
                 borderRadius:'var(--rs)',padding:'5px 10px',textAlign:'center'}}>
-                ⚠️ Eres el único empleado — debes cerrar caja antes de salir
+                <i className="fi fi-rr-triangle-warning"/> Eres el único empleado — debes cerrar caja antes de salir
               </div>
             )}
             {/* Aviso si hay otros empleados activos (puede salir libremente) */}
@@ -1654,7 +1698,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
               padding:'9px 12px',borderRadius:'var(--rs)',border:'1px solid var(--bd)',
               background:showNotas?'var(--s2)':'transparent',color:'var(--tx2)',
               cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif",
-            }}>📝</button>
+            }}><i className="fi fi-rr-note"/></button>
           </div>
         </div>
 
@@ -1710,7 +1754,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
                       {fmtDuracion(t.minutosTrabajados)}
                     </div>
                     {t.minutosDescanso>0&&(
-                      <div style={{fontSize:'.67rem',color:'var(--gold)'}}>☕ {fmtDuracion(t.minutosDescanso)} descanso</div>
+                      <div style={{fontSize:'.67rem',color:'var(--gold)'}}><i className="fi fi-rr-mug-hot"/> {fmtDuracion(t.minutosDescanso)} descanso</div>
                     )}
                   </div>
                   <div style={{textAlign:'center',minWidth:56}}>
@@ -1726,7 +1770,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
                   <div style={{borderTop:'1px dashed rgba(245,200,66,.3)',paddingTop:6,marginTop:4}}>
                     {t.descansos.map((d,j)=>(
                       <div key={j} style={{display:'flex',gap:8,fontSize:'.73rem',color:'var(--gold)',marginBottom:2}}>
-                        <span>☕</span>
+                        <span><i className="fi fi-rr-mug-hot"/></span>
                         <span>{new Date(d.inicio.timestamp).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
                         <span style={{color:'var(--tx2)'}}>→</span>
                         <span>{new Date(d.fin.timestamp).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
@@ -1735,7 +1779,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
                     ))}
                     {t.descansoEnCurso&&(
                       <div style={{display:'flex',gap:8,fontSize:'.73rem',color:'var(--gold)'}}>
-                        <span>☕</span>
+                        <span><i className="fi fi-rr-mug-hot"/></span>
                         <span>{new Date(t.descansoEnCurso.inicio.timestamp).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
                         <span style={{color:'var(--tx2)'}}>→ en curso ({fmtDuracion(t.descansoEnCurso.minutos)})</span>
                       </div>
@@ -1743,7 +1787,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
                   </div>
                 )}
 
-                {t.entrada.notas&&<div style={{fontSize:'.72rem',color:'var(--tx2)',marginTop:5,fontStyle:'italic'}}>📝 {t.entrada.notas}</div>}
+                {t.entrada.notas&&<div style={{fontSize:'.72rem',color:'var(--tx2)',marginTop:5,fontStyle:'italic'}}><i className="fi fi-rr-note"/> {t.entrada.notas}</div>}
               </div>
             ))
           }
@@ -2119,7 +2163,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           if (autoItems.length > 0) {
             crearPedido(caseta.id, perfil.id, autoItems, 'Pedido automático generado a la hora de corte')
               .then(() => {
-                showToast('🤖 Pedido automático enviado al administrador')
+                showToast('Pedido automático enviado al administrador')
                 refrescarTras()
               })
               .catch(e => {
@@ -2167,7 +2211,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   const agregar = useCallback((prod, cantidad = 1) => {
     if (!puedeOperar) {
-      showToast(enDescanso ? '☕ Estás en descanso — termina el descanso para vender' : '⏱ Ficha tu entrada antes de vender', 'error')
+      showToast(enDescanso ? 'Estás en descanso — termina el descanso para vender' : 'Ficha tu entrada antes de vender', 'error')
       setShowFichajes(true)
       return
     }
@@ -2273,7 +2317,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   if (!caseta) return (
     <div className="splash" style={{ flexDirection: 'column', gap: 16, textAlign: 'center', padding: 32 }}>
-      <div style={{ fontSize: '2rem' }}>⚠️</div>
+      <div style={{ fontSize: '2rem', color: 'var(--gold)' }}><i className="fi fi-rr-triangle-warning"/></div>
       <div style={{ fontWeight: 700, color: 'var(--tx)' }}>Sin caseta asignada</div>
       <div style={{ fontSize: '.85rem', color: 'var(--tx2)', maxWidth: 280 }}>
         Tu usuario no tiene ninguna caseta asignada. Contacta con el administrador.
@@ -2307,7 +2351,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   return (
     <div className="app">
       <div className="topbar">
-        <div className="tl">CABALLER</div>
+        <div className="tl"><img src={logoColor} alt="Caballer" style={{ height: 28, display: 'block' }} /></div>
         <div className="ti">
           <BadgeKgPolvora kgActual={kgPolvora} kgLimite={kgLimite} />
           {/* Botón fichaje compacto */}
@@ -2342,7 +2386,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           display: 'flex', alignItems: 'center', gap: 10, fontSize: '.82rem', fontWeight: 700,
           color: enDescanso ? 'var(--gold)' : 'var(--ac)',
         }}>
-          <span style={{ fontSize: '1.1rem' }}>{enDescanso ? '☕' : '⏱'}</span>
+          <i className={`fi ${enDescanso ? 'fi-rr-mug-hot' : 'fi-rr-clock'}`} style={{ fontSize: '1.1rem' }}/>
           <span>
             {enDescanso ? 'Estás en descanso — toca aquí para volver al trabajo'
               : 'No has fichado — toca aquí para registrar tu entrada'}
@@ -2358,7 +2402,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           display: 'flex', alignItems: 'center', gap: 10, fontSize: '.82rem', fontWeight: 700,
           color: 'var(--gold)',
         }}>
-          <span style={{ fontSize: '1.1rem' }}>🟡</span>
+          <i className="fi fi-rr-circle-small" style={{ fontSize: '1.3rem', color: 'var(--gold)' }}/>
           <span>Caja no abierta — toca aquí para abrir caja y poder vender</span>
           <span style={{ marginLeft: 'auto', opacity: .7, fontSize: '.75rem' }}>→ Abrir caja</span>
         </div>
@@ -2373,10 +2417,10 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           color: pctPolvora >= 90 ? 'var(--red)' : 'var(--gold)',
         }}>
           {pctPolvora >= 100
-            ? `🚨 LÍMITE SUPERADO: ${kgPolvora.toFixed(2)} kg de ${kgLimite} kg permitidos (${pctPolvora.toFixed(0)}%) — Obligatorio reducir stock`
+            ? <><i className="fi fi-rr-siren"/> LÍMITE SUPERADO: {kgPolvora.toFixed(2)} kg de {kgLimite} kg permitidos ({pctPolvora.toFixed(0)}%) — Obligatorio reducir stock</>
             : pctPolvora >= 90
-            ? `⚠️ ALERTA: Pólvora al ${pctPolvora.toFixed(0)}% (${kgPolvora.toFixed(2)} kg de ${kgLimite} kg) — NO recibir más stock`
-            : `⚠️ Pólvora al ${pctPolvora.toFixed(0)}% — Cerca del límite (${kgPolvora.toFixed(2)} kg de ${kgLimite} kg)`
+            ? <><i className="fi fi-rr-triangle-warning"/> ALERTA: Pólvora al {pctPolvora.toFixed(0)}% ({kgPolvora.toFixed(2)} kg de {kgLimite} kg) — NO recibir más stock</>
+            : <><i className="fi fi-rr-triangle-warning"/> Pólvora al {pctPolvora.toFixed(0)}% — Cerca del límite ({kgPolvora.toFixed(2)} kg de {kgLimite} kg)</>
           }
         </div>
       )}
@@ -2397,7 +2441,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               Sin caja
             </span>
           )}
-          {modoRapido && <span style={{ background: 'rgba(34,197,94,.15)', color: 'var(--green)', padding: '2px 6px', borderRadius: 20, fontSize: '.65rem', fontWeight: 700, flexShrink: 0 }}>⚡</span>}
+          {modoRapido && <span style={{ background: 'rgba(34,197,94,.15)', color: 'var(--green)', padding: '2px 6px', borderRadius: 20, fontSize: '.65rem', fontWeight: 700, flexShrink: 0 }}><i className="fi fi-rr-bolt"/></span>}
         </div>
         {/* Separador */}
         <div style={{ flex: 1 }} />
@@ -2407,11 +2451,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               if (!caja) { showToast('Abre la caja para ver los tickets del turno', 'error'); return }
               setShowHistorial(true)
             }}>
-            <span className="btn-icon">🧾</span><span className="btn-label"> Tickets</span>
+            <i className="fi fi-rr-receipt btn-icon"/><span className="btn-label">Tickets</span>
           </button>
           <button className="btn-o subbar-btn" style={{ position: 'relative' }}
             onClick={() => { setShowMisPedidos(true); sessionStorage.setItem('tpv_panel','pedidos') }}>
-            <span className="btn-icon">📋</span><span className="btn-label"> Pedidos</span>
+            <i className="fi fi-rr-truck-side btn-icon"/><span className="btn-label">Pedidos</span>
             {pedidosPend > 0 && (
               <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--ac)', color: 'white', borderRadius: '50%', width: 14, height: 14, fontSize: '.55rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
                 {pedidosPend}
@@ -2421,30 +2465,30 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           <button className="btn-o subbar-btn" onClick={() => !pedidoActivo && setShowPedido(true)}
             disabled={pedidoActivo} title={pedidoActivo ? 'Ya hay un pedido activo' : undefined}
             style={pedidoActivo ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}>
-            <span className="btn-icon">📤</span><span className="btn-label"> Pedir</span>
+            <i className="fi fi-rr-paper-plane btn-icon"/><span className="btn-label">Pedir</span>
           </button>
           <button className="btn-o subbar-btn" onClick={() => { setShowInventario(true); sessionStorage.setItem('tpv_panel','inventario') }}>
-            <span className="btn-icon">📊</span><span className="btn-label"> Inventario</span>
+            <i className="fi fi-rr-chart-histogram btn-icon"/><span className="btn-label">Inventario</span>
           </button>
           {caja ? (
             <>
               <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(245,200,66,.3)', color: 'var(--gold)' }} onClick={() => setShowRetirada(true)}>
-                <span className="btn-icon">💸</span><span className="btn-label"> Retirada</span>
+                <i className="fi fi-rr-coins btn-icon"/><span className="btn-label">Retirada</span>
               </button>
               <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(239,68,68,.3)', color: 'var(--red)' }} onClick={() => setShowCierre(true)}>
-                <span className="btn-icon">🔒</span><span className="btn-label"> Cerrar caja</span>
+                <i className="fi fi-rr-lock btn-icon"/><span className="btn-label">Cerrar caja</span>
               </button>
             </>
           ) : (
             <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(34,197,94,.4)', color: 'var(--green)' }}
               onClick={() => estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true))}>
-              <span className="btn-icon">🟢</span><span className="btn-label"> Abrir caja</span>
+              <i className="fi fi-rr-lock-open-alt btn-icon"/><span className="btn-label">Abrir caja</span>
             </button>
           )}
         </div>
         {/* Botón hamburguesa — solo en móvil, visible via CSS */}
         <button className="hamburger-btn" onClick={() => setShowHamburger(v => !v)}>
-          {showHamburger ? '✕' : '☰'}
+          <i className={`fi ${showHamburger ? 'fi-rr-cross' : 'fi-rr-menu-burger'}`}/>
         </button>
         {/* Drawer lateral móvil — overlay + panel deslizante */}
         {showHamburger && (
@@ -2452,20 +2496,24 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.55)' }} />
         )}
         <div className={`side-drawer${showHamburger ? ' side-drawer--open' : ''}`}>
-          <div style={{ padding: '16px 20px 10px', borderBottom: '1px solid var(--bd)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontWeight: 800, fontSize: '.95rem', color: 'var(--tx)' }}>Menú</span>
-            <button onClick={() => setShowHamburger(false)}
-              style={{ background: 'none', border: 'none', color: 'var(--tx2)', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1 }}>✕</button>
+          <div className="drawer-header">
+            <div>
+              <img src={logoColor} alt="Caballer" style={{ height: 26, display: 'block', marginBottom: 6 }} />
+              <div className="drawer-user-row">
+                <span className="drawer-user">{perfil?.nombre || 'Empleado'}</span>
+              </div>
+            </div>
+            <button className="drawer-close" onClick={() => setShowHamburger(false)}><i className="fi fi-rr-cross"/></button>
           </div>
           <button className="hamburger-item" onClick={() => {
               setShowHamburger(false)
               if (!caja) { showToast('Abre la caja para ver los tickets del turno', 'error'); return }
               setShowHistorial(true)
             }}>
-            <span>🧾</span> Tickets
+            <i className="fi fi-rr-receipt"/> Tickets
           </button>
           <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowMisPedidos(true); sessionStorage.setItem('tpv_panel','pedidos') }}>
-            <span>📋</span> Pedidos
+            <i className="fi fi-rr-truck-side"/> Pedidos
             {pedidosPend > 0 && (
               <span style={{ marginLeft: 'auto', background: 'var(--ac)', color: 'white', borderRadius: 10, padding: '1px 7px', fontSize: '.65rem', fontWeight: 700 }}>
                 {pedidosPend}
@@ -2476,33 +2524,33 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             onClick={() => { setShowHamburger(false); !pedidoActivo && setShowPedido(true) }}
             disabled={pedidoActivo}
             style={pedidoActivo ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}>
-            <span>📤</span> Pedir
+            <i className="fi fi-rr-paper-plane"/> Pedir
           </button>
           <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowInventario(true); sessionStorage.setItem('tpv_panel','inventario') }}>
-            <span>📊</span> Inventario
+            <i className="fi fi-rr-chart-histogram"/> Inventario
           </button>
-          <div style={{ height: 1, background: 'var(--bd)', margin: '6px 16px' }} />
+          <div className="drawer-sep" />
           {caja ? (
             <>
               <button className="hamburger-item" style={{ color: 'var(--gold)' }}
                 onClick={() => { setShowHamburger(false); setShowRetirada(true) }}>
-                <span>💸</span> Retirada de caja
+                <i className="fi fi-rr-coins"/> Retirada de caja
               </button>
               <button className="hamburger-item" style={{ color: 'var(--red)' }}
                 onClick={() => { setShowHamburger(false); setShowCierre(true) }}>
-                <span>🔒</span> Cerrar caja
+                <i className="fi fi-rr-lock"/> Cerrar caja
               </button>
             </>
           ) : (
             <button className="hamburger-item" style={{ color: 'var(--green)' }}
               onClick={() => { setShowHamburger(false); estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true)) }}>
-              <span>🟢</span> Abrir caja
+              <i className="fi fi-rr-lock-open-alt"/> Abrir caja
             </button>
           )}
-          <div style={{ height: 1, background: 'var(--bd)', margin: '6px 16px' }} />
+          <div className="drawer-sep" />
           <button className="hamburger-item" style={{ color: 'var(--tx2)' }}
             onClick={() => { setShowHamburger(false); supabase.auth.signOut() }}>
-            <span>🚪</span> Cerrar sesión
+            <i className="fi fi-rr-sign-out-alt"/> Cerrar sesión
           </button>
         </div>
       </div>
@@ -2528,7 +2576,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: '.84rem', marginBottom: 2 }}>
-                  {urgente ? '🚨' : '🤖'} {autoItems.length} producto{autoItems.length !== 1 ? 's' : ''} por debajo del mínimo
+                  <i className={`fi ${urgente ? 'fi-rr-triangle-warning' : 'fi-rr-settings'}`}/> {autoItems.length} producto{autoItems.length !== 1 ? 's' : ''} por debajo del mínimo
                 </div>
                 <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
                   Hora de corte: {caseta.hora_corte_pedidos?.slice(0,5)} · faltan {countdown}
@@ -2558,21 +2606,22 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                   if (stock[prod.id] > 0) abrirModalCantidad(prod)
                   else showToast('Sin stock disponible', 'error')
                 }} />
-              <button className="bsc" onClick={() => setShowScan(true)}>📷</button>
+              <button className="bsc" onClick={() => setShowScan(true)}><i className="fi fi-rr-camera"/></button>
             </div>
 
             {/* Tabs */}
             <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--bd)' }}>
               {[
-                ['todos',     'Todos',                        'var(--ac)'],
-                ['favoritos', `⭐ Favs (${favoritos.length})`, 'var(--gold)'],
-                ['ofertas',   `🏷️ Ofertas (${ofertas.length})`, 'var(--green)'],
+                ['todos',     <><i className="fi fi-rr-grid"/>{' '}Todos</>,                                          'var(--ac)'],
+                ['favoritos', <><i className="fi fi-rr-star" style={{color:'var(--gold)'}}/>{' '}Favs ({favoritos.length})</>, 'var(--gold)'],
+                ['ofertas',   <><i className="fi fi-rr-label" style={{color:'var(--green)'}}/>{' '}Ofertas ({ofertas.length})</>, 'var(--green)'],
               ].map(([k, l, color]) => (
                 <button key={k} onClick={() => setTabTPV(k)} style={{
                   flex: 1, padding: '9px 4px', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer',
                   background: 'transparent', border: 'none',
                   borderBottom: `2px solid ${tabTPV === k ? color : 'transparent'}`,
                   color: tabTPV === k ? color : 'var(--tx2)', fontFamily: "'DM Sans',sans-serif",
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
                 }}>{l}</button>
               ))}
             </div>
@@ -2589,7 +2638,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             {/* Botones rápidos */}
             {botonesRapidos.length > 0 && !busq && tabTPV !== 'ofertas' && (
               <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--bd)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '.67rem', color: 'var(--tx2)', alignSelf: 'center', marginRight: 2 }}>⚡</span>
+                <span style={{ fontSize: '.67rem', color: 'var(--tx2)', alignSelf: 'center', marginRight: 2 }}><i className="fi fi-rr-bolt"/></span>
                 {botonesRapidos.map(p => (
                   <button key={p.id} onClick={() => agregar(p)} style={{
                     padding: '5px 11px', borderRadius: 20, border: '1px solid var(--bd)',
@@ -2623,7 +2672,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               })}
               {tabTPV === 'favoritos' && favoritos.length === 0 && (
                 <div style={{ gridColumn: '1/-1', textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
-                  Pulsa ⭐ en cualquier producto para añadirlo a favoritos
+                  Pulsa <i className="fi fi-rr-star" style={{color:'var(--gold)'}}/> en cualquier producto para añadirlo a favoritos
                 </div>
               )}
             </div>
@@ -2648,7 +2697,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                       opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--blue)', fontSize: '.95rem' }}>🎁 {o.etiqueta || o.nombre}</span>
+                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--blue)', fontSize: '.95rem' }}><i className="fi fi-rr-gift" style={{color:'var(--blue)'}}/> {o.etiqueta || o.nombre}</span>
                         <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(o.precio_pack)}</span>
                       </div>
                       <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
@@ -2674,7 +2723,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                       opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--gold)', fontSize: '.95rem' }}>📦 {o.etiqueta || o.nombre}</span>
+                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--gold)', fontSize: '.95rem' }}><i className="fi fi-rr-box" style={{color:'var(--gold)'}}/> {o.etiqueta || o.nombre}</span>
                         <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(o.precio_pack)}</span>
                       </div>
                       <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
@@ -2690,12 +2739,12 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           {/* Panel ticket */}
           <div className="tp" id="ticket-panel">
             <div className="th">
-              <div className="tt">🧾 Ticket</div>
+              <div className="tt"><i className="fi fi-rr-receipt"/> Ticket</div>
               <div className="tm">{perfil.nombre} · {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</div>
             </div>
             <div className="tis">
               {ticket.length === 0
-                ? <div className="te"><span style={{ fontSize: '2rem', opacity: .4 }}>🛒</span><span>Ticket vacío</span></div>
+                ? <div className="te"><span style={{ fontSize: '2rem', opacity: .35, color: 'var(--tx2)' }}><i className="fi fi-rr-shopping-cart"/></span><span>Ticket vacío</span></div>
                 : ticket.map(item => (
                   <TicketItem key={item.id} item={item} ofertas={ofertas} onQty={cambiarQty}
                     onDel={id => setTicket(p => p.filter(i => i.id !== id))} />
@@ -2714,7 +2763,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                 const ahorro = sinOferta - o.precio_pack
                 return ahorro > 0 ? (
                   <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px dashed rgba(34,197,94,.3)', margin: '2px 0' }}>
-                    <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 600 }}>🏷 {o.etiqueta || o.nombre}</span>
+                    <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 600 }}><i className="fi fi-rr-label"/> {o.etiqueta || o.nombre}</span>
                     <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 700 }}>-{fmt(ahorro)}</span>
                   </div>
                 ) : null
@@ -2738,7 +2787,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                 disabled={ticket.length === 0 || !puedeOperar || !caja}
                 onClick={() => {
                   if (!puedeOperar) {
-                    showToast(enDescanso ? '☕ Termina el descanso para cobrar' : '⏱ Ficha tu entrada para cobrar', 'error')
+                    showToast(enDescanso ? 'Termina el descanso para cobrar' : 'Ficha tu entrada para cobrar', 'error')
                     setShowFichajes(true)
                     return
                   }
@@ -2746,19 +2795,19 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                   setShowPago(true)
                 }}>
                 {!puedeOperar
-                  ? (enDescanso ? '☕ En descanso' : '⏱ Ficha para vender')
-                  : !caja ? '🟡 Abre la caja'
+                  ? (enDescanso ? 'En descanso' : 'Ficha para vender')
+                  : !caja ? 'Abre la caja'
                   : 'Finalizar Venta →'}
               </button>
               {ticket.length > 0 && (
-                <button className="bclr" onClick={() => { setTicket([]); setDescuento(0) }}>✕ Limpiar ticket</button>
+                <button className="bclr" onClick={() => { setTicket([]); setDescuento(0) }}><i className="fi fi-rr-cross"/> Limpiar ticket</button>
               )}
             </div>
           </div>
         </div>
 
         <div style={{ fontSize: '.68rem', color: 'var(--tx2)', textAlign: 'center', marginTop: 8, opacity: .6 }}>
-          Pulsa = +1 unidad · Mantén pulsado = selector de cantidad · ⭐ = favorito
+          Pulsa = +1 unidad · Mantén pulsado = selector de cantidad · <i className="fi fi-rr-star" style={{color:'var(--gold)'}}/> = favorito
         </div>
       </div>
 
@@ -2798,7 +2847,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {showAperturaCaja && (
         <div className="mo" onClick={e => e.target === e.currentTarget && setShowAperturaCaja(false)}>
           <div className="mc">
-            <div className="mt-modal">🟢 Abrir Caja</div>
+            <div className="mt-modal"><i className="fi fi-rr-lock-open-alt"/> Abrir Caja</div>
             <div style={{ fontSize: '.85rem', color: 'var(--tx2)', marginBottom: 16 }}>
               Hola <strong style={{ color: 'var(--tx)' }}>{perfil.nombre}</strong> · {caseta?.nombre}
             </div>
@@ -2856,11 +2905,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {showOk && (
         <div className="mo">
           <div className="mc" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>🎉</div>
+            <div style={{ fontSize: '2rem', marginBottom: 8, color: 'var(--green)' }}><i className="fi fi-rr-check-circle"/></div>
             <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '1.8rem', color: 'var(--green)', marginBottom: 6 }}>¡Venta Confirmada!</div>
             <div style={{ fontSize: '.9rem', fontWeight: 700, color: 'var(--ac)', marginBottom: 4 }}>{fmt(showOk.total)}</div>
             <div style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 16 }}>
-              {showOk.metodo === 'efectivo' ? `Efectivo · Cambio: ${fmt(showOk.cambio)}` : '💳 Tarjeta'}
+              {showOk.metodo === 'efectivo' ? `Efectivo · Cambio: ${fmt(showOk.cambio)}` : 'Tarjeta'}
             </div>
             {/* Botón imprimir ticket */}
             <button onClick={() => imprimirTicket(showOk)} style={{
@@ -2870,7 +2919,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               fontFamily: "'DM Sans',sans-serif", fontSize: '.9rem',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             }}>
-              🖨️ Imprimir ticket
+              <i className="fi fi-rr-print"/> Imprimir ticket
             </button>
             <button className="btn-p" onClick={() => setShowOk(null)}>Nueva Venta</button>
           </div>

@@ -17,7 +17,7 @@ alter table retiradas_caja enable row level security;
 
 -- Admins y encargados ven todo
 create policy "admin_all_retiradas" on retiradas_caja
-  for all using (get_my_rol() in ('admin','encargado'));
+  for all using (get_my_rol() in ('ADMIN','ENCARGADO'));
 
 -- Empleados solo ven las de su propia caja
 create policy "empleado_retiradas_propia_caja" on retiradas_caja
