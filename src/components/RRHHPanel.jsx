@@ -36,7 +36,7 @@ export default function RRHHPanel({ perfil }) {
         <div className="tl">CABALLER</div>
         <div className="ti">
           <span style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>{perfil.nombre}</span>
-          <span className="badge ba" style={{ background: 'rgba(96,165,250,.15)', color: 'var(--blue)', border: '1px solid rgba(96,165,250,.3)' }}>RRHH</span>
+          <span className="badge ba" style={{ background: 'rgba(var(--blue-rgb),.15)', color: 'var(--blue)', border: '1px solid rgba(var(--blue-rgb),.3)' }}>RRHH</span>
           <button className="btn-o" onClick={() => supabase.auth.signOut()}>Salir</button>
         </div>
       </div>

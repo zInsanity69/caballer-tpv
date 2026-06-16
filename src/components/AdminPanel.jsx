@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
-import logoMonoSVG from '../assets/logo_caballer_monoV2.svg?raw'
-import logoColor from '../assets/logo_caballer_color.svg'
+import { imprimirTicket, ticketRowToDatos } from '../lib/ticket.js'
+import FacturaModal from './FacturaModal.jsx'
+import Logo from './Logo.jsx'
 import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
+  getCategorias, crearCategoria, renombrarCategoria, eliminarCategoria,
   getOfertas, upsertOferta, deleteOferta,
   getPerfiles, updatePerfil, eliminarPerfil, crearUsuario, actualizarCredenciales,
   getCasetas, upsertCaseta, deleteCaseta, updateAllPedidosAuto,
-  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy,
+  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy, guardarFacturaCliente,
   setStock, ajustarStock, getStockCaseta, getStockMinimos, setStockMinimo,
   getVentasPorDia,
   getPedidos, updatePedido, updatePedidoItems,
@@ -17,6 +19,8 @@ import {
   getAlertasConfig, updateAlertaConfig,
 } from '../lib/api.js'
 import { fmt, calcularPrecio, calcularTotalTicket } from '../lib/precios.js'
+import { DIVISIONES, evaluarNEC } from '../lib/nec.js'
+import ThemeToggle from './ThemeToggle.jsx'
 
 const TABS = [
   ['dashboard',   'fi-rr-chart-histogram', 'Dashboard'],
@@ -50,165 +54,6 @@ function WheelScrollDiv({ children, className, style }) {
 }
 
 
-// ─── TICKET IMPRIMIBLE ────────────────────────────────────────
-const CONFIG_EMPRESA = {
-  nombre: 'Caballer', razonSocial: 'Caballer Pirotecnia, S.L.',
-  direccion: 'C/ Ejemplo 12, 46000 Valencia', cif: 'B00000000',
-  textoLegal: 'Es imprescindible presentar el ticket para cualquier reclamación. Solo se aceptan devoluciones de artículos defectuosos, en cuyo caso será por otro igual o similar.',
-  iva: 21,
-}
-
-function imprimirTicketAdmin(t) {
-  const items = (t.ticket_items || []).map(i => ({
-    nombre:         i.nombre_producto,
-    precio:         i.precio_unitario,
-    total_linea:    i.total_linea,
-    cantidad:       i.cantidad,
-    gramos_polvora: i.productos?.gramos_polvora || i.gramos_polvora || 0,
-  }))
-  const total        = t.total
-  const iva          = CONFIG_EMPRESA.iva / 100
-  const baseImponible = total / (1 + iva)
-  const cuotaIva     = total - baseImponible
-  const totalNEC     = items.reduce((s, i) => s + (i.gramos_polvora || 0) * i.cantidad, 0)
-  const fmtE         = n => n.toFixed(2) + '€'
-  const fecha        = new Date(t.creado_en)
-  const fmtFecha     = d =>
-    `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ` +
-    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
-  const ticketNum    = t.numero_ticket || `TVN${t.id.slice(-10).toUpperCase()}`
-
-  const ahorroOfertas = items.reduce((s, i) => s + (i.precio * i.cantidad - i.total_linea), 0)
-  const dineroDado   = t.dinero_dado || 0
-  const cambio       = t.cambio || 0
-
-  const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=80mm">
-<title>Ticket ${ticketNum}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 14px;
-    font-weight: bold;
-    width: 80mm;
-    max-width: 80mm;
-    color: #000;
-    background: #fff;
-    padding: 2mm 2mm 0 2mm;
-    line-height: 1;
-  }
-  .sep-solid { border: none; border-top: 2px solid #000; margin: 5px 3px; }
-  .sep-dash  { border: none; border-top: 1px dashed #000; margin: 5px 3px; }
-  .logo     { text-align: center; margin: 2px 0 1px; }
-  .logo svg { display: block; margin: 0 auto; width: 28mm; max-width: 100%; height: auto; }
-  .empresa        { text-align: center; font-size: 13px; font-weight: bold; line-height: 1.2; }
-  .num-fecha { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin: 2px 0; }
-  .col-header {
-    display: flex; justify-content: space-between; font-size: 13px; font-weight: bold;
-    border-bottom: 1px solid #000; padding-bottom: 2px; margin-bottom: 5px;
-  }
-  .item        { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin-bottom: 2px; }
-  .item-uds    { width: 22px; text-align: center; flex-shrink: 0; }
-  .item-nombre { flex: 1; padding: 0 3px; }
-  .item-precio { width: 40px; text-align: right; flex-shrink: 0; }
-  .item-sep    { width: 6px; flex-shrink: 0; }
-  .item-total  { width: 40px; text-align: right; flex-shrink: 0; }
-  .desglose       { font-size: 13px; font-weight: bold; margin: 2px 0; }
-  .desglose .fila { display: flex; justify-content: space-between; padding: 1px 0; font-size: 12px; }
-  .total-line { display: flex; justify-content: space-between; font-size: 19px; font-weight: bold; margin: 3px 0; }
-  .pago   { font-size: 13px; font-weight: bold; text-align: center; margin: 2px 0; }
-  .cambio { font-size: 14px; font-weight: bold; text-align: center; margin: 2px 0; }
-  .legal { font-size: 11px; font-weight: bold; text-align: center; line-height: 1.35; margin-top: 3px; }
-  .glosario {
-    font-size: 11px; font-weight: bold; margin-top: 4px;
-    border-top: 1px dashed #000; padding-top: 3px; line-height: 1; margin-bottom: 0;
-  }
-  @media print {
-    body { padding: 1mm 1mm 0 1mm; }
-    @page { margin: 0; size: 80mm auto; }
-  }
-</style>
-</head>
-<body>
-
-  <div class="logo">${logoMonoSVG}</div>
-  <hr class="sep-solid">
-
-  <div class="empresa">
-    <div>${CONFIG_EMPRESA.razonSocial}</div>
-    <div>${t.casetas?.nombre || ''}</div>
-    <div>${t.casetas?.direccion || CONFIG_EMPRESA.direccion}</div>
-    <div>CIF: ${CONFIG_EMPRESA.cif}</div>
-  </div>
-  <hr class="sep-dash">
-
-  <div class="num-fecha">
-    <span>${ticketNum}</span>
-    <span>${fmtFecha(fecha)}</span>
-  </div>
-  <hr class="sep-dash">
-
-  <div class="col-header">
-    <span style="width:22px;text-align:center">Uds</span>
-    <span style="flex:1;padding-left:3px">Producto</span>
-    <span style="width:40px;text-align:right">Precio</span>
-    <span class="item-sep"></span>
-    <span style="width:40px;text-align:right">Subt</span>
-  </div>
-
-  ${items.map(i => `
-  <div class="item">
-    <span class="item-uds">${i.cantidad}</span>
-    <span class="item-nombre">${i.nombre}${i.precio * i.cantidad > i.total_linea ? ' *' : ''}</span>
-    <span class="item-precio">${fmtE(i.precio)}</span>
-    <span class="item-sep"></span>
-    <span class="item-total">${fmtE(i.total_linea)}</span>
-  </div>`).join('')}
-
-  <hr class="sep-dash">
-
-  ${ahorroOfertas > 0.005 ? `<div class="desglose"><div class="fila"><span>* Ahorro ofertas:</span><span>-${fmtE(ahorroOfertas)}</span></div></div>` : ''}
-
-  <div class="desglose">
-    <div>Desglose TOTAL:</div>
-    <div class="fila"><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div>
-    <div class="fila"><span>I.V.A. (${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
-    <div class="fila"><span>N.E.C.:</span><span>${totalNEC.toFixed(2)}g</span></div>
-  </div>
-  <hr class="sep-solid">
-
-  <div class="total-line">
-    <span>TOTAL:</span>
-    <span>${fmtE(total)}</span>
-  </div>
-  <hr class="sep-solid">
-
-  <div class="pago">Forma de pago: ${t.metodo_pago === 'efectivo' ? 'Efectivo' : 'Tarjeta'}</div>
-  ${t.metodo_pago === 'efectivo' && dineroDado > 0 ? `<div class="cambio">Entregado: ${fmtE(dineroDado)}</div><div class="cambio">Cambio: ${fmtE(cambio)}</div>` : ''}
-  <div class="pago">I.V.A. incluido</div>
-  <hr class="sep-dash">
-
-  <div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
-
-  <div class="glosario">
-    <div>Subt.* : Subtotal</div>
-    <div>B.I.* : Base Imponible</div>
-    <div>N.E.C.* : Contenido Neto Explosivo</div>
-  </div>
-
-</body>
-</html>`
-
-  const v = window.open('', '_blank', 'width=400,height=700,scrollbars=yes')
-  if (!v) { alert('Permite las ventanas emergentes para imprimir.'); return }
-  v.document.write(html)
-  v.document.close()
-  v.onload = () => { v.focus(); v.print(); v.onafterprint = () => v.close() }
-}
 
 function Toast({ msg, type }) {
   return <div className="twrap"><div className={`toast ${type === 'error' ? 'te2' : 'tok'}`}>{msg}</div></div>
@@ -249,7 +94,7 @@ function Dashboard({ casetas }) {
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10,marginBottom:22}}>
           {[...cajas].sort((a,b)=>b.totalEfectivo-a.totalEfectivo).map((c,i)=>(
             <div key={c.casetaId} style={{background:'var(--s1)',border:'1px solid var(--bd)',borderRadius:'var(--r)',padding:'16px',position:'relative',overflow:'hidden'}}>
-              {i===0&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--gold)',background:'rgba(245,200,66,.12)',border:'1px solid rgba(245,200,66,.25)',borderRadius:20,padding:'1px 7px'}}>TOP {i+1}</div>}
+              {i===0&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--gold)',background:'rgba(var(--gold-rgb),.12)',border:'1px solid rgba(var(--gold-rgb),.25)',borderRadius:20,padding:'1px 7px'}}>TOP {i+1}</div>}
               {i===1&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--tx2)',background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:20,padding:'1px 7px'}}>TOP {i+1}</div>}
               {i>=2&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--tx2)',background:'transparent',borderRadius:20,padding:'1px 7px'}}>#{i+1}</div>}
               <div style={{fontSize:'.7rem',color:'var(--tx2)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:4}}>{c.casetaNombre.replace('Caballer ','')}</div>
@@ -267,7 +112,7 @@ function Dashboard({ casetas }) {
             <div key={r.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 16px',borderTop:i>0?'1px solid var(--bd)':'none',fontSize:'.85rem'}}>
               <span style={{color:'var(--tx2)',flexShrink:0,fontSize:'.78rem'}}>{new Date(r.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
               <span style={{color:'var(--tx2)',flexShrink:0}}>{r.casetas?.nombre?.replace('Caballer ','') || '?'}</span>
-              <span style={{flexGrow:1}}>{r.perfiles?.nombre || '—'}</span>
+              <span style={{flexGrow:1}}>{r.perfiles?.nombre || r.empleado_nombre || '—'}</span>
               {r.motivo&&<span style={{color:'var(--tx2)',fontSize:'.78rem',fontStyle:'italic',flexShrink:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:160}}>{r.motivo}</span>}
               <span style={{fontWeight:700,color:'var(--gold)',flexShrink:0}}>−{fmt(r.cantidad)}</span>
             </div>
@@ -299,7 +144,7 @@ function Dashboard({ casetas }) {
               <tr key={t.id}>
                 <td style={{color:'var(--tx2)'}}>{new Date(t.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
                 <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
-                <td>{t.perfiles?.nombre}</td>
+                <td>{t.perfiles?.nombre || t.empleado_nombre || '—'}</td>
                 <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?<><i className="fi fi-rr-coins"/> Efectivo</>:<><i className="fi fi-rr-credit-card"/> Tarjeta</>}</td>
                 <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
               </tr>
@@ -392,7 +237,7 @@ function PanelVentas({ casetas, onVerDia }) {
               const esHoy=key===hoy.toISOString().slice(0,10),intensidad=tot>0?Math.max(0.12,tot/maxDia):0,esMayor=tot===maxDia&&tot>0
               const txCol=esMayor?'white':(tot>0?'var(--tx)':'var(--tx2)')
               return(
-                <div key={dia} onClick={()=>tot>0&&onVerDia(key)} style={{borderRadius:8,padding:'6px 4px',textAlign:'center',background:tot>0?`rgba(255,77,28,${intensidad})`:'var(--s2)',border:`2px solid ${esHoy?'var(--ac)':'transparent'}`,minHeight:54,cursor:tot>0?'pointer':'default'}}
+                <div key={dia} onClick={()=>tot>0&&onVerDia(key)} style={{borderRadius:8,padding:'6px 4px',textAlign:'center',background:tot>0?`rgba(var(--ac-rgb),${intensidad})`:'var(--s2)',border:`2px solid ${esHoy?'var(--ac)':'transparent'}`,minHeight:54,cursor:tot>0?'pointer':'default'}}
                   onMouseEnter={e=>{if(tot>0)e.currentTarget.style.filter='brightness(1.15)'}} onMouseLeave={e=>{e.currentTarget.style.filter='none'}}>
                   <div style={{fontSize:'.7rem',color:txCol,fontWeight:700}}>{dia}</div>
                   {tot>0&&<><div style={{fontSize:'.62rem',color:txCol,fontWeight:800,marginTop:2}}>{fmt(tot)}</div><div style={{fontSize:'.56rem',color:esMayor?'rgba(255,255,255,.8)':'var(--tx2)'}}>{d.tickets}t</div></>}
@@ -480,7 +325,7 @@ function ModalEditTicket({ ticket: t, onClose, onSave }) {
     <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="mc wide" style={{maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
         <div className="mt-modal"><i className="fi fi-rr-pencil"/> Editar Ticket</div>
-        <div style={{fontSize:'.78rem',color:'var(--tx2)',marginBottom:12}}>{new Date(t.creado_en).toLocaleString('es-ES')} · {t.perfiles?.nombre} · {t.casetas?.nombre}</div>
+        <div style={{fontSize:'.78rem',color:'var(--tx2)',marginBottom:12}}>{new Date(t.creado_en).toLocaleString('es-ES')} · {t.perfiles?.nombre || t.empleado_nombre || '—'} · {t.casetas?.nombre}</div>
 
         {/* Buscador para añadir productos */}
         <div style={{position:'relative',marginBottom:10}}>
@@ -507,7 +352,7 @@ function ModalEditTicket({ ticket: t, onClose, onSave }) {
               <span style={{minWidth:26,textAlign:'center',fontWeight:700}}>{item.cantidad}</span>
               <button className="qb" onClick={()=>editQty(idx,+1)}>+</button>
               <span style={{minWidth:55,textAlign:'right',fontSize:'.85rem',color:'var(--ac)'}}>{fmt(item.total_linea)}</span>
-              <button onClick={()=>editDel(idx)} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-cross"/></button>
+              <button onClick={()=>editDel(idx)} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(var(--red-rgb),.3)',background:'rgba(var(--red-rgb),.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-cross"/></button>
             </div>
           ))}
           {items.length===0&&<div style={{textAlign:'center',color:'var(--tx2)',padding:20,fontSize:'.85rem'}}>Ticket vacío</div>}
@@ -531,8 +376,17 @@ function PanelTickets({ casetas, filtroInicial }) {
   const [loading,setLoading]=useState(false)
   const [expanded,setExpanded]=useState(null)
   const [editando,setEditando]=useState(null)
+  const [facturaT,setFacturaT]=useState(null)
   const [toast,setToast]=useState(null)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
+
+  const onHacerFactura=(cliente)=>{
+    const t=facturaT
+    imprimirTicket(ticketRowToDatos(t),{ esFactura:true, cliente })
+    guardarFacturaCliente(t.id,cliente).catch(()=>{})
+    setTickets(prev=>prev.map(x=>x.id===t.id?{...x,factura:true,cliente_nombre:cliente.razonSocial,cliente_cif:cliente.cif,cliente_direccion:cliente.direccion}:x))
+    setFacturaT(null); showToast('Factura generada ✓')
+  }
 
   const buscar=(d=desde,h=hasta,c=casetaSel)=>{
     setLoading(true)
@@ -567,7 +421,7 @@ function PanelTickets({ casetas, filtroInicial }) {
 
   const filtrados=busqInline?tickets.filter(t=>{
     const b=busqInline.toLowerCase()
-    return t.perfiles?.nombre?.toLowerCase().includes(b)||t.casetas?.nombre?.toLowerCase().includes(b)||fmt(t.total).includes(b)||t.ticket_items?.some(i=>i.nombre_producto?.toLowerCase().includes(b))
+    return (t.perfiles?.nombre||t.empleado_nombre)?.toLowerCase().includes(b)||t.casetas?.nombre?.toLowerCase().includes(b)||fmt(t.total).includes(b)||t.ticket_items?.some(i=>i.nombre_producto?.toLowerCase().includes(b))
   }):tickets
 
   return(
@@ -588,18 +442,19 @@ function PanelTickets({ casetas, filtroInicial }) {
             {filtrados.length===0?<tr><td colSpan={6} style={{textAlign:'center',color:'var(--tx2)',padding:20}}>Sin tickets</td></tr>
               :filtrados.map(t=>(
               <React.Fragment key={t.id}>
-                <tr style={{background:t.notas?'rgba(239,68,68,.04)':''}}>
+                <tr style={{background:t.notas?'rgba(var(--red-rgb),.04)':''}}>
                   <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{new Date(t.creado_en).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
                   <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                   <td>
-                    {t.perfiles?.nombre}
-                    {t.notas&&<span title={t.notas} style={{marginLeft:6,fontSize:'.65rem',fontWeight:700,color:'var(--red)',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.25)',borderRadius:20,padding:'1px 6px',cursor:'help'}}><i className="fi fi-rr-triangle-warning"/> Incidencia</span>}
+                    {t.perfiles?.nombre || t.empleado_nombre || '—'}
+                    {t.notas&&<span title={t.notas} style={{marginLeft:6,fontSize:'.65rem',fontWeight:700,color:'var(--red)',background:'rgba(var(--red-rgb),.12)',border:'1px solid rgba(var(--red-rgb),.25)',borderRadius:20,padding:'1px 6px',cursor:'help'}}><i className="fi fi-rr-triangle-warning"/> Incidencia</span>}
                   </td>
                   <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?<><i className="fi fi-rr-coins"/> Efectivo</>:<><i className="fi fi-rr-credit-card"/> Tarjeta</>}</td>
                   <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
                   <td><div className="acell">
                     <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
-                    <button className="btn-edit" onClick={()=>imprimirTicketAdmin(t)}><i className="fi fi-rr-print"/></button>
+                    <button className="btn-edit" onClick={()=>imprimirTicket(ticketRowToDatos(t), { autoPrint: true })}><i className="fi fi-rr-print"/></button>
+                    <button className="btn-edit" style={{color:'var(--sec)',borderColor:'var(--sec)'}} title="Hacer factura" onClick={()=>setFacturaT(t)}><i className="fi fi-rr-file-invoice"/>{t.factura&&' ✓'}</button>
                     <button className="btn-edit" style={{color:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>setEditando(t)}>Editar</button>
                     <button className="btn-del" onClick={()=>eliminar(t.id)}>Eliminar</button>
                   </div></td>
@@ -607,9 +462,9 @@ function PanelTickets({ casetas, filtroInicial }) {
                 {expanded===t.id&&(
                   <tr><td colSpan={6} style={{background:'var(--s2)',padding:'8px 16px'}}>
                     {t.notas&&(
-                      <div style={{background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.25)',borderRadius:'var(--rs)',padding:'6px 10px',marginBottom:8,fontSize:'.78rem',color:'var(--red)',fontWeight:600,display:'flex',alignItems:'center',gap:8}}>
+                      <div style={{background:'rgba(var(--red-rgb),.1)',border:'1px solid rgba(var(--red-rgb),.25)',borderRadius:'var(--rs)',padding:'6px 10px',marginBottom:8,fontSize:'.78rem',color:'var(--red)',fontWeight:600,display:'flex',alignItems:'center',gap:8}}>
                         <span style={{flex:1}}><i className="fi fi-rr-triangle-warning"/> Incidencia: {t.notas}</span>
-                        <button onClick={()=>resolverIncidencia(t)} style={{flexShrink:0,padding:'3px 10px',borderRadius:'var(--rs)',border:'1px solid rgba(34,197,94,.4)',background:'rgba(34,197,94,.1)',color:'var(--green)',cursor:'pointer',fontSize:'.72rem',fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-check"/> Resolver</button>
+                        <button onClick={()=>resolverIncidencia(t)} style={{flexShrink:0,padding:'3px 10px',borderRadius:'var(--rs)',border:'1px solid rgba(var(--green-rgb),.4)',background:'rgba(var(--green-rgb),.1)',color:'var(--green)',cursor:'pointer',fontSize:'.72rem',fontWeight:700,fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-check"/> Resolver</button>
                       </div>
                     )}
                     {(t.ticket_items||[]).map((li,i)=>(
@@ -625,6 +480,7 @@ function PanelTickets({ casetas, filtroInicial }) {
         </table></div>
       )}
       {editando&&<ModalEditTicket ticket={editando} onClose={()=>setEditando(null)} onSave={handleSave}/>}
+      {facturaT&&<FacturaModal onConfirm={onHacerFactura} onClose={()=>setFacturaT(null)}/>}
     </>
   )
 }
@@ -683,7 +539,7 @@ function ModalEditarPedido({ pedido, items, notasAdmin, saving, onChangeItems, o
               />
               <button className="qb" onClick={() => setQty(idx, item.cantidad + 1)}>+</button>
               <button onClick={() => onChangeItems(prev => prev.filter((_, i) => i !== idx))}
-                style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)', background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem', fontFamily: "'DM Sans',sans-serif", display:'flex', alignItems:'center', justifyContent:'center' }}><i className="fi fi-rr-cross"/></button>
+                style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)', background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem', fontFamily: "'DM Sans',sans-serif", display:'flex', alignItems:'center', justifyContent:'center' }}><i className="fi fi-rr-cross"/></button>
             </div>
           ))}
           {items.length === 0 && (
@@ -776,18 +632,26 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
       const emp=i.productos?.empresa||'Sin empresa'
       if(soloEmpresa&&emp!==soloEmpresa) return
       if(!byEmpresa[emp]) byEmpresa[emp]=[]
-      const fardo=i.productos?.fardo||1
-      const fardos=fardo>1?Math.ceil(i.cantidad/fardo):null
-      byEmpresa[emp].push({nombre:i.productos?.nombre||'?',cantidad:i.cantidad,fardos})
+      const udsEnv=i.productos?.fardo||1            // uds por envase
+      const epc=i.productos?.envases_por_caja||0    // envases por caja
+      const envases=udsEnv>1?Math.ceil(i.cantidad/udsEnv):null
+      let embalaje='—'
+      if(envases!=null){
+        if(epc>0){
+          const cajas=Math.floor(envases/epc), resto=envases%epc
+          embalaje=[cajas>0?`${cajas} cajas`:null,resto>0?`${resto} env`:null].filter(Boolean).join(' + ')||`${envases} env`
+        } else embalaje=`${envases} env`
+      }
+      byEmpresa[emp].push({nombre:i.productos?.nombre||'?',cantidad:i.cantidad,embalaje})
     })
     const fecha=new Date().toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric'})
     const seccionesHTML=Object.entries(byEmpresa).map(([emp,prods],idx)=>`
       <div style="${idx>0?'page-break-before:always;':''}">
-        <h2 style="font-size:15px;margin-bottom:3px;border-left:4px solid #ff4d1c;padding-left:8px">${emp}</h2>
+        <h2 style="font-size:15px;margin-bottom:3px;border-left:4px solid var(--ac);padding-left:8px">${emp}</h2>
         <div style="color:#555;font-size:11px;margin-bottom:10px">Caseta: ${p.casetas?.nombre} · Fecha: ${fecha}</div>
         <table>
-          <thead><tr><th>Producto</th><th>Packs</th><th>Uds. totales</th></tr></thead>
-          <tbody>${prods.map(pr=>`<tr><td>${pr.nombre}</td><td>${pr.fardos!=null?pr.fardos:'—'}</td><td><strong>${pr.cantidad}</strong></td></tr>`).join('')}</tbody>
+          <thead><tr><th>Producto</th><th>Embalaje</th><th>Uds. totales</th></tr></thead>
+          <tbody>${prods.map(pr=>`<tr><td>${pr.nombre}</td><td>${pr.embalaje}</td><td><strong>${pr.cantidad}</strong></td></tr>`).join('')}</tbody>
         </table>
       </div>`).join('')
     const html=`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Pedido — ${p.casetas?.nombre}</title>
@@ -886,7 +750,7 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
               <button className="btn-add" style={{width:'auto',padding:'6px 14px',marginTop:0,background:'var(--blue)',borderColor:'var(--blue)'}} onClick={()=>cambiarEstado(p.id,'EN_CAMINO')}><i className="fi fi-rr-truck-side"/> En camino</button>
             )}
             <button className="btn-edit" style={{fontSize:'.72rem'}} onClick={()=>setExpandido(expandido===p.id?null:p.id)}><i className={`fi ${expandido===p.id?'fi-rr-angle-up':'fi-rr-angle-down'}`}/>{expandido===p.id?' Ocultar':' Ver productos'}</button>
-            <button onClick={()=>imprimirPedidoPDF(p)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'rgba(59,130,246,.1)',border:'1px solid rgba(59,130,246,.3)',color:'var(--blue)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-print"/> Todo</button>
+            <button onClick={()=>imprimirPedidoPDF(p)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'rgba(var(--blue-rgb),.1)',border:'1px solid rgba(var(--blue-rgb),.3)',color:'var(--blue)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-print"/> Todo</button>
             {[...new Set((p.pedido_items||[]).map(i=>i.productos?.empresa||'Sin empresa'))].sort().map(emp=>(
               <button key={emp} onClick={()=>imprimirPedidoPDF(p,emp)} style={{padding:'6px 12px',borderRadius:'var(--rs)',background:'var(--s3)',border:'1px solid var(--bd)',color:'var(--tx2)',fontWeight:600,cursor:'pointer',fontSize:'.75rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-print"/> {emp}</button>
             ))}
@@ -902,7 +766,7 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
                     {items.map(i=>(
                       <div key={i.id} style={{padding:'4px 0',borderBottom:'1px solid rgba(255,255,255,.04)',display:'flex',gap:12,flexWrap:'wrap'}}>
                         <span style={{flex:1}}>{i.productos?.nombre}</span>
-                        <span>Pedido: <strong>{i.cantidad}</strong>{(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} packs)</span>}</span>
+                        <span>Pedido: <strong>{i.cantidad}</strong>{(i.productos?.fardo||1)>1&&<span style={{color:'var(--tx2)',fontSize:'.72rem'}}> ({Math.ceil(i.cantidad/(i.productos?.fardo||1))} env)</span>}</span>
                         {i.cantidad_recibida!=null&&<span>Recibido: <strong style={{color:i.cantidad_recibida!==i.cantidad?'var(--red)':'var(--green)'}}>{i.cantidad_recibida}</strong></span>}
                         {i.notas_item&&<span style={{color:'var(--red)'}}><i className="fi fi-rr-triangle-warning"/> {i.notas_item}</span>}
                       </div>
@@ -974,7 +838,7 @@ function PanelInventarios({ casetas }) {
         const pend=inv.estado==='BORRADOR'
         const casetaNombre=inv.casetas?.nombre||casetas.find(c=>c.id===inv.caseta_id)?.nombre
         return(
-          <div key={inv.id} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px 16px',marginBottom:12,border:`1px solid ${pend?'rgba(245,200,66,.4)':'var(--bd)'}`}}>
+          <div key={inv.id} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px 16px',marginBottom:12,border:`1px solid ${pend?'rgba(var(--gold-rgb),.4)':'var(--bd)'}`}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
               <div style={{flex:1}}>
                 <span style={{fontWeight:700,fontSize:'.9rem'}}>{casetaNombre}</span>
@@ -994,7 +858,7 @@ function PanelInventarios({ casetas }) {
                   <thead><tr><th>Producto</th><th>Teórico</th><th>Real</th><th>Diferencia</th></tr></thead>
                   <tbody>
                     {(inv.inventario_items||[]).sort((a,b)=>Math.abs(b.diferencia||0)-Math.abs(a.diferencia||0)).map(item=>(
-                      <tr key={item.id} style={{background:item.diferencia!==0?'rgba(239,68,68,.05)':'transparent'}}>
+                      <tr key={item.id} style={{background:item.diferencia!==0?'rgba(var(--red-rgb),.05)':'transparent'}}>
                         <td>{item.productos?.nombre}</td>
                         <td style={{color:'var(--tx2)'}}>{item.cantidad_teorica ?? '—'}</td>
                         <td style={{fontWeight:700}}>{item.cantidad_real}</td>
@@ -1036,26 +900,28 @@ function GestionProductos() {
   const [catFiltro,setCatFiltro]=useState('Todos')
   const [soloActivos,setSoloActivos]=useState(true)
   const formRef=useRef(null)
-  const CATS_FIJAS=['Petardos','Truenos','Bengalas','Cracker','Terrestres','Fuentes','Efectos','Packs','Accesorios']
-  const F0={nombre:'',precio:'',categoria:'Petardos',catNueva:'',edad_minima:'16',codigo_ean:'',gramos_polvora:'0',empresa:'',fardo:'1'}
+  const [categorias,setCategorias]=useState([])
+  const [showGestionCat,setShowGestionCat]=useState(false)
+  const F0={nombre:'',precio:'',categoria:'',edad_minima:'16',codigo_ean:'',gramos_polvora:'0',division:'',empresa:'',fardo:'1',envases_por_caja:''}
   const [form,setForm]=useState(F0)
   const [empresaFiltro,setEmpresaFiltro]=useState('Todas')
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
-  useEffect(()=>{ getProductos(false).then(setProductos).finally(()=>setLoading(false)) },[])
-  const catsDinamicas=['Todos',...new Set([...CATS_FIJAS,...productos.map(p=>p.categoria)].sort())]
+  const cargarCategorias=()=>getCategorias().then(setCategorias)
+  useEffect(()=>{ getProductos(false).then(setProductos).finally(()=>setLoading(false)); cargarCategorias() },[])
+  const catsDinamicas=['Todos',...new Set([...categorias,...productos.map(p=>p.categoria)].filter(Boolean).sort())]
 
   const guardar=async()=>{
     if(!form.nombre.trim()||!form.precio||!form.codigo_ean.trim()){ showToast('Nombre, precio y EAN son obligatorios','error'); return }
-    const categoria=form.categoria==='__nueva__'?form.catNueva.trim():form.categoria
-    if(!categoria){ showToast('Introduce la categoría','error'); return }
+    const categoria=form.categoria
+    if(!categoria){ showToast('Elige una categoría','error'); return }
     try{
-      const data=await upsertProducto({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),precio:parseFloat(form.precio),categoria,edad_minima:parseInt(form.edad_minima),codigo_ean:form.codigo_ean.trim(),gramos_polvora:parseFloat(form.gramos_polvora)||0,empresa:form.empresa.trim()||null,fardo:Math.max(1,parseInt(form.fardo)||1),activo:true})
+      const data=await upsertProducto({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),precio:parseFloat(form.precio),categoria,edad_minima:parseInt(form.edad_minima),codigo_ean:form.codigo_ean.trim(),gramos_polvora:parseFloat(form.gramos_polvora)||0,division:form.division||null,empresa:form.empresa.trim()||null,fardo:Math.max(1,parseInt(form.fardo)||1),envases_por_caja:form.envases_por_caja?Math.max(1,parseInt(form.envases_por_caja)):null,activo:true})
       if(editId){setProductos(prev=>prev.map(p=>p.id===editId?data:p));showToast('Producto actualizado ✓')}
       else{setProductos(prev=>[...prev,data]);showToast('Producto añadido ✓')}
       setForm(F0);setEditId(null)
     }catch(e){showToast(e.message,'error')}
   }
-  const editar=p=>{ setForm({nombre:p.nombre,precio:String(p.precio),categoria:p.categoria,catNueva:'',edad_minima:String(p.edad_minima),codigo_ean:p.codigo_ean,gramos_polvora:String(p.gramos_polvora??0),empresa:p.empresa||'',fardo:String(p.fardo||1)}); setEditId(p.id); setTimeout(()=>formRef.current?.scrollIntoView({behavior:'smooth',block:'start'}),50) }
+  const editar=p=>{ setForm({nombre:p.nombre,precio:String(p.precio),categoria:p.categoria,edad_minima:String(p.edad_minima),codigo_ean:p.codigo_ean,gramos_polvora:String(p.gramos_polvora??0),division:p.division||'',empresa:p.empresa||'',fardo:String(p.fardo||1),envases_por_caja:p.envases_por_caja?String(p.envases_por_caja):''}); setEditId(p.id); setTimeout(()=>formRef.current?.scrollIntoView({behavior:'smooth',block:'start'}),50) }
   const toggle=async(id,activo)=>{ await toggleProducto(id,!activo); setProductos(prev=>prev.map(p=>p.id===id?{...p,activo:!activo}:p)); showToast(!activo?'Producto activado ✓':'Producto desactivado') }
   const eliminar=async id=>{
     if(!window.confirm('¿Eliminar? Si tiene ventas se desactivará.')) return
@@ -1088,13 +954,18 @@ function GestionProductos() {
           <div className="fg"><label>Nombre</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Piratas 50u."/></div>
           <div className="fg"><label>Precio (€)</label><input type="number" value={form.precio} onChange={e=>setForm({...form,precio:e.target.value})} placeholder="1.00" min="0" step=".01"/></div>
           <div className="fg"><label>Código EAN</label><input value={form.codigo_ean} onChange={e=>setForm({...form,codigo_ean:e.target.value})} placeholder="8410278004" inputMode="numeric"/></div>
-          <div className="fg"><label>Categoría</label>
+          <div className="fg">
+            <label style={{display:'flex',alignItems:'center',gap:8}}>Categoría
+              <button type="button" className="btn-o btn-eye" title="Gestionar categorías" onClick={()=>setShowGestionCat(true)}
+                style={{padding:'3px 7px',borderRadius:6}}>
+                <i className="fi fi-rr-settings"/>
+              </button>
+            </label>
             <select value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})}>
-              {CATS_FIJAS.map(c=><option key={c}>{c}</option>)}
-              <option value="__nueva__">+ Nueva categoría...</option>
+              <option value="">-- Elegir categoría --</option>
+              {categorias.map(c=><option key={c}>{c}</option>)}
             </select>
           </div>
-          {form.categoria==='__nueva__'&&<div className="fg"><label>Nueva categoría</label><input value={form.catNueva} onChange={e=>setForm({...form,catNueva:e.target.value})} placeholder="Nombre"/></div>}
           <div className="fg"><label>Edad mínima</label>
             <select value={form.edad_minima} onChange={e=>setForm({...form,edad_minima:e.target.value})}>
               <option value="0">T1</option><option value="12">12+</option><option value="16">16+</option><option value="18">18+</option>
@@ -1104,10 +975,21 @@ function GestionProductos() {
             <label>Gramos pólvora NEC <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— según etiqueta del producto</span></label>
             <input type="number" value={form.gramos_polvora} onChange={e=>setForm({...form,gramos_polvora:e.target.value})} placeholder="4.820" min="0" step=".001"/>
           </div>
+          <div className="fg">
+            <label>División de riesgo <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— 1.3G/1.4G (etiqueta)</span></label>
+            <select value={form.division} onChange={e=>setForm({...form,division:e.target.value})}>
+              <option value="">— Sin clasificar —</option>
+              {DIVISIONES.map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
           <div className="fg"><label>Empresa / Proveedor</label><input value={form.empresa} onChange={e=>setForm({...form,empresa:e.target.value})} placeholder="Ej: Pirotecnia Zaragozana"/></div>
           <div className="fg">
-            <label>Pack <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— uds. por caja/bulto del proveedor</span></label>
-            <input type="number" value={form.fardo} onChange={e=>setForm({...form,fardo:e.target.value})} placeholder="12" min="1" step="1" inputMode="numeric"/>
+            <label>Uds por envase <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— unidades de venta por envase</span></label>
+            <input type="number" value={form.fardo} onChange={e=>setForm({...form,fardo:e.target.value})} placeholder="40" min="1" step="1" inputMode="numeric"/>
+          </div>
+          <div className="fg">
+            <label>Envases por caja <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— opcional (caja de almacén)</span></label>
+            <input type="number" value={form.envases_por_caja} onChange={e=>setForm({...form,envases_por_caja:e.target.value})} placeholder="4" min="1" step="1" inputMode="numeric"/>
           </div>
         </div>
         <div style={{display:'flex',gap:9}}>
@@ -1120,28 +1002,34 @@ function GestionProductos() {
         <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
         <select value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{catsDinamicas.map(c=><option key={c}>{c}</option>)}</select>
         <select value={empresaFiltro} onChange={e=>setEmpresaFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}>{empresasDinamicas.map(c=><option key={c}>{c}</option>)}</select>
-        <div onClick={()=>setSoloActivos(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'6px 12px',borderRadius:'var(--rs)',border:'1px solid',borderColor:soloActivos?'var(--bd)':'var(--gold)',background:soloActivos?'transparent':'rgba(245,200,66,.1)'}}>
+        <div onClick={()=>setSoloActivos(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'6px 12px',borderRadius:'var(--rs)',border:'1px solid',borderColor:soloActivos?'var(--bd)':'var(--gold)',background:soloActivos?'transparent':'rgba(var(--gold-rgb),.1)'}}>
           <div style={{width:32,height:18,borderRadius:9,background:soloActivos?'var(--s3)':'var(--gold)',position:'relative',transition:'background .2s'}}>
             <div style={{position:'absolute',top:2,left:soloActivos?2:14,width:14,height:14,borderRadius:'50%',background:'white',transition:'left .2s'}}/>
           </div>
           <span style={{fontSize:'.78rem',color:soloActivos?'var(--tx2)':'var(--gold)',fontWeight:600}}>{soloActivos?'Solo activos':'Todos (inc. inactivos)'}</span>
         </div>
       </div>
-      <div className="tw"><table>
-        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Empresa</th><th>Pack</th><th>Precio</th><th>Pólvora NEC</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <div className="tw"><table style={{minWidth:1120,tableLayout:'fixed'}}>
+        <colgroup>
+          <col style={{width:'17%'}}/><col style={{width:'11%'}}/><col style={{width:'9%'}}/><col style={{width:'9%'}}/>
+          <col style={{width:'5%'}}/><col style={{width:'7%'}}/><col style={{width:'8%'}}/><col style={{width:'6%'}}/>
+          <col style={{width:'5%'}}/><col style={{width:'6%'}}/><col style={{width:'17%'}}/>
+        </colgroup>
+        <thead><tr><th>Nombre</th><th>EAN</th><th>Categoría</th><th>Empresa</th><th>Uds/env</th><th>Precio</th><th>Pólvora NEC</th><th>División</th><th>Edad</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
           {prods.map(p=>(
             <tr key={p.id} style={{opacity:p.activo?1:.55}}>
-              <td style={{fontWeight:600}}>{p.nombre}{!p.activo&&<span style={{marginLeft:6,fontSize:'.7rem',color:'var(--red)',background:'rgba(239,68,68,.1)',padding:'1px 5px',borderRadius:4}}>inactivo</span>}</td>
+              <td style={{fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={p.nombre}>{p.nombre}{!p.activo&&<span style={{marginLeft:6,fontSize:'.7rem',color:'var(--red)',background:'rgba(var(--red-rgb),.1)',padding:'1px 5px',borderRadius:4}}>inactivo</span>}</td>
               <td style={{color:'var(--tx2)',fontSize:'.76rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
               <td style={{color:'var(--tx2)'}}>{p.categoria}</td>
               <td style={{color:'var(--tx2)',fontSize:'.82rem'}}>{p.empresa||<span style={{opacity:.3}}>—</span>}</td>
               <td style={{textAlign:'center',fontWeight:600,color:'var(--blue)'}}>{p.fardo>1?p.fardo:<span style={{opacity:.3}}>1</span>}</td>
               <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(p.precio)}</td>
               <td style={{color:'var(--tx2)',fontSize:'.82rem',textAlign:'center'}}>{p.gramos_polvora>0?<span style={{color:'var(--gold)',fontWeight:600}}>{p.gramos_polvora}g</span>:<span style={{opacity:.3}}>—</span>}</td>
+              <td style={{textAlign:'center',fontSize:'.78rem'}}>{p.division?<span className={`chip ${p.division==='1.3G'?'cr':'cb2'}`}>{p.division}</span>:(p.gramos_polvora>0?<span title="Producto con NEC sin división asignada" style={{color:'var(--gold)',fontWeight:700,cursor:'help'}}><i className="fi fi-rr-triangle-warning"/></span>:<span style={{opacity:.3}}>—</span>)}</td>
               <td><span className={`chip ${eaCl(p.edad_minima)}`}>{eaLbl(p.edad_minima)}</span></td>
               <td><span className={`chip ${p.activo?'cg':'cr'}`}>{p.activo?'Activo':'Inactivo'}</span></td>
-              <td><div className="acell">
+              <td style={{padding:'6px 8px'}}><div className="acell" style={{flexWrap:'nowrap',gap:4}}>
                 <button className="btn-edit" onClick={()=>editar(p)}>Editar</button>
                 <button className="btn-tog" style={{color:p.activo?'var(--gold)':'var(--green)'}} onClick={()=>toggle(p.id,p.activo)}>{p.activo?'Desact.':'Activar'}</button>
                 {p.activo&&<button className="btn-del" onClick={()=>eliminar(p.id)}>Eliminar</button>}
@@ -1150,7 +1038,60 @@ function GestionProductos() {
           ))}
         </tbody>
       </table></div>
+      {showGestionCat&&(
+        <ModalCategorias categorias={categorias} productos={productos} showToast={showToast}
+          onChanged={()=>{ cargarCategorias(); getProductos(false).then(setProductos) }}
+          onClose={()=>setShowGestionCat(false)} />
+      )}
     </>
+  )
+}
+
+// ─── MODAL GESTIÓN CATEGORÍAS ─────────────────────────────────
+function ModalCategorias({ categorias, productos, onChanged, onClose, showToast }) {
+  const [nueva,setNueva]=useState('')
+  const [editTxt,setEditTxt]=useState({})
+  const conteo=c=>productos.filter(p=>p.categoria===c).length
+  const cerrarEd=c=>setEditTxt(p=>{const x={...p};delete x[c];return x})
+
+  const add=async()=>{ const n=nueva.trim(); if(!n)return
+    try{ await crearCategoria(n); setNueva(''); onChanged(); showToast('Categoría añadida ✓') }catch(e){ showToast(e.message,'error') } }
+  const rename=async viejo=>{ const nv=(editTxt[viejo]||'').trim()
+    if(!nv||nv===viejo){ cerrarEd(viejo); return }
+    try{ await renombrarCategoria(viejo,nv); cerrarEd(viejo); onChanged(); showToast('Renombrada ✓') }catch(e){ showToast(e.message,'error') } }
+  const del=async c=>{ if(!window.confirm(`¿Borrar la categoría "${c}"?`))return
+    try{ await eliminarCategoria(c); onChanged(); showToast('Borrada ✓') }catch(e){ showToast(e.message,'error') } }
+
+  return (
+    <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="mc">
+        <div className="mt-modal"><i className="fi fi-rr-tags"/> Gestionar categorías</div>
+        <div style={{display:'flex',gap:8,marginBottom:14}}>
+          <input value={nueva} onChange={e=>setNueva(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()} placeholder="Nueva categoría..."
+            style={{flex:1,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'9px 12px',color:'var(--tx)',fontSize:'.9rem',fontFamily:"'DM Sans',sans-serif",outline:'none'}}/>
+          <button className="btn-add" onClick={add}><i className="fi fi-rr-plus"/> Añadir</button>
+        </div>
+        <div style={{maxHeight:'50vh',overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
+          {categorias.map(c=>{
+            const ed=editTxt[c]!==undefined, n=conteo(c)
+            return (
+              <div key={c} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',background:'var(--s2)',borderRadius:'var(--rs)'}}>
+                {ed
+                  ? <input autoFocus value={editTxt[c]} onChange={e=>setEditTxt(p=>({...p,[c]:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&rename(c)}
+                      style={{flex:1,background:'var(--s1)',border:'1px solid var(--ac)',borderRadius:6,padding:'6px 10px',color:'var(--tx)',fontSize:'.88rem',fontFamily:"'DM Sans',sans-serif",outline:'none'}}/>
+                  : <span style={{flex:1,fontWeight:600}}>{c} <span style={{color:'var(--tx2)',fontWeight:400,fontSize:'.75rem'}}>· {n} prod.</span></span>}
+                {ed
+                  ? <><button className="btn-edit" onClick={()=>rename(c)}>Guardar</button><button className="btn-del" onClick={()=>cerrarEd(c)}>✕</button></>
+                  : <><button className="btn-edit" onClick={()=>setEditTxt(p=>({...p,[c]:c}))}>Renombrar</button><button className="btn-del" onClick={()=>del(c)}>Borrar</button></>}
+              </div>
+            )
+          })}
+          {categorias.length===0&&<div style={{color:'var(--tx2)',fontSize:'.85rem',textAlign:'center',padding:14}}>No hay categorías.</div>}
+        </div>
+        <div className="info-box" style={{marginTop:10,marginBottom:10}}>Al <strong>renombrar</strong> se actualizan todos los productos de esa categoría. No se puede <strong>borrar</strong> una categoría que tenga productos.</div>
+        <button className="btn-s" onClick={onClose}>Cerrar</button>
+      </div>
+    </div>
   )
 }
 
@@ -1187,6 +1128,16 @@ function GestionStock({ casetas }) {
   const caseta=casetas.find(c=>c.id===casetaSel)
   const limite=caseta?.limite_kg_polvora||10
   const pctKg=limite>0?(kgActual/limite)*100:0
+  // Desglose de NEC por división (1.3G ≤ 20%, etc.) calculado del stock actual
+  const necPorDivision={}; let necSinClasif=0
+  productos.forEach(p=>{
+    const cant=stockActual[p.id]||0, g=p.gramos_polvora||0
+    if(cant<=0||g<=0) return
+    const kg=cant*g/1000
+    if(p.division) necPorDivision[p.division]=(necPorDivision[p.division]||0)+kg
+    else necSinClasif+=kg
+  })
+  const necEval=evaluarNEC(necPorDivision,limite)
 
   const ajustar=async(productoId, delta)=>{
     const val=editVals[productoId]; if(val===undefined||val==='') return
@@ -1227,7 +1178,7 @@ function GestionStock({ casetas }) {
       <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:16,flexWrap:'wrap'}}>
         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           {casetas.map(c=>(
-            <button key={c.id} onClick={()=>setCasetaSel(c.id)} style={{padding:'7px 13px',borderRadius:'var(--rs)',border:'1px solid',borderColor:casetaSel===c.id?'var(--ac)':'var(--bd)',background:casetaSel===c.id?'rgba(255,77,28,.1)':'transparent',color:casetaSel===c.id?'var(--ac)':'var(--tx2)',fontSize:'.82rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif"}}>{c.nombre.replace('Caballer ','')}</button>
+            <button key={c.id} onClick={()=>setCasetaSel(c.id)} style={{padding:'7px 13px',borderRadius:'var(--rs)',border:'1px solid',borderColor:casetaSel===c.id?'var(--ac)':'var(--bd)',background:casetaSel===c.id?'rgba(var(--ac-rgb),.1)':'transparent',color:casetaSel===c.id?'var(--ac)':'var(--tx2)',fontSize:'.82rem',fontWeight:600,cursor:'pointer',fontFamily:"'DM Sans',sans-serif"}}>{c.nombre.replace('Caballer ','')}</button>
           ))}
         </div>
 <input className="si" style={{maxWidth:200}} placeholder="Buscar..." value={busq} onChange={e=>setBusq(e.target.value)}/>
@@ -1239,7 +1190,7 @@ function GestionStock({ casetas }) {
       </div>
 
       {casetaSel&&(
-        <div style={{background:pctKg>=90?'rgba(239,68,68,.1)':pctKg>=75?'rgba(245,200,66,.1)':'var(--s2)',borderRadius:'var(--rs)',padding:'10px 14px',marginBottom:14,border:`1px solid ${pctKg>=90?'var(--red)':pctKg>=75?'var(--gold)':'var(--bd)'}`}}>
+        <div style={{background:pctKg>=90?'rgba(var(--red-rgb),.1)':pctKg>=75?'rgba(var(--gold-rgb),.1)':'var(--s2)',borderRadius:'var(--rs)',padding:'10px 14px',marginBottom:14,border:`1px solid ${pctKg>=90?'var(--red)':pctKg>=75?'var(--gold)':'var(--bd)'}`}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
             <span style={{fontWeight:600,fontSize:'.83rem'}}><i className="fi fi-rr-flame"/> Pólvora — {caseta?.nombre}</span>
             <span style={{fontWeight:700,color:pctKg>=90?'var(--red)':pctKg>=75?'var(--gold)':'var(--green)'}}>{kgActual.toFixed(3)} kg / {limite} kg ({pctKg.toFixed(1)}%)</span>
@@ -1254,6 +1205,25 @@ function GestionStock({ casetas }) {
               ? <><i className="fi fi-rr-triangle-warning"/> ALERTA: Más del 90% del límite. No añadir más stock.</>
               : <><i className="fi fi-rr-triangle-warning"/> Advertencia: Stock al 80% del límite legal.</>}
           </div>}
+          {/* Desglose por división de riesgo */}
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,marginTop:8,fontSize:'.74rem'}}>
+            {necEval.divisiones.map(d=>(
+              <span key={d.division} title={`${d.division}: ${d.kg.toFixed(3)} kg de ${d.maxKg.toFixed(3)} kg máx (${(d.pctMax*100).toFixed(0)}%)`}
+                style={{display:'flex',alignItems:'center',gap:4,padding:'2px 8px',borderRadius:12,fontWeight:700,
+                background:d.excedido?'rgba(var(--red-rgb),.15)':'var(--s3)',color:d.excedido?'var(--red)':'var(--tx2)',border:`1px solid ${d.excedido?'var(--red)':'var(--bd)'}`}}>
+                {d.division}: {d.kg.toFixed(2)}/{d.maxKg.toFixed(2)}kg
+                {d.excedido&&<><i className="fi fi-rr-triangle-warning"/> {(d.pctMax*100).toFixed(0)}% máx</>}
+              </span>
+            ))}
+            {Object.entries(necPorDivision).filter(([div])=>!['1.1G','1.2G','1.3G'].includes(div)).map(([div,kg])=>(
+              <span key={div} style={{padding:'2px 8px',borderRadius:12,fontWeight:700,background:'var(--s3)',color:'var(--tx2)',border:'1px solid var(--bd)'}}>{div}: {kg.toFixed(2)}kg</span>
+            ))}
+            {necSinClasif>0&&(
+              <span title="NEC de productos sin división asignada — clasifícalos en Productos" style={{padding:'2px 8px',borderRadius:12,fontWeight:700,background:'rgba(var(--gold-rgb),.15)',color:'var(--gold)',border:'1px solid var(--gold)',cursor:'help'}}>
+                <i className="fi fi-rr-triangle-warning"/> Sin clasificar: {necSinClasif.toFixed(2)}kg
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -1267,8 +1237,8 @@ function GestionStock({ casetas }) {
             const minimo=minimoActual[p.id]??0; const guardandoMin=savingMin===p.id
             const bajominimo=minimo>0&&cant<minimo
             return(
-              <tr key={p.id} style={bajominimo?{background:'rgba(239,68,68,.04)'}:{}}>
-                <td style={{fontWeight:600}}>{p.nombre}{bajominimo&&<span style={{marginLeft:6,fontSize:'.65rem',background:'rgba(239,68,68,.15)',color:'var(--red)',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'1px 5px',fontWeight:700}}>bajo mín.</span>}</td>
+              <tr key={p.id} style={bajominimo?{background:'rgba(var(--red-rgb),.04)'}:{}}>
+                <td style={{fontWeight:600}}>{p.nombre}{bajominimo&&<span style={{marginLeft:6,fontSize:'.65rem',background:'rgba(var(--red-rgb),.15)',color:'var(--red)',border:'1px solid rgba(var(--red-rgb),.3)',borderRadius:6,padding:'1px 5px',fontWeight:700}}>bajo mín.</span>}</td>
                 <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{p.categoria}</td>
                 <td style={{color:'var(--tx2)',fontSize:'.74rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
                 <td style={{textAlign:'center'}}><span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.2rem',color:colStock(cant)}}>{cant}</span></td>
@@ -1285,10 +1255,10 @@ function GestionStock({ casetas }) {
                 </td>
                 <td style={{textAlign:'center'}}>
                   <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:4}}>
-                    <button onClick={()=>ajustar(p.id,-1)} disabled={guardando||!editVals[p.id]} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(239,68,68,.4)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'1rem',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',opacity:(!editVals[p.id]||guardando)?.4:1}}>−</button>
+                    <button onClick={()=>ajustar(p.id,-1)} disabled={guardando||!editVals[p.id]} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(var(--red-rgb),.4)',background:'rgba(var(--red-rgb),.1)',color:'var(--red)',cursor:'pointer',fontSize:'1rem',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',opacity:(!editVals[p.id]||guardando)?.4:1}}>−</button>
                     <input type="number" min="1" value={editVals[p.id]??''} placeholder="cant" onChange={e=>setEditVals(prev=>({...prev,[p.id]:e.target.value}))}
                       style={{width:58,background:'var(--s2)',border:'1px solid',borderColor:editVals[p.id]!==undefined?'var(--ac)':'var(--bd)',borderRadius:'var(--rs)',padding:'5px 4px',color:'var(--tx)',fontSize:'.85rem',outline:'none',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}} inputMode="numeric"/>
-                    <button onClick={()=>ajustar(p.id,+1)} disabled={guardando||!editVals[p.id]} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(34,197,94,.4)',background:'rgba(34,197,94,.1)',color:'var(--green)',cursor:'pointer',fontSize:'1rem',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',opacity:(!editVals[p.id]||guardando)?.4:1}}>{guardando?'…':'+'}</button>
+                    <button onClick={()=>ajustar(p.id,+1)} disabled={guardando||!editVals[p.id]} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(var(--green-rgb),.4)',background:'rgba(var(--green-rgb),.1)',color:'var(--green)',cursor:'pointer',fontSize:'1rem',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',opacity:(!editVals[p.id]||guardando)?.4:1}}>{guardando?'…':'+'}</button>
                   </div>
                 </td>
               </tr>
@@ -1384,7 +1354,7 @@ function GestionOfertas() {
               <div key={i} style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
                 <select value={l.producto_id} onChange={e=>setLinea(i,'producto_id',e.target.value)} style={{flex:2,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif"}}><option value="">-- Producto --</option>{[...productos.filter(p=>p.activo)].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
                 <div style={{display:'flex',alignItems:'center',gap:6,flex:1}}><label style={{fontSize:'.75rem',color:'var(--tx2)',whiteSpace:'nowrap'}}>Cant.</label><input type="number" min="1" value={l.cantidad} onChange={e=>setLinea(i,'cantidad',e.target.value)} style={{width:60,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",textAlign:'center'}} inputMode="numeric"/></div>
-                {formComb.lineas.length>2&&<button onClick={()=>removeLinea(i)} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'var(--red)',cursor:'pointer',fontSize:'.85rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-cross"/></button>}
+                {formComb.lineas.length>2&&<button onClick={()=>removeLinea(i)} style={{width:28,height:28,borderRadius:'50%',border:'1px solid rgba(var(--red-rgb),.3)',background:'rgba(var(--red-rgb),.1)',color:'var(--red)',cursor:'pointer',fontSize:'.85rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-cross"/></button>}
               </div>
             ))}
             <button onClick={addLinea} style={{background:'transparent',border:'1px dashed var(--bd)',borderRadius:'var(--rs)',padding:'6px 14px',color:'var(--tx2)',cursor:'pointer',fontSize:'.78rem',fontFamily:"'DM Sans',sans-serif"}}>+ Añadir producto</button>
@@ -1421,7 +1391,7 @@ function GestionOfertas() {
 export function GestionCasetas({ casetas, setCasetas }) {
   const [toast,setToast]=useState(null)
   const [editId,setEditId]=useState(null)
-  const F0={nombre:'',direccion:'',limite_kg_polvora:'10',latitud:'',longitud:'',radio_metros:'150',geo_activo:false,pedidos_auto_activos:false,hora_corte_pedidos:'20:00'}
+  const F0={nombre:'',prefijo:'',direccion:'',limite_kg_polvora:'10',latitud:'',longitud:'',radio_metros:'150',geo_activo:false,pedidos_auto_activos:false,hora_corte_pedidos:'20:00'}
   const [form,setForm]=useState(F0)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
   const guardar=async()=>{
@@ -1430,6 +1400,7 @@ export function GestionCasetas({ casetas, setCasetas }) {
       const data=await upsertCaseta({
         ...(editId?{id:editId}:{}),
         nombre:form.nombre.trim(),
+        prefijo:form.prefijo.trim().toUpperCase()||null,
         direccion:form.direccion.trim()||null,
         limite_kg_polvora:parseFloat(form.limite_kg_polvora)||10,
         latitud:form.latitud?parseFloat(form.latitud):null,
@@ -1456,6 +1427,7 @@ export function GestionCasetas({ casetas, setCasetas }) {
       <div className="iform">
         <div className="frow">
           <div className="fg"><label>Nombre</label><input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Caballer Ruzafa"/></div>
+          <div className="fg"><label>Prefijo tique <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— 3 letras</span></label><input value={form.prefijo} maxLength={4} onChange={e=>setForm({...form,prefijo:e.target.value.toUpperCase()})} placeholder="RUZ" style={{textTransform:'uppercase'}}/></div>
           <div className="fg"><label>Dirección (opcional)</label><input value={form.direccion} onChange={e=>setForm({...form,direccion:e.target.value})} placeholder="Calle Mayor 12, Valencia"/></div>
           <div className="fg">
             <label>Límite pólvora (kg) <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— según licencia</span></label>
@@ -1529,11 +1501,11 @@ export function GestionCasetas({ casetas, setCasetas }) {
           <button onClick={async()=>{
             try{await updateAllPedidosAuto(true);setCasetas(prev=>prev.map(c=>({...c,pedidos_auto_activos:true})));showToast('Pedidos auto activados en todas las casetas ✓')}
             catch(e){showToast(e.message,'error')}
-          }} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(34,197,94,.12)',border:'1px solid rgba(34,197,94,.3)',color:'var(--green)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-settings"/> Activar todas</button>
+          }} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(var(--green-rgb),.12)',border:'1px solid rgba(var(--green-rgb),.3)',color:'var(--green)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-settings"/> Activar todas</button>
           <button onClick={async()=>{
             try{await updateAllPedidosAuto(false);setCasetas(prev=>prev.map(c=>({...c,pedidos_auto_activos:false})));showToast('Pedidos auto desactivados en todas las casetas')}
             catch(e){showToast(e.message,'error')}
-          }} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.25)',color:'var(--red)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-square"/> Desactivar todas</button>
+          }} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(var(--red-rgb),.08)',border:'1px solid rgba(var(--red-rgb),.25)',color:'var(--red)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-square"/> Desactivar todas</button>
         </div>
       </div>
       <div className="tw"><table>
@@ -1555,7 +1527,7 @@ export function GestionCasetas({ casetas, setCasetas }) {
                   :<span style={{color:'var(--tx2)',fontSize:'.78rem',opacity:.5}}>—</span>}
               </td>
               <td><div className="acell">
-                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10),latitud:c.latitud?String(c.latitud):'',longitud:c.longitud?String(c.longitud):'',radio_metros:String(c.radio_metros||150),geo_activo:c.geo_activo||false,pedidos_auto_activos:c.pedidos_auto_activos||false,hora_corte_pedidos:c.hora_corte_pedidos?.slice(0,5)||'20:00'})}}>Editar</button>
+                <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,prefijo:c.prefijo||'',direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10),latitud:c.latitud?String(c.latitud):'',longitud:c.longitud?String(c.longitud):'',radio_metros:String(c.radio_metros||150),geo_activo:c.geo_activo||false,pedidos_auto_activos:c.pedidos_auto_activos||false,hora_corte_pedidos:c.hora_corte_pedidos?.slice(0,5)||'20:00'})}}>Editar</button>
                 <button className="btn-del" onClick={()=>eliminar(c.id)}>Eliminar</button>
               </div></td>
             </tr>
@@ -1650,14 +1622,14 @@ export function GestionUsuarios({ casetas, soloEmpleados = false }) {
                 <label>Contraseña</label>
                 <div style={{position:'relative'}}>
                   <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Mín. 8 car., mayúscula, minúscula y número" style={{paddingRight:38}}/>
-                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?<i className="fi fi-rr-eye-crossed"/>:<i className="fi fi-rr-eye"/>}</button>
+                  <button type="button" className="btn-eye" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?<i className="fi fi-rr-eye-crossed"/>:<i className="fi fi-rr-eye"/>}</button>
                 </div>
               </div>
             : <div className="fg">
                 <label>Nueva contraseña <span style={{fontSize:'.72rem',color:'var(--tx2)'}}>— dejar vacío para no cambiar</span></label>
                 <div style={{position:'relative'}}>
                   <input type={showPass?'text':'password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Nueva contraseña..." style={{paddingRight:38}}/>
-                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?<i className="fi fi-rr-eye-crossed"/>:<i className="fi fi-rr-eye"/>}</button>
+                  <button type="button" className="btn-eye" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass?<i className="fi fi-rr-eye-crossed"/>:<i className="fi fi-rr-eye"/>}</button>
                 </div>
               </div>
           }
@@ -1850,8 +1822,8 @@ export function PanelFichajes({ casetas, adminId }) {
                   {emp.turnoEnCurso&&(
                     <div style={{marginTop:4}}>
                       {emp.turnoEnCurso.enDescanso
-                        ?<span style={{background:'rgba(245,200,66,.15)',color:'var(--gold)',padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}><i className="fi fi-rr-mug-hot"/> En descanso</span>
-                        :<span style={{background:'rgba(34,197,94,.15)',color:'var(--green)',padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}>● Trabajando ahora</span>
+                        ?<span style={{background:'rgba(var(--gold-rgb),.15)',color:'var(--gold)',padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}><i className="fi fi-rr-mug-hot"/> En descanso</span>
+                        :<span style={{background:'rgba(var(--green-rgb),.15)',color:'var(--green)',padding:'2px 9px',borderRadius:10,fontSize:'.7rem',fontWeight:700}}>● Trabajando ahora</span>
                       }
                     </div>
                   )}
@@ -1868,7 +1840,7 @@ export function PanelFichajes({ casetas, adminId }) {
                   <thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Trabajado</th><th>Descanso</th><th>Acciones</th></tr></thead>
                   <tbody>
                     {emp.turnos.slice().reverse().map((t,i)=>(
-                      <tr key={i} style={{background:t.enCurso?'rgba(34,197,94,.05)':t.enDescanso?'rgba(245,200,66,.05)':'transparent'}}>
+                      <tr key={i} style={{background:t.enCurso?'rgba(var(--green-rgb),.05)':t.enDescanso?'rgba(var(--gold-rgb),.05)':'transparent'}}>
                         <td style={{fontSize:'.8rem',color:'var(--tx2)'}}>{new Date(t.entrada.timestamp).toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'})}</td>
                         <td>
                           <span style={{fontWeight:700,color:'var(--green)'}}>{new Date(t.entrada.timestamp).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>
@@ -1910,7 +1882,7 @@ export function PanelFichajes({ casetas, adminId }) {
                   <td style={{fontWeight:600}}>{f.perfiles?.nombre}</td>
                   <td style={{color:'var(--tx2)',fontSize:'.8rem'}}>{f.casetas?.nombre}</td>
                   <td>
-                    <span style={{fontWeight:700,color:f.tipo==='ENTRADA'?'var(--green)':f.tipo==='SALIDA'?'var(--red)':f.tipo==='INICIO_DESCANSO'?'var(--gold)':'var(--blue)',background:f.tipo==='ENTRADA'?'rgba(34,197,94,.1)':f.tipo==='SALIDA'?'rgba(239,68,68,.1)':'rgba(245,200,66,.1)',padding:'2px 8px',borderRadius:10,fontSize:'.72rem'}}>{f.tipo.replace('_',' ')}</span>
+                    <span style={{fontWeight:700,color:f.tipo==='ENTRADA'?'var(--green)':f.tipo==='SALIDA'?'var(--red)':f.tipo==='INICIO_DESCANSO'?'var(--gold)':'var(--blue)',background:f.tipo==='ENTRADA'?'rgba(var(--green-rgb),.1)':f.tipo==='SALIDA'?'rgba(var(--red-rgb),.1)':'rgba(var(--gold-rgb),.1)',padding:'2px 8px',borderRadius:10,fontSize:'.72rem'}}>{f.tipo.replace('_',' ')}</span>
                     {f.geo_ok===true&&<span title="Ubicación verificada" style={{marginLeft:4,fontSize:'.75rem',color:'var(--green)'}}><i className="fi fi-rr-map-marker"/></span>}
                     {f.geo_ok===false&&<span title="Fichaje fuera de zona" style={{marginLeft:4,fontSize:'.75rem',color:'var(--red)'}}><i className="fi fi-rr-map-marker"/><i className="fi fi-rr-triangle-warning"/></span>}
                   </td>
@@ -2050,9 +2022,9 @@ function GestionAlertas() {
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
           <span className="chip" style={{
-            background: totalActivas > 0 ? 'rgba(34,197,94,.15)' : 'var(--s2)',
+            background: totalActivas > 0 ? 'rgba(var(--green-rgb),.15)' : 'var(--s2)',
             color: totalActivas > 0 ? 'var(--green)' : 'var(--tx2)',
-            border: `1px solid ${totalActivas > 0 ? 'rgba(34,197,94,.3)' : 'var(--bd)'}`,
+            border: `1px solid ${totalActivas > 0 ? 'rgba(var(--green-rgb),.3)' : 'var(--bd)'}`,
           }}>
             {totalActivas}/{alertas.length} activas
           </span>
@@ -2183,13 +2155,14 @@ function GestionAlertas() {
   )
 }
 
-export default function AdminPanel({ perfil, casetas: casetasInit }) {
+export default function AdminPanel({ perfil, casetas: casetasInit, onModoVenta }) {
   // Persistir tab activo — sobrevive a cambios de página
   const [tab,setTab]=useState(()=>sessionStorage.getItem('admin_tab')||'dashboard')
   const [casetas,setCasetas]=useState(casetasInit)
   const [ticketFiltro,setTicketFiltro]=useState(null)
   const [pedidosPend,setPedidosPend]=useState(0)
   const [showAdminMenu,setShowAdminMenu]=useState(false)
+  const [showVentaPicker,setShowVentaPicker]=useState(false)
 
   // Contar pedidos pendientes para badge
   useEffect(()=>{
@@ -2204,12 +2177,14 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
   return(
     <div className="app">
       <div className="topbar">
-        <div className="tl"><img src={logoColor} alt="Caballer" style={{ height: 28, display: 'block' }} /></div>
+        <div className="tl"><Logo style={{ height: 28 }} /></div>
         <div className="ti">
           <span style={{fontSize:'.8rem',color:'var(--tx2)'}} className="hide-mobile">{perfil.nombre}</span>
           <span className="badge ba hide-mobile">Admin</span>
           {/* Tab activo en móvil */}
           <span className="admin-tab-label">{TABS.find(([k])=>k===tab)?.[2]}</span>
+          {onModoVenta&&<button className="btn-add hide-mobile" style={{padding:'6px 12px',fontSize:'.78rem'}} onClick={()=>setShowVentaPicker(true)}>Modo venta</button>}
+          <span className="hide-mobile"><ThemeToggle /></span>
           <button className="btn-o topbar-salir" onClick={()=>supabase.auth.signOut()}>Salir</button>
           <button className="hamburger-btn" onClick={()=>setShowAdminMenu(v=>!v)}>
             <i className={`fi ${showAdminMenu?'fi-rr-cross':'fi-rr-menu-burger'}`}/>
@@ -2225,7 +2200,7 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
       <div className={`side-drawer${showAdminMenu?' side-drawer--open':''}`}>
         <div className="drawer-header">
           <div>
-            <img src={logoColor} alt="Caballer" style={{ height: 26, display: 'block', marginBottom: 6 }} />
+            <Logo style={{ height: 26, marginBottom: 6 }} />
             <div className="drawer-user-row">
               <span className="drawer-user">{perfil.nombre}</span>
               <span className="badge ba">Admin</span>
@@ -2246,11 +2221,39 @@ export default function AdminPanel({ perfil, casetas: casetasInit }) {
           </button>
         ))}
         <div className="drawer-sep"/>
+        {onModoVenta&&(
+          <button className="hamburger-item" style={{color:'var(--green)'}}
+            onClick={()=>{setShowAdminMenu(false);setShowVentaPicker(true)}}>
+            <i className="fi fi-rr-shopping-cart"/> Modo venta
+          </button>
+        )}
+        <ThemeToggle variant="item" />
         <button className="hamburger-item" style={{color:'var(--tx2)'}}
           onClick={()=>{setShowAdminMenu(false);supabase.auth.signOut()}}>
           <i className="fi fi-rr-sign-out-alt"/> Cerrar sesión
         </button>
       </div>
+
+      {/* Picker de caseta para Modo venta (el admin es global, elige dónde vender) */}
+      {showVentaPicker&&(
+        <div className="mo" onClick={e=>e.target===e.currentTarget&&setShowVentaPicker(false)}>
+          <div className="mc">
+            <div className="mt-modal"><i className="fi fi-rr-shopping-cart"/> Modo venta</div>
+            <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:14}}>Elige en qué caseta vas a vender:</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {casetas.map(c=>(
+                <button key={c.id} className="btn-s" style={{marginTop:0,textAlign:'left',padding:'12px 14px',display:'flex',alignItems:'center',gap:10}}
+                  onClick={()=>{setShowVentaPicker(false);onModoVenta(c.id)}}>
+                  <i className="fi fi-rr-shop" style={{color:'var(--ac)'}}/>
+                  <span style={{fontWeight:700,color:'var(--tx)'}}>{c.nombre}</span>
+                </button>
+              ))}
+              {casetas.length===0&&<div style={{color:'var(--tx2)',fontSize:'.85rem'}}>No hay casetas configuradas.</div>}
+            </div>
+            <button className="btn-s" onClick={()=>setShowVentaPicker(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
 
       <WheelScrollDiv className="navtabs admin-navtabs">
         {TABS.map(([k,ic,l])=>(

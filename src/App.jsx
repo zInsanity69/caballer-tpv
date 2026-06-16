@@ -5,7 +5,7 @@ import Login from './components/Login.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
 import EmpleadoPanel from './components/EmpleadoPanel.jsx'
 import RRHHPanel from './components/RRHHPanel.jsx'
-import logoColor from './assets/logo_caballer_color.svg'
+import Logo from './components/Logo.jsx'
 import './styles.css'
 
 export default function App() {
@@ -14,6 +14,7 @@ export default function App() {
   const [casetas, setCasetas]   = useState([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
+  const [ventaCaseta, setVentaCaseta] = useState(null) // admin en modo venta → caseta elegida
 
   // Escuchar cambios de sesión
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function App() {
 
   if (loading) return (
     <div className="splash">
-      <img src={logoColor} alt="Caballer" style={{ width: 260, marginBottom: 16 }} />
+      <Logo style={{ width: 260, marginBottom: 16, marginLeft: 'auto', marginRight: 'auto' }} />
       <div className="spinner" />
     </div>
   )
@@ -73,7 +74,17 @@ export default function App() {
     </div>
   )
 
-  if (perfil.rol === 'ADMIN') return <AdminPanel perfil={perfil} casetas={casetas} />
+  if (perfil.rol === 'ADMIN') {
+    if (ventaCaseta) {
+      const cs = casetas.find(c => c.id === ventaCaseta)
+      return <EmpleadoPanel
+        key={ventaCaseta}
+        perfil={{ ...perfil, caseta_id: ventaCaseta, casetas: cs }}
+        casetas={casetas}
+        onSalirVenta={() => setVentaCaseta(null)} />
+    }
+    return <AdminPanel perfil={perfil} casetas={casetas} onModoVenta={setVentaCaseta} />
+  }
   if (perfil.rol === 'RRHH')  return <RRHHPanel perfil={perfil} />
 
   return <EmpleadoPanel perfil={perfil} casetas={casetas} />

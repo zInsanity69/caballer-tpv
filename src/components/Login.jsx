@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { login } from '../lib/api.js'
-import logoColor from '../assets/logo_caballer_color.svg'
+import Logo from './Logo.jsx'
 
 export default function Login() {
   const [showPass, setShowPass] = useState(false)
@@ -25,9 +25,9 @@ export default function Login() {
   }
 
   return (
-    <div className="splash" style={{ background: 'radial-gradient(ellipse at 50% 0%,#ff4d1c22 0%,transparent 60%),var(--bg)' }}>
+    <div className="splash" style={{ background: 'radial-gradient(ellipse at 50% 0%,rgba(var(--ac-rgb),.13) 0%,transparent 60%),var(--bg)' }}>
       <div style={{ background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 20, padding: '40px 36px', width: '100%', maxWidth: 400 }}>
-        <img src={logoColor} alt="Caballer" style={{ width: 250, display: 'block', margin: '0 auto 4px' }} />
+        <Logo style={{ width: 250, margin: '0 auto 4px' }} />
         <div style={{ textAlign: 'center', color: 'var(--tx2)', fontSize: '.82rem', marginBottom: 28 }}>
           Sistema TPV Profesional
         </div>
@@ -53,7 +53,7 @@ export default function Login() {
               placeholder="••••••••"
               style={{paddingRight:38}}
             />
-            <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass ? <i className="fi fi-rr-eye-crossed"/> : <i className="fi fi-rr-eye"/>}</button>
+            <button type="button" className="btn-eye" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--tx2)',fontSize:'1rem'}}>{showPass ? <i className="fi fi-rr-eye-crossed"/> : <i className="fi fi-rr-eye"/>}</button>
           </div>
         </div>
 

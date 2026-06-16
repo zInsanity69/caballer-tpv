@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
-import logoMonoSVG from '../assets/logo_caballer_monoV2.svg?raw'
-import logoColor from '../assets/logo_caballer_color.svg'
+import { imprimirTicket, ticketRowToDatos } from '../lib/ticket.js'
+import Logo from './Logo.jsx'
 import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
@@ -9,12 +9,16 @@ import {
   getFavoritos, toggleFavorito,
   getPedidos, crearPedido, confirmarRecepcionPedido, getStockMinimos,
   crearInventario, getInventarios, confirmarInventario,
-  getKgPolvora, getLimitePolvora,
+  getLimitePolvora, getNECDetalle,
   getUltimoFichaje, fichar, getFichajesEmpleado, calcularTurnos, calcularEstado, fmtDuracion,
   getEmpleadosActivosCaseta, obtenerUbicacion, verificarUbicacion,
+  guardarFacturaCliente,
 } from '../lib/api.js'
 import { calcularPrecio, calcularTotalTicket, detectarOfertasCombinadas, fmt } from '../lib/precios.js'
+import { evaluarNEC, MAX_NEC_COMPRADOR } from '../lib/nec.js'
 import Scanner from './Scanner.jsx'
+import ThemeToggle from './ThemeToggle.jsx'
+import FacturaModal from './FacturaModal.jsx'
 
 // ─── HOOK SCROLL HORIZONTAL CON RUEDA ────────────────────────
 // Permite desplazar contenedores con overflow-x con la rueda del ratón
@@ -162,27 +166,42 @@ function EaBadge({ edad }) {
   return <span className="pea e18">18+</span>
 }
 
+// Clave única de línea de ticket: permite el mismo producto pagado y de regalo a la vez
+const lineKey = (i) => `${i.id}${i.regalo ? '_R' : ''}`
+
 // ─── TICKET ITEM ─────────────────────────────────────────────
-function TicketItem({ item, ofertas, onQty, onDel }) {
+function TicketItem({ item, ofertas, onQty, onDel, onSetQty, onRegalo }) {
   const [open, setOpen] = useState(false)
-  const { total, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
-  const hayOferta = !!desglose
+  const lk = lineKey(item)
+  const esRegalo = !!item.regalo
+  const { total: totalCalc, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
+  const hayOferta = !esRegalo && !!desglose
+  const total = esRegalo ? 0 : totalCalc
   return (
     <div className="titem">
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="tin">{item.nombre}</div>
+        <div className="tin">{item.nombre}{esRegalo && <span style={{ marginLeft: 6, fontSize: '.62rem', background: 'rgba(var(--green-rgb),.18)', color: 'var(--green)', border: '1px solid var(--green)', borderRadius: 6, padding: '0 5px', fontWeight: 700 }}>REGALO</span>}</div>
         <div className="tc">
-          <button className="qb" onClick={() => onQty(item.id, -1)}>−</button>
-          <span className="qd">{item.cantidad}</span>
-          <button className="qb" onClick={() => onQty(item.id, +1)}>+</button>
+          <button className="qb" onClick={() => onQty(lk, -1)}>−</button>
+          <input type="number" min="1" defaultValue={item.cantidad} key={item.cantidad}
+            onFocus={e => e.target.select()}
+            onBlur={e => onSetQty(lk, e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+            style={{ width: 38, textAlign: 'center', background: 'var(--s3)', border: '1px solid var(--bd)', borderRadius: 6, color: 'var(--tx)', fontWeight: 700, fontFamily: "'DM Sans',sans-serif", padding: '3px 2px', fontSize: '.88rem' }}
+            inputMode="numeric" />
+          <button className="qb" onClick={() => onQty(lk, +1)}>+</button>
+          <button data-nobubble="1" onClick={() => onRegalo(lk)} title="Marcar como regalo"
+            style={{ width: 26, height: 26, borderRadius: '50%', border: `1px solid ${esRegalo ? 'var(--green)' : 'var(--bd)'}`, background: esRegalo ? 'rgba(var(--green-rgb),.18)' : 'transparent', color: esRegalo ? 'var(--green)' : 'var(--tx2)', cursor: 'pointer', fontSize: '.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <i className="fi fi-rr-gift"/>
+          </button>
           {hayOferta && (
             <span className="ob" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
               OFERTA {open ? '▲' : '▼'}
             </span>
           )}
           <div className="tp2">
-            <div className="tpu">{hayOferta ? 'con oferta' : `${fmt(item.precio)}/u.`}</div>
-            <div className="tpt">{fmt(total)}</div>
+            <div className="tpu">{esRegalo ? 'regalo' : hayOferta ? 'con oferta' : `${fmt(item.precio)}/u.`}</div>
+            <div className="tpt" style={esRegalo ? { color: 'var(--green)' } : undefined}>{esRegalo ? 'REGALO' : fmt(total)}</div>
           </div>
         </div>
         {hayOferta && open && (
@@ -200,10 +219,10 @@ function TicketItem({ item, ofertas, onQty, onDel }) {
           </div>
         )}
       </div>
-      <button data-nobubble="1" onClick={() => onDel(item.id)} style={{
+      <button data-nobubble="1" onClick={() => onDel(lk)} style={{
         flexShrink: 0, width: 32, height: 32, borderRadius: '50%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.25)',
+        background: 'rgba(var(--red-rgb),.1)', border: '1px solid rgba(var(--red-rgb),.25)',
         color: 'var(--red)', fontSize: '.95rem', cursor: 'pointer', alignSelf: 'center',
       }}>✕</button>
     </div>
@@ -239,6 +258,7 @@ function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong,
 // ─── MODAL CANTIDAD ──────────────────────────────────────────
 function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
   const [qty, setQty] = useState(1)
+  const [regalo, setRegalo] = useState(false)
   const inputRef = useRef(null)
   useEffect(() => { setTimeout(() => inputRef.current?.select(), 50) }, [])
   const { total, desglose } = calcularPrecio(producto.id, qty, producto.precio, ofertas)
@@ -282,8 +302,15 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
               : <span style={{ fontWeight: 700 }}>{fmt(total)}</span>}
           </div>
         </div>
-        <button className="btn-p" onClick={() => onConfirm(qty)}>
-          Añadir {qty} unidad{qty !== 1 ? 'es' : ''} · {fmt(total)}
+        {/* Toggle regalo: añade como línea aparte gratis (el stock baja igual) */}
+        <div onClick={() => setRegalo(r => !r)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', marginBottom: 6, cursor: 'pointer' }}>
+          <div style={{ width: 40, height: 22, borderRadius: 11, transition: 'all .2s', background: regalo ? 'var(--green)' : 'var(--s3)', position: 'relative', flexShrink: 0 }}>
+            <div style={{ position: 'absolute', top: 3, left: regalo ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
+          </div>
+          <span style={{ fontSize: '.82rem', color: regalo ? 'var(--green)' : 'var(--tx2)', fontWeight: 600 }}><i className="fi fi-rr-gift"/> Añadir como regalo (gratis)</span>
+        </div>
+        <button className="btn-p" onClick={() => onConfirm(qty, regalo)}>
+          {regalo ? `Regalar ${qty} unidad${qty !== 1 ? 'es' : ''}` : `Añadir ${qty} unidad${qty !== 1 ? 'es' : ''} · ${fmt(total)}`}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
@@ -292,10 +319,12 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
 }
 
 // ─── MODAL PAGO ──────────────────────────────────────────────
-function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, ticketActivo, onToggleTicket }) {
+function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, noImprimir, onToggleNoImprimir }) {
   const [metodo, setMetodo]     = useState('')
   const [recibido, setRecibido] = useState('')
   const [loading, setLoading]   = useState(false)
+  const [cliente, setCliente]   = useState(null)   // datos de factura capturados antes de cobrar
+  const [showFact, setShowFact] = useState(false)
   const cambio = metodo === 'efectivo' ? Math.max(0, (parseFloat(recibido) || 0) - total) : 0
   const puedeConfirmar = metodo && (metodo === 'tarjeta' || (parseFloat(recibido) || 0) >= total)
 
@@ -334,27 +363,44 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
           }}>
             <div style={{ position: 'absolute', top: 3, left: modoRapido ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
           </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-bolt"/> Venta rápida — nuevo ticket automático</span>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-bolt"/> Venta rápida — imprime el ticket y sigue</span>
         </div>
-        {/* Toggle impresión de ticket */}
+        {/* Toggle no imprimir tickets */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', marginBottom: 4 }}>
-          <div onClick={onToggleTicket} style={{
+          <div onClick={onToggleNoImprimir} style={{
             width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all .2s',
-            background: ticketActivo ? 'var(--green)' : 'var(--s3)', position: 'relative', flexShrink: 0,
+            background: noImprimir ? 'var(--red)' : 'var(--s3)', position: 'relative', flexShrink: 0,
           }}>
-            <div style={{ position: 'absolute', top: 3, left: ticketActivo ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
+            <div style={{ position: 'absolute', top: 3, left: noImprimir ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
           </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-print"/> Mostrar opción de imprimir ticket</span>
+          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-ban"/> No imprimir tickets (sin papel)</span>
         </div>
+        {/* Factura: capturar datos del cliente antes de cobrar */}
+        {cliente ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 'var(--rs)', background: 'rgba(var(--sec-rgb),.12)', border: '1px solid var(--sec)' }}>
+            <i className="fi fi-rr-file-invoice" style={{ color: 'var(--sec)' }}/>
+            <span style={{ fontSize: '.78rem', color: 'var(--sec)', fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Factura: {cliente.razonSocial || cliente.cif}</span>
+            <button onClick={() => setCliente(null)} style={{ background: 'none', border: 'none', color: 'var(--tx2)', cursor: 'pointer', fontSize: '.9rem' }}>✕</button>
+          </div>
+        ) : (
+          <button onClick={() => setShowFact(true)} style={{ width: '100%', padding: '9px', marginBottom: 6, borderRadius: 'var(--rs)', background: 'transparent', border: '1px solid var(--sec)', color: 'var(--sec)', fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif", fontSize: '.82rem' }}>
+            <i className="fi fi-rr-file-invoice"/> Hacer factura (datos del cliente)
+          </button>
+        )}
         <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={async () => {
           setLoading(true)
-          await onConfirm({ metodo, dineroDado: parseFloat(recibido) || total, cambio })
+          await onConfirm({ metodo, dineroDado: parseFloat(recibido) || total, cambio, cliente })
           setLoading(false)
         }}>
-          {loading ? 'Procesando...' : '✓ Confirmar Venta'}
+          {loading ? 'Procesando...' : cliente ? '✓ Confirmar y facturar' : '✓ Confirmar Venta'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
+      {showFact && (
+        <FacturaModal confirmLabel="Usar estos datos"
+          onConfirm={c => { setCliente(c); setShowFact(false) }}
+          onClose={() => setShowFact(false)} />
+      )}
     </div>
   )
 }
@@ -423,7 +469,7 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
           </div>
         </div>
         {maxRetirable < MIN_RETIRADA && (
-          <div style={{ fontSize: '.8rem', color: 'var(--red)', marginBottom: 12, padding: '6px 10px', background: 'rgba(239,68,68,.08)', borderRadius: 'var(--rs)' }}>
+          <div style={{ fontSize: '.8rem', color: 'var(--red)', marginBottom: 12, padding: '6px 10px', background: 'rgba(var(--red-rgb),.08)', borderRadius: 'var(--rs)' }}>
             No hay suficiente efectivo para hacer una retirada — necesitas al menos {fmt(apertura + MIN_RETIRADA)} en caja
           </div>
         )}
@@ -556,10 +602,22 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
   const [incidenciaTicket, setIncidenciaTicket] = useState(null)
   const [notaIncidencia, setNotaIncidencia]     = useState('')
   const [guardandoNota, setGuardandoNota]       = useState(false)
+  const [facturaT, setFacturaT]                 = useState(null) // ticket al que hacer factura
 
   useEffect(() => {
     getTicketsTurno(cajaId).then(setTickets).finally(() => setLoading(false))
   }, [cajaId])
+
+  // Hacer/imprimir factura de un ticket ya hecho (guarda los datos del cliente)
+  const onHacerFactura = (cliente) => {
+    const t = facturaT
+    imprimirTicket(ticketRowToDatos(t, { caseta, productos }), { esFactura: true, cliente })
+    guardarFacturaCliente(t.id, cliente).catch(() => {})
+    setTickets(prev => prev.map(x => x.id === t.id
+      ? { ...x, factura: true, cliente_nombre: cliente.razonSocial, cliente_cif: cliente.cif, cliente_direccion: cliente.direccion }
+      : x))
+    setFacturaT(null)
+  }
 
   const ticketsFiltrados = tickets.filter(t => {
     if (!busq) return true
@@ -676,6 +734,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
                           {t.numero_ticket && <span style={{ color: 'var(--ac)', fontWeight: 700, marginRight: 4 }}>{t.numero_ticket}</span>}
+                          {t.factura && <span style={{ fontSize: '.6rem', background: 'rgba(var(--sec-rgb),.15)', color: 'var(--sec)', border: '1px solid var(--sec)', borderRadius: 6, padding: '0 5px', fontWeight: 700, marginRight: 4 }}>FACTURA</span>}
                           {new Date(t.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                           {' · '}{t.perfiles?.nombre}
                           {' · '}{t.metodo_pago === 'efectivo' ? <><i className="fi fi-rr-coins"/></> : <><i className="fi fi-rr-credit-card"/></>}
@@ -686,20 +745,16 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                         {expanded === t.id ? 'Ocultar' : 'Ver'}
                       </button>
                       <button className="btn-o" style={{ fontSize: '.7rem' }}
-                        onClick={() => imprimirTicket({
-                          items: (t.ticket_items||[]).map(i=>({nombre:i.nombre_producto,cantidad:i.cantidad,precio:i.precio_unitario,total_linea:i.total_linea,gramos_polvora:i.productos?.gramos_polvora||productos.find(p=>p.id===i.producto_id)?.gramos_polvora||0})),
-                          total: t.total, metodo: t.metodo_pago, cambio: 0,
-                          caseta, perfil: t.perfiles,
-                          fecha: new Date(t.creado_en),
-                          ticketNum: t.numero_ticket || `TVN-${t.id.slice(-6).toUpperCase()}`,
-                        })}><i className="fi fi-rr-print"/></button>
+                        onClick={() => imprimirTicket(ticketRowToDatos(t, { caseta, productos }))}><i className="fi fi-rr-print"/></button>
+                      <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--sec)', color: 'var(--sec)' }}
+                        title="Hacer factura" onClick={() => setFacturaT(t)}><i className="fi fi-rr-file-invoice"/></button>
                       <button className="btn-o" style={{ fontSize: '.7rem', borderColor: t.notas ? 'var(--red)' : 'var(--gold)', color: t.notas ? 'var(--red)' : 'var(--gold)' }}
                         onClick={() => { setIncidenciaTicket(t); setNotaIncidencia(t.notas || '') }}>
                         {t.notas ? <i className="fi fi-rr-triangle-warning"/> : '+ Incidencia'}
                       </button>
                     </div>
                     {t.notas && (
-                      <div style={{ marginTop: 6, fontSize: '.75rem', color: 'var(--red)', background: 'rgba(239,68,68,.08)', borderRadius: 'var(--rs)', padding: '4px 8px' }}>
+                      <div style={{ marginTop: 6, fontSize: '.75rem', color: 'var(--red)', background: 'rgba(var(--red-rgb),.08)', borderRadius: 'var(--rs)', padding: '4px 8px' }}>
                         <i className="fi fi-rr-triangle-warning"/> Incidencia: {t.notas}
                       </div>
                     )}
@@ -721,6 +776,11 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
         }
         <button className="btn-s" style={{ marginTop: 12 }} onClick={onClose}>Cerrar</button>
       </div>
+
+      {/* Modal hacer factura de un ticket */}
+      {facturaT && (
+        <FacturaModal onConfirm={onHacerFactura} onClose={() => setFacturaT(null)} />
+      )}
 
       {/* Modal incidencia */}
       {incidenciaTicket && (
@@ -761,8 +821,8 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                   <button className="qb" onClick={() => editQty(idx, +1)}>+</button>
                   <span style={{ minWidth: 52, textAlign: 'right', fontSize: '.85rem', color: 'var(--ac)' }}>{fmt(item.total_linea)}</span>
                   <button onClick={() => editDel(idx)} style={{
-                    width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)',
-                    background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem',
+                    width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)',
+                    background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem',
                   }}>✕</button>
                 </div>
               ))}
@@ -840,6 +900,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
   const [catFiltro, setCatFiltro] = useState('Todos')
   const [vista, setVista]       = useState('catalogo') // 'catalogo' | 'pedido'
   const [loading, setLoading]   = useState(false)
+  const [unidadSel, setUnidadSel] = useState({}) // nivel de embalaje elegido por producto en el catálogo
 
   const cats = ['Todos', ...new Set(productos.map(p => p.categoria).sort())]
 
@@ -871,6 +932,60 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
   }
 
   const del = (id) => setItems(prev => prev.filter(i => i.producto_id !== id))
+
+  // ── Embalajes: niveles disponibles de un producto ──
+  // unidad de venta → envase (= fardo uds) → caja de almacén (= envases_por_caja envases)
+  const nivelesDe = (prod) => {
+    const niveles = [{ key: 'unidad', label: 'Unidad', size: 1 }]
+    const udsEnv = Math.max(1, prod?.fardo || 1)        // uds de venta por envase
+    if (udsEnv > 1) niveles.push({ key: 'envase', label: 'Envase', size: udsEnv })
+    const epc = prod?.envases_por_caja || 0             // envases por caja de almacén
+    if (epc > 0) niveles.push({ key: 'caja', label: 'Caja', size: udsEnv * epc })
+    return niveles
+  }
+  const sizeDe = (prod, unidad) => nivelesDe(prod).find(n => n.key === unidad)?.size || 1
+  // Cambiar el nivel de pedido: ajusta la cantidad a un múltiplo entero del nuevo embalaje
+  const setUnidadPedido = (id, prod, unidad) => {
+    const size = sizeDe(prod, unidad)
+    setItems(prev => prev.map(i => i.producto_id === id
+      ? { ...i, unidadPedido: unidad, cantidad: Math.max(size, Math.ceil(i.cantidad / size) * size) }
+      : i))
+  }
+  // Fijar la cantidad expresada en el nivel elegido (envases/cajas/unidades)
+  const setQtyEnUnidad = (id, val, size) => {
+    const n = Math.max(0, parseInt(val) || 0)
+    if (n === 0) setItems(prev => prev.filter(i => i.producto_id !== id))
+    else setItems(prev => prev.map(i => i.producto_id === id ? { ...i, cantidad: n * size } : i))
+  }
+  // Nivel de embalaje activo de un producto (item en pedido, o selección de catálogo, o 'unidad')
+  const unidadActual = (p) => {
+    const it = items.find(i => i.producto_id === p.id)
+    const u = it?.unidadPedido || unidadSel[p.id] || 'unidad'
+    return nivelesDe(p).some(n => n.key === u) ? u : 'unidad'
+  }
+  // Elegir nivel desde el catálogo (recuerda la selección y reajusta si ya está en el pedido)
+  const elegirUnidad = (p, key) => {
+    setUnidadSel(prev => ({ ...prev, [p.id]: key }))
+    const size = sizeDe(p, key)
+    setItems(prev => prev.map(i => i.producto_id === p.id
+      ? { ...i, unidadPedido: key, cantidad: Math.max(size, Math.ceil(i.cantidad / size) * size) }
+      : i))
+  }
+  // Añadir/quitar N en el nivel activo (envases, cajas o unidades)
+  const addEnUnidad = (p, deltaUnidades) => {
+    const unidad = unidadActual(p)
+    const size = sizeDe(p, unidad)
+    setItems(prev => {
+      const idx = prev.findIndex(i => i.producto_id === p.id)
+      if (idx >= 0) {
+        const nueva = prev[idx].cantidad + deltaUnidades * size
+        if (nueva <= 0) return prev.filter(i => i.producto_id !== p.id)
+        const n = [...prev]; n[idx] = { ...n[idx], cantidad: nueva, unidadPedido: unidad }; return n
+      }
+      if (deltaUnidades <= 0) return prev
+      return [...prev, { producto_id: p.id, nombre: p.nombre, cantidad: deltaUnidades * size, fardo: Math.max(1, p.fardo || 1), unidadPedido: unidad, origen: 'manual' }]
+    })
+  }
 
   const enviar = async () => {
     if (items.length === 0) { showToast('Añade al menos un producto', 'error'); return }
@@ -941,6 +1056,10 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
               {prodsFiltrados.map(p => {
                 const stockDisp = stock[p.id] ?? 0
                 const enPedido  = cantidadPedida(p.id)
+                const niveles = nivelesDe(p)
+                const unidad = unidadActual(p)
+                const size = sizeDe(p, unidad)
+                const qtyUnit = enPedido > 0 ? Math.max(1, Math.round(enPedido / size)) : 0
                 return (
                   <div key={p.id} style={{
                     padding: '9px 0', borderBottom: '1px solid var(--bd)',
@@ -951,39 +1070,53 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: '.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nombre}</div>
                       </div>
-                      {/* Controles — siempre a la derecha */}
+                      {/* Controles — siempre a la derecha (en el nivel elegido) */}
                       {enPedido > 0 ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                          <button className="qb" style={{ width: 30, height: 30 }} onClick={() => addItem(p, -1)}>−</button>
+                          <button className="qb" style={{ width: 30, height: 30 }} onClick={() => addEnUnidad(p, -1)}>−</button>
                           <input
-                            type="number" min="1" defaultValue={enPedido} key={enPedido}
+                            type="number" min="1" defaultValue={qtyUnit} key={`${enPedido}-${unidad}`}
                             onFocus={e => e.target.select()}
                             onBlur={e => {
                               const q = parseInt(e.target.value) || 0
                               if (q <= 0) { addItem(p, -enPedido) }
-                              else setItems(prev => prev.map(i => i.producto_id === p.id ? { ...i, cantidad: q } : i))
+                              else setItems(prev => prev.map(i => i.producto_id === p.id ? { ...i, cantidad: q * size, unidadPedido: unidad } : i))
                             }}
                             onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                             style={{ width: 46, textAlign: 'center', background: 'var(--s2)', border: '1px solid var(--ac)', borderRadius: 'var(--rs)', color: 'var(--ac)', fontWeight: 800, fontFamily: "'DM Sans',sans-serif", padding: '4px 2px', fontSize: '.9rem' }}
                             inputMode="numeric"
                           />
-                          <button className="qb" style={{ width: 30, height: 30 }} onClick={() => addItem(p, +1)}>+</button>
+                          <button className="qb" style={{ width: 30, height: 30 }} onClick={() => addEnUnidad(p, +1)}>+</button>
                         </div>
                       ) : (
-                        <button onClick={() => addItem(p, 1)} style={{
+                        <button onClick={() => addEnUnidad(p, 1)} style={{
                           flexShrink: 0, padding: '5px 12px', borderRadius: 'var(--rs)',
-                          background: 'rgba(255,77,28,.12)', border: '1px solid var(--ac)',
+                          background: 'rgba(var(--ac-rgb),.12)', border: '1px solid var(--ac)',
                           color: 'var(--ac)', fontWeight: 700, cursor: 'pointer',
                           fontSize: '.75rem', fontFamily: "'DM Sans',sans-serif",
                         }}>+ Pedir</button>
                       )}
                     </div>
+                    {/* Selector de embalaje (solo si el producto tiene envase/caja) */}
+                    {niveles.length > 1 && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+                        {niveles.map(n => (
+                          <button key={n.key} onClick={() => elegirUnidad(p, n.key)} style={{
+                            padding: '2px 9px', borderRadius: 12, fontSize: '.68rem', fontWeight: 700, cursor: 'pointer',
+                            fontFamily: "'DM Sans',sans-serif",
+                            background: unidad === n.key ? 'var(--ac)' : 'var(--s2)',
+                            border: `1px solid ${unidad === n.key ? 'var(--ac)' : 'var(--bd)'}`,
+                            color: unidad === n.key ? 'white' : 'var(--tx2)',
+                          }}>{n.label}{n.size > 1 ? ` (${n.size})` : ''}</button>
+                        ))}
+                      </div>
+                    )}
                     {/* Fila 2: stock + info */}
                     <div style={{ fontSize: '.7rem', display: 'flex', gap: 6, marginTop: 3, alignItems: 'center' }}>
                       {stockDisp === 0 ? (
-                        <span style={{ background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.4)', color: 'var(--red)', fontWeight: 800, padding: '1px 6px', borderRadius: 8 }}><i className="fi fi-rr-cross-circle"/> Agotado</span>
+                        <span style={{ background: 'rgba(var(--red-rgb),.15)', border: '1px solid rgba(var(--red-rgb),.4)', color: 'var(--red)', fontWeight: 800, padding: '1px 6px', borderRadius: 8 }}><i className="fi fi-rr-cross-circle"/> Agotado</span>
                       ) : stockDisp < 10 ? (
-                        <span style={{ background: 'rgba(245,200,66,.15)', border: '1px solid rgba(245,200,66,.4)', color: 'var(--gold)', fontWeight: 700, padding: '1px 6px', borderRadius: 8 }}><i className="fi fi-rr-triangle-warning"/> {stockDisp} uds</span>
+                        <span style={{ background: 'rgba(var(--gold-rgb),.15)', border: '1px solid rgba(var(--gold-rgb),.4)', color: 'var(--gold)', fontWeight: 700, padding: '1px 6px', borderRadius: 8 }}><i className="fi fi-rr-triangle-warning"/> {stockDisp} uds</span>
                       ) : (
                         <span style={{ color: 'var(--green)', fontWeight: 600 }}>Stock: {stockDisp}</span>
                       )}
@@ -991,7 +1124,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
                       <span style={{ color: 'var(--tx2)', opacity: .6 }}>{fmt(p.precio)}</span>
                       {enPedido > 0 && <span style={{ color: 'var(--ac)', fontWeight: 700, marginLeft: 'auto' }}>En pedido: {enPedido}</span>}
                       {items.find(i => i.producto_id === p.id)?.origen === 'auto' && enPedido > 0 && (
-                        <span style={{ fontSize: '.62rem', background: 'rgba(96,165,250,.15)', color: 'var(--blue)', border: '1px solid rgba(96,165,250,.3)', borderRadius: 6, padding: '1px 5px', fontWeight: 700 }}>auto</span>
+                        <span style={{ fontSize: '.62rem', background: 'rgba(var(--blue-rgb),.15)', color: 'var(--blue)', border: '1px solid rgba(var(--blue-rgb),.3)', borderRadius: 6, padding: '1px 5px', fontWeight: 700 }}>auto</span>
                       )}
                     </div>
                   </div>
@@ -1020,31 +1153,52 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
                   El pedido está vacío.<br/>
                   <span style={{ fontSize: '.78rem' }}>Vuelve al catálogo y añade productos.</span>
                 </div>
-              ) : items.map(item => (
+              ) : [...items].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(item => {
+                const prod = productos.find(p => p.id === item.producto_id)
+                const niveles = nivelesDe(prod)
+                const unidad = niveles.some(n => n.key === item.unidadPedido) ? item.unidadPedido : 'unidad'
+                const size = sizeDe(prod, unidad)
+                const qtyUnit = Math.max(1, Math.round(item.cantidad / size))
+                return (
                 <div key={item.producto_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--bd)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       {item.nombre}
                       {item.origen === 'auto'
-                        ? <span style={{ fontSize: '.62rem', background: 'rgba(96,165,250,.15)', color: 'var(--blue)', border: '1px solid rgba(96,165,250,.3)', borderRadius: 6, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>auto</span>
+                        ? <span style={{ fontSize: '.62rem', background: 'rgba(var(--blue-rgb),.15)', color: 'var(--blue)', border: '1px solid rgba(var(--blue-rgb),.3)', borderRadius: 6, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>auto</span>
                         : <span style={{ fontSize: '.62rem', background: 'rgba(144,144,168,.1)', color: 'var(--tx2)', border: '1px solid rgba(144,144,168,.2)', borderRadius: 6, padding: '1px 5px', fontWeight: 700, flexShrink: 0 }}>manual</span>
                       }
                     </div>
                     <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>
                       Stock: {stock[item.producto_id] ?? 0}
                       {item.origen === 'auto' && ` · mín. ${stockMinimos[item.producto_id] || 0}`}
-                      {(item.fardo || 1) > 1 && ` · fardo ${item.fardo} uds → ${Math.ceil(item.cantidad / item.fardo)} fardos`}
+                      {unidad !== 'unidad' && ` · = ${item.cantidad.toLocaleString('es-ES')} uds`}
                     </div>
+                    {niveles.length > 1 && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+                        {niveles.map(n => (
+                          <button key={n.key} onClick={() => setUnidadPedido(item.producto_id, prod, n.key)} style={{
+                            padding: '2px 9px', borderRadius: 12, fontSize: '.68rem', fontWeight: 700, cursor: 'pointer',
+                            fontFamily: "'DM Sans',sans-serif",
+                            background: unidad === n.key ? 'var(--ac)' : 'var(--s2)',
+                            border: `1px solid ${unidad === n.key ? 'var(--ac)' : 'var(--bd)'}`,
+                            color: unidad === n.key ? 'white' : 'var(--tx2)',
+                          }}>{n.label}{n.size > 1 ? ` (${n.size})` : ''}</button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad - 1)}>−</button>
-                  <input type="number" value={item.cantidad} min="1"
-                    onChange={e => setQty(item.producto_id, e.target.value)}
+                  <button className="qb" onClick={() => setQtyEnUnidad(item.producto_id, qtyUnit - 1, size)}>−</button>
+                  <input type="number" min="1" defaultValue={qtyUnit} key={`${item.cantidad}-${unidad}`}
+                    onFocus={e => e.target.select()}
+                    onBlur={e => setQtyEnUnidad(item.producto_id, e.target.value, size)}
+                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                     style={{ width: 52, textAlign: 'center', background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '4px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
                     inputMode="numeric" />
-                  <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad + 1)}>+</button>
-                  <button onClick={() => del(item.producto_id)} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(239,68,68,.3)', background: 'rgba(239,68,68,.1)', color: 'var(--red)', cursor: 'pointer' }}>✕</button>
+                  <button className="qb" onClick={() => setQtyEnUnidad(item.producto_id, qtyUnit + 1, size)}>+</button>
+                  <button onClick={() => del(item.producto_id)} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)', background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer' }}>✕</button>
                 </div>
-              ))}
+              )})}
             </div>
 
             <div className="fg" style={{ marginBottom: 10, marginTop: 8 }}>
@@ -1201,13 +1355,13 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
             </div>
             {/* Resumen rápido */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '.75rem', background: 'rgba(34,197,94,.12)', color: 'var(--green)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+              <span style={{ fontSize: '.75rem', background: 'rgba(var(--green-rgb),.12)', color: 'var(--green)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
                 ✓ {recItems.filter(i => i.estado === 'ok').length} OK
               </span>
-              <span style={{ fontSize: '.75rem', background: 'rgba(245,200,66,.12)', color: 'var(--gold)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+              <span style={{ fontSize: '.75rem', background: 'rgba(var(--gold-rgb),.12)', color: 'var(--gold)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
                 ± {recItems.filter(i => i.estado === 'diferencia').length} con diferencia
               </span>
-              <span style={{ fontSize: '.75rem', background: 'rgba(239,68,68,.12)', color: 'var(--red)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+              <span style={{ fontSize: '.75rem', background: 'rgba(var(--red-rgb),.12)', color: 'var(--red)', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
                 ✕ {recItems.filter(i => i.estado === 'no_llegado').length} no llegó
               </span>
               <span style={{ fontSize: '.75rem', background: 'var(--s2)', color: 'var(--tx2)', padding: '3px 10px', borderRadius: 20 }}>
@@ -1259,13 +1413,13 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                 }))
                 const setNota = (val) => setRecItems(prev => prev.map((r, i) => i !== idx ? r : { ...r, notas_item: val }))
 
-                const borderCol = item.estado === 'ok' ? 'rgba(34,197,94,.4)'
-                  : item.estado === 'diferencia' ? 'rgba(245,200,66,.4)'
-                  : item.estado === 'no_llegado' ? 'rgba(239,68,68,.4)'
+                const borderCol = item.estado === 'ok' ? 'rgba(var(--green-rgb),.4)'
+                  : item.estado === 'diferencia' ? 'rgba(var(--gold-rgb),.4)'
+                  : item.estado === 'no_llegado' ? 'rgba(var(--red-rgb),.4)'
                   : 'var(--bd)'
-                const bgCol = item.estado === 'ok' ? 'rgba(34,197,94,.06)'
-                  : item.estado === 'diferencia' ? 'rgba(245,200,66,.06)'
-                  : item.estado === 'no_llegado' ? 'rgba(239,68,68,.06)'
+                const bgCol = item.estado === 'ok' ? 'rgba(var(--green-rgb),.06)'
+                  : item.estado === 'diferencia' ? 'rgba(var(--gold-rgb),.06)'
+                  : item.estado === 'no_llegado' ? 'rgba(var(--red-rgb),.06)'
                   : 'var(--s2)'
 
                 return (
@@ -1282,21 +1436,21 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                         flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
                         cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                         background: item.estado === 'ok' ? 'var(--green)' : 'transparent',
-                        border: `1px solid ${item.estado === 'ok' ? 'var(--green)' : 'rgba(34,197,94,.4)'}`,
+                        border: `1px solid ${item.estado === 'ok' ? 'var(--green)' : 'rgba(var(--green-rgb),.4)'}`,
                         color: item.estado === 'ok' ? 'white' : 'var(--green)',
                       }}>✓ Todo llegó</button>
                       <button onClick={() => { setBand('diferencia'); }} style={{
                         flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
                         cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                         background: item.estado === 'diferencia' ? 'var(--gold)' : 'transparent',
-                        border: `1px solid ${item.estado === 'diferencia' ? 'var(--gold)' : 'rgba(245,200,66,.4)'}`,
+                        border: `1px solid ${item.estado === 'diferencia' ? 'var(--gold)' : 'rgba(var(--gold-rgb),.4)'}`,
                         color: item.estado === 'diferencia' ? '#000' : 'var(--gold)',
                       }}>± Diferencia</button>
                       <button onClick={() => setBand('no_llegado')} style={{
                         flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
                         cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                         background: item.estado === 'no_llegado' ? 'var(--red)' : 'transparent',
-                        border: `1px solid ${item.estado === 'no_llegado' ? 'var(--red)' : 'rgba(239,68,68,.4)'}`,
+                        border: `1px solid ${item.estado === 'no_llegado' ? 'var(--red)' : 'rgba(var(--red-rgb),.4)'}`,
                         color: item.estado === 'no_llegado' ? 'white' : 'var(--red)',
                       }}>✕ No llegó</button>
                     </div>
@@ -1338,7 +1492,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 
             {/* Aviso si hay pendientes */}
             {recItems.some(i => i.estado === 'pendiente') && (
-              <div style={{ fontSize: '.75rem', color: 'var(--gold)', marginTop: 8, padding: '6px 10px', background: 'rgba(245,200,66,.1)', borderRadius: 'var(--rs)' }}>
+              <div style={{ fontSize: '.75rem', color: 'var(--gold)', marginTop: 8, padding: '6px 10px', background: 'rgba(var(--gold-rgb),.1)', borderRadius: 'var(--rs)' }}>
                 <i className="fi fi-rr-triangle-warning"/> Quedan {recItems.filter(i => i.estado === 'pendiente').length} productos sin revisar. Márcalos antes de confirmar.
               </div>
             )}
@@ -1360,7 +1514,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 // ─── MODAL INVENTARIO ─────────────────────────────────────────
 function ModalInventario({ caseta, perfil, productos, stockActual, onClose, showToast }) {
   const [items, setItems]       = useState(() =>
-    productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, cantidad_real: 0 }))
+    productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, codigo_ean: p.codigo_ean, cantidad_real: 0 }))
   )
   const [busq, setBusq]         = useState('')
   const [catFiltro, setCatFiltro] = useState('Todos')
@@ -1370,7 +1524,8 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
   const cats = ['Todos', ...new Set(productos.map(p => p.categoria).sort())]
 
   const itemsFiltrados = items.filter(i => {
-    const bOk = !busq || i.nombre.toLowerCase().includes(busq.toLowerCase())
+    const b = busq.trim().toLowerCase()
+    const bOk = !b || i.nombre.toLowerCase().includes(b) || i.codigo_ean?.includes(b)
     const cOk = catFiltro === 'Todos' || i.categoria === catFiltro
     return bOk && cOk
   }).sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
@@ -1411,7 +1566,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
           {caseta.nombre} · Cuenta el stock físico restante
         </div>
 
-        <input className="si" placeholder="Buscar producto..."
+        <input className="si" placeholder="Buscar producto o EAN..."
           value={busq} onChange={e => setBusq(e.target.value)} style={{ marginBottom: 8 }} />
 
         {/* Fix: scroll horizontal con rueda del ratón */}
@@ -1460,22 +1615,33 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
 }
 
 // ─── BADGE KILOS PÓLVORA ──────────────────────────────────────
-function BadgeKgPolvora({ kgActual, kgLimite }) {
+function BadgeKgPolvora({ kgActual, kgLimite, necDetalle }) {
   const pct = kgLimite > 0 ? (kgActual / kgLimite) * 100 : 0
-  const color = pct >= 100 ? 'var(--red)' : pct >= 90 ? 'var(--red)' : pct >= 75 ? 'var(--gold)' : 'var(--green)'
+  const color = pct >= 90 ? 'var(--red)' : pct >= 75 ? 'var(--gold)' : 'var(--green)'
   const alerta = pct >= 80
+  // Evaluación por división (1.3G ≤ 20%, etc.)
+  const ev = evaluarNEC(necDetalle?.porDivision || {}, kgLimite)
+  const d13 = ev.divisiones.find(d => d.division === '1.3G')
+  const sinClasif = necDetalle?.sinClasificar || 0
+  const incumple = ev.divisiones.some(d => d.excedido)
+  const titulo = `Total: ${kgActual.toFixed(2)}/${kgLimite} kg (${pct.toFixed(0)}%)`
+    + (d13 ? `\n1.3G: ${d13.kg.toFixed(2)}/${d13.maxKg.toFixed(2)} kg (máx 20%)` : '')
+    + (sinClasif > 0 ? `\nSin clasificar: ${sinClasif.toFixed(2)} kg` : '')
   return (
-    <div title={`${kgActual.toFixed(2)} kg / ${kgLimite} kg permitidos (${pct.toFixed(0)}%)`} style={{
-      display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px',
-      background: alerta ? `rgba(${pct >= 90 ? '239,68,68' : '245,200,66'},.15)` : 'var(--s2)',
-      border: `1px solid ${color}`, borderRadius: 20, fontSize: '.72rem', cursor: 'default',
+    <div title={titulo} style={{
+      display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+      background: (alerta || incumple) ? `rgba(${pct >= 90 || incumple ? 'var(--red-rgb)' : 'var(--gold-rgb)'},.15)` : 'var(--s2)',
+      border: `1px solid ${incumple ? 'var(--red)' : color}`, borderRadius: 20, fontSize: '.72rem', cursor: 'default',
     }}>
       <span style={{ color, fontWeight: 700 }}><i className="fi fi-rr-flame"/> {kgActual.toFixed(2)}kg</span>
       <span style={{ color: 'var(--tx2)' }}>/ {kgLimite}kg</span>
-      {pct >= 100
-        ? <span style={{ color: 'var(--red)', fontWeight: 800 }}>SUPERADO</span>
-        : alerta && <span style={{ color, fontWeight: 800 }}><i className="fi fi-rr-triangle-warning"/></span>
-      }
+      {d13 && (
+        <span style={{ color: d13.excedido ? 'var(--red)' : 'var(--tx2)', fontWeight: d13.excedido ? 800 : 600, borderLeft: '1px solid var(--bd)', paddingLeft: 6 }}>
+          1.3G {d13.kg.toFixed(1)}/{d13.maxKg.toFixed(1)}{d13.excedido && <i className="fi fi-rr-triangle-warning" style={{ marginLeft: 3 }}/>}
+        </span>
+      )}
+      {pct >= 100 && <span style={{ color: 'var(--red)', fontWeight: 800 }}>SUPERADO</span>}
+      {sinClasif > 0 && <span title="Hay NEC sin división asignada" style={{ color: 'var(--gold)', cursor: 'help' }}><i className="fi fi-rr-interrogation"/></span>}
     </div>
   )
 }
@@ -1583,8 +1749,8 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
   // Colores y textos según estado
   const estadoCfg = {
     libre:     { color: 'var(--tx2)',    bg: 'var(--s2)',                 border: 'var(--bd)',                  dot: 'var(--s3)',       label: 'Sin fichar' },
-    trabajando:{ color: 'var(--green)',  bg: 'rgba(34,197,94,.08)',       border: 'rgba(34,197,94,.3)',          dot: 'var(--green)',    label: 'Trabajando' },
-    descanso:  { color: 'var(--gold)',   bg: 'rgba(245,200,66,.08)',      border: 'rgba(245,200,66,.3)',         dot: 'var(--gold)',     label: 'En descanso' },
+    trabajando:{ color: 'var(--green)',  bg: 'rgba(var(--green-rgb),.08)',       border: 'rgba(var(--green-rgb),.3)',          dot: 'var(--green)',    label: 'Trabajando' },
+    descanso:  { color: 'var(--gold)',   bg: 'rgba(var(--gold-rgb),.08)',      border: 'rgba(var(--gold-rgb),.3)',         dot: 'var(--gold)',     label: 'En descanso' },
   }
   const cfg = estadoCfg[estado]
 
@@ -1630,52 +1796,52 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
             {estado==='libre'&&(
               <button className="btn-p" style={{flex:1,marginTop:0,padding:'10px 0'}}
                 disabled={loading2} onClick={()=>handleFichar('ENTRADA')}>
-                {fichandoType==='ENTRADA'?'...':<><i className="fi fi-rr-circle" style={{color:'var(--green)'}}/> Fichar entrada</>}
+                {fichandoType==='ENTRADA'?'...':'Fichar entrada'}
               </button>
             )}
             {estado==='trabajando'&&(<>
               <button onClick={()=>handleFichar('INICIO_DESCANSO')} disabled={loading2} style={{
-                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(245,200,66,.5)',
-                background:'rgba(245,200,66,.1)',color:'var(--gold)',fontWeight:700,cursor:'pointer',
+                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(var(--gold-rgb),.5)',
+                background:'rgba(var(--gold-rgb),.1)',color:'var(--gold)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
-              }}>{fichandoType==='INICIO_DESCANSO'?'...':<><i className="fi fi-rr-mug-hot" style={{color:'var(--gold)'}}/> Iniciar descanso</>}</button>
+              }}>{fichandoType==='INICIO_DESCANSO'?'...':'Iniciar descanso'}</button>
               <button onClick={()=>handleFichar('SALIDA')} disabled={loading2} style={{
-                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(239,68,68,.4)',
-                background:'rgba(239,68,68,.1)',color:'var(--red)',fontWeight:700,cursor:'pointer',
+                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(var(--red-rgb),.4)',
+                background:'rgba(var(--red-rgb),.1)',color:'var(--red)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
-              }}>{fichandoType==='SALIDA'?'...':<><i className="fi fi-rr-circle" style={{color:'var(--red)'}}/> Fichar salida</>}</button>
+              }}>{fichandoType==='SALIDA'?'...':'Fichar salida'}</button>
             </>)}
             {estado==='descanso'&&(<>
               <button onClick={()=>handleFichar('FIN_DESCANSO')} disabled={loading2} style={{
-                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(34,197,94,.4)',
-                background:'rgba(34,197,94,.1)',color:'var(--green)',fontWeight:700,cursor:'pointer',
+                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(var(--green-rgb),.4)',
+                background:'rgba(var(--green-rgb),.1)',color:'var(--green)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
               }}>{fichandoType==='FIN_DESCANSO'?'...':<><i className="fi fi-rr-circle" style={{color:'var(--green)'}}/> Volver al trabajo</>}</button>
               <button onClick={()=>handleFichar('SALIDA')} disabled={loading2} style={{
-                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(239,68,68,.4)',
-                background:'rgba(239,68,68,.1)',color:'var(--red)',fontWeight:700,cursor:'pointer',
+                flex:1,padding:'10px 0',borderRadius:'var(--rs)',border:'1px solid rgba(var(--red-rgb),.4)',
+                background:'rgba(var(--red-rgb),.1)',color:'var(--red)',fontWeight:700,cursor:'pointer',
                 fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem',
               }}>{fichandoType==='SALIDA'?'...':<><i className="fi fi-rr-sign-out-alt" style={{color:'var(--red)'}}/> Salida directa</>}</button>
             </>)}
             {/* Feedback de geolocalización */}
           {geoEstado === 'obteniendo' && (
-            <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(96,165,250,.1)',border:'1px solid rgba(96,165,250,.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--blue)',display:'flex',gap:8,alignItems:'center'}}>
+            <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(var(--blue-rgb),.1)',border:'1px solid rgba(var(--blue-rgb),.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--blue)',display:'flex',gap:8,alignItems:'center'}}>
               <div className="spin-sm" style={{width:14,height:14,flexShrink:0}}/>
               Verificando tu ubicación...
             </div>
           )}
           {geoEstado === 'ok' && geoMsg && (
-            <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(34,197,94,.1)',border:'1px solid rgba(34,197,94,.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--green)'}}>
+            <div style={{width:'100%',marginTop:6,padding:'7px 12px',background:'rgba(var(--green-rgb),.1)',border:'1px solid rgba(var(--green-rgb),.3)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--green)'}}>
               <i className="fi fi-rr-map-marker"/> {geoMsg}
             </div>
           )}
           {geoEstado === 'fuera' && (
-            <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.4)',borderRadius:'var(--rs)',fontSize:'.8rem',color:'var(--red)',fontWeight:600}}>
+            <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(var(--red-rgb),.12)',border:'1px solid rgba(var(--red-rgb),.4)',borderRadius:'var(--rs)',fontSize:'.8rem',color:'var(--red)',fontWeight:600}}>
               <i className="fi fi-rr-map-marker"/> {geoMsg}
             </div>
           )}
           {geoEstado === 'error' && (
-            <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.4)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--red)'}}>
+            <div style={{width:'100%',marginTop:6,padding:'9px 12px',background:'rgba(var(--red-rgb),.12)',border:'1px solid rgba(var(--red-rgb),.4)',borderRadius:'var(--rs)',fontSize:'.78rem',color:'var(--red)'}}>
               <i className="fi fi-rr-triangle-warning"/> {geoMsg}
             </div>
           )}
@@ -1683,7 +1849,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
           {/* Aviso si es el último y tiene caja abierta */}
             {(estado==='trabajando'||estado==='descanso') && esSoloEmpleado && caja && (
               <div style={{width:'100%',marginTop:4,fontSize:'.72rem',color:'var(--gold)',
-                background:'rgba(245,200,66,.08)',border:'1px solid rgba(245,200,66,.2)',
+                background:'rgba(var(--gold-rgb),.08)',border:'1px solid rgba(var(--gold-rgb),.2)',
                 borderRadius:'var(--rs)',padding:'5px 10px',textAlign:'center'}}>
                 <i className="fi fi-rr-triangle-warning"/> Eres el único empleado — debes cerrar caja antes de salir
               </div>
@@ -1730,8 +1896,8 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
               ?<div style={{textAlign:'center',color:'var(--tx2)',padding:30,fontSize:'.85rem'}}>Sin fichajes esta semana</div>
               :[...turnos].reverse().map((t,i)=>(
               <div key={i} style={{
-                background:t.enCurso?'rgba(34,197,94,.06)':t.enDescanso?'rgba(245,200,66,.06)':'var(--s2)',
-                border:`1px solid ${t.enCurso?'rgba(34,197,94,.25)':t.enDescanso?'rgba(245,200,66,.25)':'var(--bd)'}`,
+                background:t.enCurso?'rgba(var(--green-rgb),.06)':t.enDescanso?'rgba(var(--gold-rgb),.06)':'var(--s2)',
+                border:`1px solid ${t.enCurso?'rgba(var(--green-rgb),.25)':t.enDescanso?'rgba(var(--gold-rgb),.25)':'var(--bd)'}`,
                 borderRadius:'var(--rs)',padding:'11px 14px',marginBottom:8,
               }}>
                 {/* Fecha */}
@@ -1767,7 +1933,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
 
                 {/* Descansos del turno */}
                 {(t.descansos.length>0||t.descansoEnCurso)&&(
-                  <div style={{borderTop:'1px dashed rgba(245,200,66,.3)',paddingTop:6,marginTop:4}}>
+                  <div style={{borderTop:'1px dashed rgba(var(--gold-rgb),.3)',paddingTop:6,marginTop:4}}>
                     {t.descansos.map((d,j)=>(
                       <div key={j} style={{display:'flex',gap:8,fontSize:'.73rem',color:'var(--gold)',marginBottom:2}}>
                         <span><i className="fi fi-rr-mug-hot"/></span>
@@ -1800,211 +1966,7 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
 }
 
 
-
-// ─── GENERADOR DE TICKET IMPRIMIBLE ───────────────────────────
-// Configuración fiscal de la empresa — editar aquí o mover a BD
-const CONFIG_EMPRESA = {
-  nombre:    'Caballer',
-  razonSocial: 'Green Peony, S.L.',
-  direccion: 'C/ Ejemplo 12, 46000 Valencia',
-  cif:       ' B18898551',   // ← Cambiar por el CIF real
-  telefono:  '',
-  web:       '',
-  textoLegal: 'Es imprescindible presentar el ticket para cualquier reclamación. Solo se aceptan devoluciones de artículos defectuosos, en cuyo caso será por otro igual o similar.',
-  iva:       21,
-}
-
-function generarTicketHTML(datos) {
-  const { items, total, metodo, cambio, dineroDado = 0, descuento = 0, descuentoPct = 0, caseta, perfil, fecha, ticketNum } = datos
-  const ahorroOfertas = items.reduce((s, i) => s + (i.precio * i.cantidad - i.total_linea), 0)
-  const iva = CONFIG_EMPRESA.iva / 100
-  const baseImponible = total / (1 + iva)
-  const cuotaIva = total - baseImponible
-  const totalNEC = items.reduce((s, i) => s + (i.gramos_polvora || 0) * i.cantidad, 0)
-  const fmtE = n => n.toFixed(2) + '€'
-  const fmtFecha = d =>
-    `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()} ` +
-    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
-
-  return `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=80mm">
-<title>Ticket ${ticketNum}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 14px;
-    font-weight: bold;       /* TODO EN BOLD por defecto */
-    width: 80mm;
-    max-width: 80mm;
-    color: #000;
-    background: #fff;
-    padding: 2mm 2mm 0 2mm; /* Sin padding inferior = sin espacio en blanco al final */
-    line-height: 1;
-  }
-
-  /* ── SEPARADORES ── */
-  .sep-solid { border: none; border-top: 2px solid #000; margin: 5px 3px; }
-  .sep-dash  { border: none; border-top: 1px dashed #000; margin: 5px 3px; }
-
-  /* ── LOGO ── */
-  .logo     { text-align: center; margin: 2px 0 1px; }
-  .logo svg { display: block; margin: 0 auto; width: 28mm; max-width: 100%; height: auto; }
-
-  /* ── EMPRESA ── */
-  .empresa        { text-align: center; font-size: 13px; font-weight: bold; line-height: 1.2; }
-
-  /* ── NÚMERO / FECHA ── */
-  .num-fecha { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin: 2px 0; }
-
-  /* ── CABECERA COLUMNAS ── */
-  .col-header {
-    display: flex;
-    justify-content: space-between;
-    font-size: 13px;
-    font-weight: bold;
-    border-bottom: 1px solid #000;
-    padding-bottom: 2px;
-    margin-bottom: 5px;
-  }
-
-  /* ── ITEMS ── */
-  .item        { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin-bottom: 2px; }
-  .item-uds    { width: 22px; text-align: center; flex-shrink: 0; }
-  .item-nombre { flex: 1; padding: 0 3px; }
-  .item-precio { width: 40px; text-align: right; flex-shrink: 0; }
-  .item-sep    { width: 6px; flex-shrink: 0; } /* ← Espacio entre Precio y Subt */
-  .item-total  { width: 40px; text-align: right; flex-shrink: 0; }
-
-  /* ── DESGLOSE ── */
-  .desglose       { font-size: 13px; font-weight: bold; margin: 2px 0; }
-  .desglose .fila { display: flex; justify-content: space-between; padding: 1px 0; font-size: 12px; }
-
-  /* ── TOTAL ── */
-  .total-line { display: flex; justify-content: space-between; font-size: 19px; font-weight: bold; margin: 3px 0; }
-
-  /* ── PAGO ── */
-  .pago   { font-size: 13px; font-weight: bold; text-align: center; margin: 2px 0; }
-  .cambio { font-size: 14px; font-weight: bold; text-align: center; margin: 2px 0; }
-
-  /* ── TEXTO LEGAL ── */
-  .legal { font-size: 11px; font-weight: bold; text-align: center; line-height: 1.35; margin-top: 3px; }
-
-  /* ── GLOSARIO (igual que ticket referencia) ── */
-  .glosario {
-    font-size: 11px;
-    font-weight: bold;
-    margin-top: 4px;
-    border-top: 1px dashed #000;
-    padding-top: 3px;
-    line-height: 1;
-    margin-bottom: 0;
-  }
-
-  @media print {
-    body { padding: 1mm 1mm 0 1mm; }
-    @page { margin: 0; size: 80mm auto; }
-  }
-</style>
-</head>
-<body>
-
-  <!-- LOGO -->
-  <div class="logo">${logoMonoSVG}</div>
-  <hr class="sep-solid">
-
-  <!-- EMPRESA -->
-  <div class="empresa">
-    <div>${CONFIG_EMPRESA.razonSocial}</div>
-    <div class="light">${caseta?.nombre || ''}</div>
-    <div class="light">${caseta?.direccion || CONFIG_EMPRESA.direccion}</div>
-    <div class="light">CIF: ${CONFIG_EMPRESA.cif}</div>
-  </div>
-  <hr class="sep-dash">
-
-  <!-- NÚMERO Y FECHA -->
-  <div class="num-fecha">
-    <span>${ticketNum}</span>
-    <span>${fmtFecha(fecha)}</span>
-  </div>
-  <hr class="sep-dash">
-
-  <!-- CABECERA PRODUCTOS -->
-  <div class="col-header">
-    <span style="width:22px;text-align:center">Uds</span>
-    <span style="flex:1;padding-left:3px">Producto</span>
-    <span style="width:40px;text-align:right">Precio</span>
-    <span class="item-sep"></span>
-    <span style="width:40px;text-align:right">Subt</span>
-  </div>
-
-  <!-- ITEMS -->
-  ${items.map(i => `
-  <div class="item">
-    <span class="item-uds">${i.cantidad}</span>
-    <span class="item-nombre">${i.nombre}${i.precio * i.cantidad > i.total_linea ? ' *' : ''}</span>
-    <span class="item-precio">${fmtE(i.precio)}</span>
-    <span class="item-sep"></span>
-    <span class="item-total">${fmtE(i.total_linea)}</span>
-  </div>`).join('')}
-
-  <hr class="sep-dash">
-
-  ${ahorroOfertas > 0.005 ? `<div class="desglose"><div class="fila"><span>* Ahorro ofertas:</span><span>-${fmtE(ahorroOfertas)}</span></div></div>` : ''}
-  ${descuento > 0 ? `<div class="desglose"><div class="fila"><span>Descuento (${descuentoPct}%):</span><span>-${fmtE(descuento)}</span></div></div>` : ''}
-
-  <!-- DESGLOSE FISCAL -->
-  <div class="desglose">
-    <div>Desglose TOTAL:</div>
-    <div class="fila"><span>B.I.:</span><span>${fmtE(baseImponible)}</span></div>
-    <div class="fila"><span>I.V.A. (${CONFIG_EMPRESA.iva}%):</span><span>${fmtE(cuotaIva)}</span></div>
-    <div class="fila"><span>N.E.C.:</span><span>${totalNEC.toFixed(2)}g</span></div>
-  </div>
-  <hr class="sep-solid">
-
-  <!-- TOTAL -->
-  <div class="total-line">
-    <span>TOTAL:</span>
-    <span>${fmtE(total)}</span>
-  </div>
-  <hr class="sep-solid">
-
-  <!-- PAGO -->
-  <div class="pago">Forma de pago: ${metodo === 'efectivo' ? 'Efectivo' : 'Tarjeta'}</div>
-  ${metodo === 'efectivo' && dineroDado > 0 ? `<div class="cambio">Entregado: ${fmtE(dineroDado)}</div><div class="cambio">Cambio: ${fmtE(cambio)}</div>` : ''}
-  <div class="pago">I.V.A. incluido</div>
-  <hr class="sep-dash">
-
-  <!-- TEXTO LEGAL -->
-  <div class="legal">${CONFIG_EMPRESA.textoLegal}</div>
-
-  <!-- GLOSARIO (igual que ticket referencia) -->
-<div class="glosario">
-  <div>Subt.* : Subtotal</div>
-  <div>B.I.* : Base Imponible</div>
-  <div>N.E.C.* : Contenido Neto Explosivo</div>
-</div>
-
-</body>
-</html>`
-}
-
-function imprimirTicket(datos) {
-  const html = generarTicketHTML(datos)
-  const ventana = window.open('', '_blank', 'width=400,height=700,scrollbars=yes')
-  if (!ventana) {
-    alert('El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para esta página.')
-    return
-  }
-  ventana.document.write(html)
-  ventana.document.close()
-}
-
-export default function EmpleadoPanel({ perfil, casetas }) {
+export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   // Fallback: si RLS impide leer casetas[], usar el join embebido en el perfil
   const caseta = casetas.find(c => c.id === perfil.caseta_id)
     ?? (perfil.casetas ? { ...perfil.casetas } : null)
@@ -2027,11 +1989,12 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [showAperturaCaja, setShowAperturaCaja] = useState(false)
   const [showHistorial,  setShowHistorial]  = useState(false)
   const [showOk,         setShowOk]         = useState(null)
+  const [showFactura,    setShowFactura]    = useState(false)
   const [toast,          setToast]          = useState(null)
   const [apertura,       setApertura]       = useState('')
   // ── Persistidos en sessionStorage para sobrevivir a cambios de página ──
   const [modoRapido,     setModoRapido]     = useState(() => sessionStorage.getItem('tpv_rapido') === '1')
-  const [ticketActivo,   setTicketActivo]   = useState(() => sessionStorage.getItem('tpv_ticket') !== '0') // true por defecto
+  const [noImprimir,     setNoImprimir]     = useState(() => sessionStorage.getItem('tpv_noimprimir') === '1') // por defecto SÍ se imprime
   const [tabTPV,         setTabTPV]         = useState(() => sessionStorage.getItem('tpv_tab') || 'todos')
   const [cat2,           setCat2]           = useState(() => sessionStorage.getItem('tpv_cat') || 'Todos')
 
@@ -2047,6 +2010,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [fichajeLoading, setFichajeLoading] = useState(true)  // true mientras carga el estado del fichaje
   const [otrosActivos,   setOtrosActivos]   = useState([]) // otros empleados activos en la caseta
   const [kgPolvora,      setKgPolvora]      = useState(0)
+  const [necDetalle,     setNecDetalle]     = useState({ total: 0, porDivision: {}, sinClasificar: 0 })
   const [kgLimite,       setKgLimite]       = useState(10)
   const [pedidosPend,          setPedidosPend]          = useState(0)
   const [stockMinimos,         setStockMinimos]         = useState({})
@@ -2057,6 +2021,15 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   const [showHamburger,        setShowHamburger]        = useState(false)
 
   const showToast = (msg, type = 'ok') => { setToast({ msg, type }); setTimeout(() => setToast(null), 2800) }
+
+  // ── FACTURA (post-venta): abre el modal reutilizable ──
+  const abrirFactura = () => setShowFactura(true)
+  const onFacturaConfirm = (cliente) => {
+    imprimirTicket(showOk, { esFactura: true, cliente })
+    // Guardar los datos del cliente en el ticket para poder reimprimir la factura
+    if (showOk?.id) guardarFacturaCliente(showOk.id, cliente).catch(() => {})
+    setShowFactura(false); setShowOk(null)
+  }
 
   const refrescarTras = () => {
     Promise.all([
@@ -2077,7 +2050,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
 
   // Persistir estado simple en sessionStorage
   useEffect(() => { sessionStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
-  useEffect(() => { sessionStorage.setItem('tpv_ticket', ticketActivo ? '1' : '0') }, [ticketActivo])
+  useEffect(() => { sessionStorage.setItem('tpv_noimprimir', noImprimir ? '1' : '0') }, [noImprimir])
   useEffect(() => { sessionStorage.setItem('tpv_tab', tabTPV) }, [tabTPV])
   useEffect(() => { sessionStorage.setItem('tpv_cat', cat2) }, [cat2])
 
@@ -2088,12 +2061,12 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     Promise.all([
       getProductos(), getStockCaseta(caseta.id),
       getOfertas(), getCajaAbierta(caseta.id),
-      getKgPolvora(caseta.id), getLimitePolvora(caseta.id),
+      getNECDetalle(caseta.id), getLimitePolvora(caseta.id),
       getPedidos({ casetaId: caseta.id, activos: true }).catch(() => []),
       getStockMinimos(caseta.id).catch(() => {}),
-    ]).then(([prods, stk, ofs, cajaAbierta, kg, limite, peds, mins]) => {
+    ]).then(([prods, stk, ofs, cajaAbierta, nec, limite, peds, mins]) => {
       setProductos(prods); setStock(stk); setOfertas(ofs)
-      setKgPolvora(kg); setKgLimite(limite)
+      setKgPolvora(nec.total); setNecDetalle(nec); setKgLimite(limite)
       setStockMinimos(mins || {})
       const pedsArr = peds || []
       setPedidosPend(pedsArr.filter(p => p.estado === 'EN_CAMINO').length)
@@ -2115,8 +2088,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'stock', filter: `caseta_id=eq.${caseta.id}` },
         payload => {
           setStock(prev => ({ ...prev, [payload.new.producto_id]: payload.new.cantidad }))
-          // Recalcular kg pólvora en background
-          getKgPolvora(caseta.id).then(setKgPolvora)
+          // Recalcular NEC en background
+          getNECDetalle(caseta.id).then(d => { setKgPolvora(d.total); setNecDetalle(d) })
         })
       .subscribe()
     return () => supabase.removeChannel(ch)
@@ -2201,15 +2174,16 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   }
 
   // ── Restricciones basadas en fichaje ──────────────────────
+  const esModoAdmin   = !!onSalirVenta   // admin vendiendo: no necesita fichar
   const estadoFichaje = calcularEstado(ultimoFichaje)
   const estaFichado   = estadoFichaje !== 'libre'
   const enDescanso    = estadoFichaje === 'descanso'
   // Mientras carga el fichaje no bloqueamos (evita falso negativo al arrancar)
-  const puedeOperar   = fichajeLoading || (estaFichado && !enDescanso)
+  const puedeOperar   = esModoAdmin || fichajeLoading || (estaFichado && !enDescanso)
   // Para salir: si hay otros activos puede salir sin cerrar caja; si es el último, no
   const esSoloEmpleado = otrosActivos.length === 0
 
-  const agregar = useCallback((prod, cantidad = 1) => {
+  const agregar = useCallback((prod, cantidad = 1, regalo = false) => {
     if (!puedeOperar) {
       showToast(enDescanso ? 'Estás en descanso — termina el descanso para vender' : 'Ficha tu entrada antes de vender', 'error')
       setShowFichajes(true)
@@ -2223,16 +2197,17 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     const stockDisp = stock[prod.id] ?? 0
     if (stockDisp <= 0) { showToast('Sin stock disponible', 'error'); return }
     setTicket(prev => {
-      const idx = prev.findIndex(i => i.id === prod.id)
+      // Stock total comprometido por este producto (líneas pagada + regalo)
+      const totalEnTicket = prev.filter(i => i.id === prod.id).reduce((s, i) => s + i.cantidad, 0)
+      const idx = prev.findIndex(i => i.id === prod.id && !!i.regalo === regalo)
       if (idx >= 0) {
-        // Click simple (cantidad=1) → toggle: quitar del ticket
-        if (cantidad === 1) return prev.filter(i => i.id !== prod.id)
-        const nuevaCant = prev[idx].cantidad + cantidad
-        if (nuevaCant > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
-        const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
+        // Tap simple en la línea pagada → toggle: quitar del ticket
+        if (!regalo && cantidad === 1) return prev.filter((_, j) => j !== idx)
+        if (totalEnTicket + cantidad > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
+        const n = [...prev]; n[idx] = { ...n[idx], cantidad: n[idx].cantidad + cantidad }; return n
       }
-      if (cantidad > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
-      return [...prev, { ...prod, cantidad, gramos_polvora: prod.gramos_polvora || 0 }]
+      if (totalEnTicket + cantidad > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
+      return [...prev, { ...prod, cantidad, regalo, gramos_polvora: prod.gramos_polvora || 0 }]
     })
     setShowScan(false)
   }, [stock, caja, puedeOperar, enDescanso])
@@ -2243,24 +2218,62 @@ export default function EmpleadoPanel({ perfil, casetas }) {
     setProdModal(prod)
   }
 
-  const cambiarQty = (id, delta) => setTicket(prev => prev.map(i => {
-    if (i.id !== id) return i
-    const q = i.cantidad + delta
-    if (q <= 0) return null
-    if (q > (stock[i.id] ?? 0)) { showToast('Stock insuficiente', 'error'); return i }
-    return { ...i, cantidad: q }
-  }).filter(Boolean))
+  const cambiarQty = (key, delta) => setTicket(prev => {
+    const line = prev.find(i => lineKey(i) === key)
+    if (!line) return prev
+    const q = line.cantidad + delta
+    if (q <= 0) return prev.filter(i => lineKey(i) !== key)
+    const otras = prev.filter(i => i.id === line.id && lineKey(i) !== key).reduce((s, i) => s + i.cantidad, 0)
+    if (otras + q > (stock[line.id] ?? 0)) { showToast('Stock insuficiente', 'error'); return prev }
+    return prev.map(i => lineKey(i) === key ? { ...i, cantidad: q } : i)
+  })
 
-  const totalBruto = calcularTotalTicket(ticket, ofertas)
+  // Fijar cantidad a mano (limitada al stock disponible de la línea, mínimo 1)
+  const fijarQty = (key, val) => setTicket(prev => {
+    const line = prev.find(i => lineKey(i) === key)
+    if (!line) return prev
+    const otras = prev.filter(i => i.id === line.id && lineKey(i) !== key).reduce((s, i) => s + i.cantidad, 0)
+    const max = (stock[line.id] ?? 0) - otras
+    let q = parseInt(val) || 0
+    if (q < 1) q = 1
+    if (q > max) { showToast('Stock insuficiente', 'error'); q = Math.max(1, max) }
+    return prev.map(i => lineKey(i) === key ? { ...i, cantidad: q } : i)
+  })
+
+  // Marcar/desmarcar línea como regalo. Si ya existe la otra línea (pagada/regalo)
+  // del mismo producto, las fusiona para no duplicar.
+  const toggleRegalo = (key) => setTicket(prev => {
+    const line = prev.find(i => lineKey(i) === key)
+    if (!line) return prev
+    const target = !line.regalo
+    const otra = prev.find(i => i.id === line.id && !!i.regalo === target)
+    if (otra) {
+      return prev.map(i => i === otra ? { ...i, cantidad: i.cantidad + line.cantidad } : i)
+        .filter(i => lineKey(i) !== key)
+    }
+    return prev.map(i => lineKey(i) === key ? { ...i, regalo: target } : i)
+  })
+
+  const totalBruto = calcularTotalTicket(ticket.filter(i => !i.regalo), ofertas)
   const descuentoImporte = Math.round(totalBruto * descuento) / 100
   const total = Math.max(0, totalBruto - descuentoImporte)
 
-  const confirmarVenta = async ({ metodo, dineroDado, cambio }) => {
+  const confirmarVenta = async ({ metodo, dineroDado, cambio, cliente }) => {
     // Doble check en el momento de ejecutar (no en el render)
     if (!caja) { showToast('La caja está cerrada — no se puede registrar la venta', 'error'); return }
+    // Límite legal de 10 kg NEC por comprador (ITC 17)
+    const necVenta = ticket.reduce((s, i) => s + (i.gramos_polvora || 0) * i.cantidad, 0) / 1000
+    if (necVenta > MAX_NEC_COMPRADOR &&
+        !window.confirm(`Esta venta lleva ${necVenta.toFixed(2)} kg de NEC y supera el límite legal de ${MAX_NEC_COMPRADOR} kg por comprador (ITC 17).\n\n¿Seguro que quieres continuar?`)) {
+      return
+    }
     try {
       const items = ticket.map(item => {
         const { total: totalLinea, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
+        if (item.regalo) {
+          // Regalo: precio 0 pero el stock baja igual (cantidad intacta)
+          return { producto_id: item.id, nombre: item.nombre, precio_unitario: 0, cantidad: item.cantidad, total_linea: 0, con_oferta: false, detalle_oferta: 'REGALO' }
+        }
         return {
           producto_id: item.id, nombre: item.nombre, precio_unitario: item.precio,
           cantidad: item.cantidad, total_linea: totalLinea, con_oferta: !!desglose,
@@ -2274,22 +2287,33 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         return next
       })
       setVentas(prev => [...prev, { metodo_pago: metodo, total, perfiles: { nombre: perfil.nombre } }])
-      if (modoRapido) {
-        setTicket([]); setDescuento(0); setShowPago(false)
-        showToast(`✓ Venta ${fmt(total)} · ${metodo === 'efectivo' ? `Cambio: ${fmt(cambio)}` : 'Tarjeta'}`)
+      const ticketData = {
+        metodo, total, cambio, dineroDado, descuento: descuentoImporte, descuentoPct: descuento,
+        items: ticket.map(i => {
+          const { total: tl } = calcularPrecio(i.id, i.cantidad, i.precio, ofertas)
+          return { nombre: i.nombre, cantidad: i.cantidad, precio: i.regalo ? 0 : i.precio, total_linea: i.regalo ? 0 : tl, gramos_polvora: i.gramos_polvora || 0, regalo: !!i.regalo }
+        }),
+        caseta, perfil,
+        fecha: new Date(),
+        id: ticketResult?.id,
+        ticketNum: ticketResult?.numero_ticket || `TVN-${Date.now().toString().slice(-6)}`,
+      }
+      setTicket([]); setDescuento(0); setShowPago(false)
+      if (cliente) {
+        // Factura pedida antes de cobrar: imprime factura (no ticket) y la guarda
+        imprimirTicket(ticketData, { esFactura: true, cliente })
+        if (ticketData.id) guardarFacturaCliente(ticketData.id, cliente).catch(() => {})
+        showToast(`✓ Factura ${fmt(total)}`)
+      } else if (noImprimir) {
+        // Sin impresión: no abrimos popup ni imprimimos (p.ej. sin papel)
+        showToast(`✓ Venta ${fmt(total)} · sin ticket`)
+      } else if (modoRapido) {
+        // Venta rápida: imprime el ticket automáticamente y a por la siguiente
+        imprimirTicket(ticketData)
+        showToast(`✓ Venta ${fmt(total)} · ticket impreso`)
       } else {
-        const ticketData = {
-          metodo, total, cambio, dineroDado, descuento: descuentoImporte, descuentoPct: descuento,
-          items: ticket.map(i => {
-            const { total: tl } = calcularPrecio(i.id, i.cantidad, i.precio, ofertas)
-            return { nombre: i.nombre, cantidad: i.cantidad, precio: i.precio, total_linea: tl, gramos_polvora: i.gramos_polvora || 0 }
-          }),
-          caseta, perfil,
-          fecha: new Date(),
-          ticketNum: ticketResult?.numero_ticket || `TVN-${Date.now().toString().slice(-6)}`,
-        }
-        if (ticketActivo) setShowOk(ticketData)
-        setTicket([]); setDescuento(0); setShowPago(false)
+        // Normal: menú para elegir (ticket / factura / nueva venta)
+        setShowOk(ticketData)
       }
     } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
   }
@@ -2351,9 +2375,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
   return (
     <div className="app">
       <div className="topbar">
-        <div className="tl"><img src={logoColor} alt="Caballer" style={{ height: 28, display: 'block' }} /></div>
+        <div className="tl"><Logo style={{ height: 28 }} /></div>
         <div className="ti">
-          <BadgeKgPolvora kgActual={kgPolvora} kgLimite={kgLimite} />
+          <BadgeKgPolvora kgActual={kgPolvora} kgLimite={kgLimite} necDetalle={necDetalle} />
           {/* Botón fichaje compacto */}
           {(() => {
             const est = calcularEstado(ultimoFichaje)
@@ -2363,8 +2387,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             return (
               <button onClick={() => setShowFichajes(true)} title={caseta?.nombre} style={{
                 display:'flex',alignItems:'center',gap:5,padding:'5px 10px',
-                borderRadius:20,border:`1px solid ${anim?(est==='descanso'?'rgba(245,200,66,.4)':'rgba(34,197,94,.4)'):'var(--bd)'}`,
-                background:anim?(est==='descanso'?'rgba(245,200,66,.12)':'rgba(34,197,94,.12)'):'var(--s2)',
+                borderRadius:20,border:`1px solid ${anim?(est==='descanso'?'rgba(var(--gold-rgb),.4)':'rgba(var(--green-rgb),.4)'):'var(--bd)'}`,
+                background:anim?(est==='descanso'?'rgba(var(--gold-rgb),.12)':'rgba(var(--green-rgb),.12)'):'var(--s2)',
                 color:col,cursor:'pointer',fontSize:'.73rem',fontWeight:700,fontFamily:"'DM Sans',sans-serif",
               }}>
                 <span style={{width:7,height:7,borderRadius:'50%',background:dot,display:'inline-block',flexShrink:0,
@@ -2373,7 +2397,10 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               </button>
             )
           })()}
-          <button className="btn-o topbar-salir" style={{padding:'5px 10px',fontSize:'.75rem'}} onClick={() => supabase.auth.signOut()}>Salir</button>
+          <span className="hide-mobile"><ThemeToggle /></span>
+          {onSalirVenta
+            ? <button className="btn-o topbar-salir" style={{padding:'5px 10px',fontSize:'.75rem',borderColor:'var(--ac)',color:'var(--ac)'}} onClick={onSalirVenta}>Panel admin</button>
+            : <button className="btn-o topbar-salir" style={{padding:'5px 10px',fontSize:'.75rem'}} onClick={() => supabase.auth.signOut()}>Salir</button>}
         </div>
       </div>
 
@@ -2381,7 +2408,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {!fichajeLoading && !puedeOperar && (
         <div onClick={() => setShowFichajes(true)} style={{
           padding: '9px 14px', cursor: 'pointer',
-          background: enDescanso ? 'rgba(245,200,66,.15)' : 'rgba(255,77,28,.12)',
+          background: enDescanso ? 'rgba(var(--gold-rgb),.15)' : 'rgba(var(--ac-rgb),.12)',
           borderBottom: `2px solid ${enDescanso ? 'var(--gold)' : 'var(--ac)'}`,
           display: 'flex', alignItems: 'center', gap: 10, fontSize: '.82rem', fontWeight: 700,
           color: enDescanso ? 'var(--gold)' : 'var(--ac)',
@@ -2397,12 +2424,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {!fichajeLoading && puedeOperar && !caja && (
         <div onClick={() => setShowAperturaCaja(true)} style={{
           padding: '9px 14px', cursor: 'pointer',
-          background: 'rgba(245,200,66,.12)',
+          background: 'rgba(var(--gold-rgb),.12)',
           borderBottom: '2px solid var(--gold)',
           display: 'flex', alignItems: 'center', gap: 10, fontSize: '.82rem', fontWeight: 700,
           color: 'var(--gold)',
         }}>
-          <i className="fi fi-rr-circle-small" style={{ fontSize: '1.3rem', color: 'var(--gold)' }}/>
           <span>Caja no abierta — toca aquí para abrir caja y poder vender</span>
           <span style={{ marginLeft: 'auto', opacity: .7, fontSize: '.75rem' }}>→ Abrir caja</span>
         </div>
@@ -2411,7 +2437,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {/* Alerta pólvora prominente */}
       {pctPolvora >= 80 && (
         <div style={{
-          background: pctPolvora >= 100 ? 'rgba(239,68,68,.2)' : pctPolvora >= 90 ? 'rgba(239,68,68,.15)' : 'rgba(245,200,66,.12)',
+          background: pctPolvora >= 100 ? 'rgba(var(--red-rgb),.2)' : pctPolvora >= 90 ? 'rgba(var(--red-rgb),.15)' : 'rgba(var(--gold-rgb),.12)',
           borderBottom: `2px solid ${pctPolvora >= 90 ? 'var(--red)' : 'var(--gold)'}`,
           padding: '7px 20px', fontSize: '.8rem', fontWeight: 700,
           color: pctPolvora >= 90 ? 'var(--red)' : 'var(--gold)',
@@ -2437,11 +2463,11 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               · <strong style={{ color: 'var(--ac)' }}>{fmt(totalCajaTurno)}</strong>
             </span>
           </>) : (
-            <span style={{ color: 'var(--gold)', fontSize: '.72rem', fontWeight: 600, background: 'rgba(245,200,66,.1)', padding: '2px 7px', borderRadius: 10 }}>
+            <span style={{ color: 'var(--gold)', fontSize: '.72rem', fontWeight: 600, background: 'rgba(var(--gold-rgb),.1)', padding: '2px 7px', borderRadius: 10 }}>
               Sin caja
             </span>
           )}
-          {modoRapido && <span style={{ background: 'rgba(34,197,94,.15)', color: 'var(--green)', padding: '2px 6px', borderRadius: 20, fontSize: '.65rem', fontWeight: 700, flexShrink: 0 }}><i className="fi fi-rr-bolt"/></span>}
+          {modoRapido && <span style={{ background: 'rgba(var(--green-rgb),.15)', color: 'var(--green)', padding: '2px 6px', borderRadius: 20, fontSize: '.65rem', fontWeight: 700, flexShrink: 0 }}><i className="fi fi-rr-bolt"/></span>}
         </div>
         {/* Separador */}
         <div style={{ flex: 1 }} />
@@ -2472,16 +2498,16 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           </button>
           {caja ? (
             <>
-              <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(245,200,66,.3)', color: 'var(--gold)' }} onClick={() => setShowRetirada(true)}>
+              <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(var(--gold-rgb),.3)', color: 'var(--gold)' }} onClick={() => setShowRetirada(true)}>
                 <i className="fi fi-rr-coins btn-icon"/><span className="btn-label">Retirada</span>
               </button>
-              <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(239,68,68,.3)', color: 'var(--red)' }} onClick={() => setShowCierre(true)}>
+              <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(var(--red-rgb),.3)', color: 'var(--red)' }} onClick={() => setShowCierre(true)}>
                 <i className="fi fi-rr-lock btn-icon"/><span className="btn-label">Cerrar caja</span>
               </button>
             </>
           ) : (
-            <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(34,197,94,.4)', color: 'var(--green)' }}
-              onClick={() => estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true))}>
+            <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(var(--green-rgb),.4)', color: 'var(--green)' }}
+              onClick={() => (estaFichado || esModoAdmin) ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true))}>
               <i className="fi fi-rr-lock-open-alt btn-icon"/><span className="btn-label">Abrir caja</span>
             </button>
           )}
@@ -2498,7 +2524,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
         <div className={`side-drawer${showHamburger ? ' side-drawer--open' : ''}`}>
           <div className="drawer-header">
             <div>
-              <img src={logoColor} alt="Caballer" style={{ height: 26, display: 'block', marginBottom: 6 }} />
+              <Logo style={{ height: 26, marginBottom: 6 }} />
               <div className="drawer-user-row">
                 <span className="drawer-user">{perfil?.nombre || 'Empleado'}</span>
               </div>
@@ -2543,11 +2569,18 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             </>
           ) : (
             <button className="hamburger-item" style={{ color: 'var(--green)' }}
-              onClick={() => { setShowHamburger(false); estaFichado ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true)) }}>
+              onClick={() => { setShowHamburger(false); (estaFichado || esModoAdmin) ? setShowAperturaCaja(true) : (showToast('Ficha tu entrada primero', 'error'), setShowFichajes(true)) }}>
               <i className="fi fi-rr-lock-open-alt"/> Abrir caja
             </button>
           )}
           <div className="drawer-sep" />
+          {onSalirVenta && (
+            <button className="hamburger-item" style={{ color: 'var(--ac)' }}
+              onClick={() => { setShowHamburger(false); onSalirVenta() }}>
+              <i className="fi fi-rr-arrow-left"/> Volver al panel admin
+            </button>
+          )}
+          <ThemeToggle variant="item" />
           <button className="hamburger-item" style={{ color: 'var(--tx2)' }}
             onClick={() => { setShowHamburger(false); supabase.auth.signOut() }}>
             <i className="fi fi-rr-sign-out-alt"/> Cerrar sesión
@@ -2569,8 +2602,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
           const urgente = minsRestantes <= 30
           return (
             <div style={{
-              background: urgente ? 'rgba(239,68,68,.08)' : 'rgba(255,77,28,.08)',
-              border: `1px solid ${urgente ? 'rgba(239,68,68,.35)' : 'rgba(255,77,28,.35)'}`,
+              background: urgente ? 'rgba(var(--red-rgb),.08)' : 'rgba(var(--ac-rgb),.08)',
+              border: `1px solid ${urgente ? 'rgba(var(--red-rgb),.35)' : 'rgba(var(--ac-rgb),.35)'}`,
               borderRadius: 'var(--r)', padding: '10px 14px', marginBottom: 12,
               display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
             }}>
@@ -2691,8 +2724,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                       })
                       showToast(`✓ ${o.etiqueta} añadida`)
                     }} style={{
-                      background: sinStock ? 'var(--s2)' : 'rgba(96,165,250,.1)',
-                      border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(96,165,250,.4)'}`,
+                      background: sinStock ? 'var(--s2)' : 'rgba(var(--blue-rgb),.1)',
+                      border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(var(--blue-rgb),.4)'}`,
                       borderRadius: 'var(--rs)', padding: '13px 14px', cursor: sinStock ? 'not-allowed' : 'pointer',
                       opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
                     }}>
@@ -2717,8 +2750,8 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                       agregar(prod, o.cantidad_pack)
                       showToast(`✓ ${o.etiqueta || o.nombre} añadido`)
                     }} style={{
-                      background: sinStock ? 'var(--s2)' : 'rgba(245,200,66,.08)',
-                      border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(245,200,66,.35)'}`,
+                      background: sinStock ? 'var(--s2)' : 'rgba(var(--gold-rgb),.08)',
+                      border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(var(--gold-rgb),.35)'}`,
                       borderRadius: 'var(--rs)', padding: '13px 14px', cursor: sinStock ? 'not-allowed' : 'pointer',
                       opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
                     }}>
@@ -2746,8 +2779,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
               {ticket.length === 0
                 ? <div className="te"><span style={{ fontSize: '2rem', opacity: .35, color: 'var(--tx2)' }}><i className="fi fi-rr-shopping-cart"/></span><span>Ticket vacío</span></div>
                 : ticket.map(item => (
-                  <TicketItem key={item.id} item={item} ofertas={ofertas} onQty={cambiarQty}
-                    onDel={id => setTicket(p => p.filter(i => i.id !== id))} />
+                  <TicketItem key={lineKey(item)} item={item} ofertas={ofertas} onQty={cambiarQty}
+                    onSetQty={fijarQty} onRegalo={toggleRegalo}
+                    onDel={key => setTicket(p => p.filter(i => lineKey(i) !== key))} />
                 ))
               }
             </div>
@@ -2762,7 +2796,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
                 }, 0)
                 const ahorro = sinOferta - o.precio_pack
                 return ahorro > 0 ? (
-                  <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px dashed rgba(34,197,94,.3)', margin: '2px 0' }}>
+                  <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px dashed rgba(var(--green-rgb),.3)', margin: '2px 0' }}>
                     <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 600 }}><i className="fi fi-rr-label"/> {o.etiqueta || o.nombre}</span>
                     <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 700 }}>-{fmt(ahorro)}</span>
                   </div>
@@ -2817,9 +2851,9 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {/* ─── Modales ─── */}
       {prodModal && (
         <ModalCantidad producto={prodModal}
-          stockDisp={Math.max(0, (stock[prodModal.id] ?? 0) - (ticket.find(i => i.id === prodModal.id)?.cantidad ?? 0))}
+          stockDisp={Math.max(0, (stock[prodModal.id] ?? 0) - ticket.filter(i => i.id === prodModal.id).reduce((s, i) => s + i.cantidad, 0))}
           ofertas={ofertas}
-          onConfirm={qty => { agregar(prodModal, qty); setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }}
+          onConfirm={(qty, regalo) => { agregar(prodModal, qty, regalo); setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }}
           onClose={() => { setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }} />
       )}
       {showScan && (
@@ -2831,7 +2865,7 @@ export default function EmpleadoPanel({ perfil, casetas }) {
       {showPago && (
         <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => setShowPago(false)}
           modoRapido={modoRapido} onToggleModoRapido={() => setModoRapido(m => !m)}
-          ticketActivo={ticketActivo} onToggleTicket={() => setTicketActivo(t => !t)} />
+          noImprimir={noImprimir} onToggleNoImprimir={() => setNoImprimir(n => !n)} />
       )}
       {showCierre && (
         <ModalCierreCaja caja={caja} caseta={caseta?.nombre} ventas={ventas}
@@ -2911,19 +2945,33 @@ export default function EmpleadoPanel({ perfil, casetas }) {
             <div style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 16 }}>
               {showOk.metodo === 'efectivo' ? `Efectivo · Cambio: ${fmt(showOk.cambio)}` : 'Tarjeta'}
             </div>
-            {/* Botón imprimir ticket */}
-            <button onClick={() => imprimirTicket(showOk)} style={{
-              width: '100%', padding: '11px 0', borderRadius: 'var(--rs)', marginBottom: 10,
-              background: 'var(--s2)', border: '1px solid var(--bd)',
-              color: 'var(--tx)', fontWeight: 700, cursor: 'pointer',
-              fontFamily: "'DM Sans',sans-serif", fontSize: '.9rem',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-            }}>
-              <i className="fi fi-rr-print"/> Imprimir ticket
-            </button>
+            {/* Botones imprimir — ticket y factura, en fila y mismo color */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+              <button onClick={() => { imprimirTicket(showOk); setShowOk(null) }} style={{
+                flex: 1, padding: '11px 6px', borderRadius: 'var(--rs)',
+                background: 'var(--s2)', border: '1px solid var(--bd)',
+                color: 'var(--tx)', fontWeight: 700, cursor: 'pointer',
+                fontFamily: "'DM Sans',sans-serif", fontSize: '.84rem',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}>
+                <i className="fi fi-rr-print"/> Imprimir ticket
+              </button>
+              <button onClick={abrirFactura} style={{
+                flex: 1, padding: '11px 6px', borderRadius: 'var(--rs)',
+                background: 'var(--s2)', border: '1px solid var(--bd)',
+                color: 'var(--tx)', fontWeight: 700, cursor: 'pointer',
+                fontFamily: "'DM Sans',sans-serif", fontSize: '.84rem',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}>
+                <i className="fi fi-rr-file-invoice"/> Imprimir factura
+              </button>
+            </div>
             <button className="btn-p" onClick={() => setShowOk(null)}>Nueva Venta</button>
           </div>
         </div>
+      )}
+      {showFactura && (
+        <FacturaModal onConfirm={onFacturaConfirm} onClose={() => setShowFactura(false)} />
       )}
       {showFichajes && (
         <ModalFichajes

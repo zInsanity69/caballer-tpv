@@ -50,10 +50,39 @@ export async function deleteProducto(id) {
   if (error) throw error
 }
 
+// Lista maestra de categorías (tabla categorias). Si falla, cae a las de los productos.
 export async function getCategorias() {
-  const { data, error } = await supabase.from('productos').select('categoria').eq('activo', true)
-  if (error) return []
-  return [...new Set(data.map(p => p.categoria))].sort()
+  const { data, error } = await supabase.from('categorias').select('nombre').order('nombre')
+  if (error || !data) {
+    const { data: prods } = await supabase.from('productos').select('categoria').eq('activo', true)
+    return [...new Set((prods || []).map(p => p.categoria).filter(Boolean))].sort()
+  }
+  return data.map(c => c.nombre)
+}
+
+export async function crearCategoria(nombre) {
+  const n = (nombre || '').trim()
+  if (!n) return
+  const { error } = await supabase.from('categorias').insert({ nombre: n })
+  if (error && error.code !== '23505') throw error // 23505 = ya existe, ignorar
+}
+
+export async function renombrarCategoria(viejo, nuevo) {
+  const nv = (nuevo || '').trim()
+  if (!nv || nv === viejo) return
+  const { error: e1 } = await supabase.from('categorias').update({ nombre: nv }).eq('nombre', viejo)
+  if (e1) throw e1
+  // Propagar el cambio a todos los productos que la usaban
+  const { error: e2 } = await supabase.from('productos').update({ categoria: nv }).eq('categoria', viejo)
+  if (e2) throw e2
+}
+
+export async function eliminarCategoria(nombre) {
+  // No borrar si hay productos usándola
+  const { count } = await supabase.from('productos').select('id', { count: 'exact', head: true }).eq('categoria', nombre)
+  if (count && count > 0) throw new Error(`No se puede borrar: ${count} producto(s) usan esta categoría`)
+  const { error } = await supabase.from('categorias').delete().eq('nombre', nombre)
+  if (error) throw error
 }
 
 // ─── STOCK ───────────────────────────────────────────────────
@@ -148,6 +177,29 @@ export async function getKgPolvora(casetaId) {
 export async function getLimitePolvora(casetaId) {
   const { data } = await supabase.from('casetas').select('limite_kg_polvora').eq('id', casetaId).single()
   return data?.limite_kg_polvora ?? 10
+}
+
+// NEC desglosado por división de riesgo (1.3G/1.4G/...) para el control legal.
+// Devuelve kg por división + total + lo que esté "sin clasificar" (producto sin division).
+export async function getNECDetalle(casetaId) {
+  const { data, error } = await supabase
+    .from('stock')
+    .select('cantidad, productos(gramos_polvora, division)')
+    .eq('caseta_id', casetaId)
+    .gt('cantidad', 0)
+  if (error) return { total: 0, porDivision: {}, sinClasificar: 0 }
+  const porDivision = {}
+  let sinClasificar = 0
+  for (const row of (data || [])) {
+    const g = row.productos?.gramos_polvora || 0
+    if (g <= 0) continue
+    const kg = (row.cantidad * g) / 1000
+    const div = row.productos?.division
+    if (div) porDivision[div] = (porDivision[div] || 0) + kg
+    else sinClasificar += kg
+  }
+  const total = Object.values(porDivision).reduce((s, k) => s + k, 0) + sinClasificar
+  return { total, porDivision, sinClasificar }
 }
 
 // ─── OFERTAS ─────────────────────────────────────────────────
@@ -266,8 +318,51 @@ export async function updatePerfil(id, cambios) {
 }
 
 export async function eliminarPerfil(id) {
-  const { error } = await supabase.from('perfiles').delete().eq('id', id)
-  if (error) throw error
+  // Borrado real vía Edge Function (service role): elimina el usuario de auth.users,
+  // que en cascada borra el perfil. Las FKs del histórico (cajas/tickets/...) quedan
+  // en NULL (ON DELETE SET NULL) conservando el nombre en las columnas *_nombre.
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/eliminar-usuario`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({ userId: id }),
+    }
+  )
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || 'Error eliminando usuario')
+  return data
+}
+
+// ─── CONSULTA DE EMPRESA POR CIF (apispain.es) ───────────────
+// Devuelve { ok, razonSocial, cif, direccion } para rellenar la factura.
+// Si la API falla, ok:false y la UI permite rellenar a mano.
+export async function consultarCif(cif) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/consultar-cif`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ cif: (cif || '').trim().toUpperCase() }),
+      }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || data.ok === false) return { ok: false, error: data.error || 'No encontrado' }
+    return { ok: true, razonSocial: data.razonSocial || '', cif: data.cif || cif, direccion: data.direccion || '' }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
 }
 
 // ─── CAJA ────────────────────────────────────────────────────
@@ -319,7 +414,7 @@ export async function getCajasAbiertas() {
 export async function getRetiradas(cajaId) {
   const { data, error } = await supabase
     .from('retiradas_caja')
-    .select('*, perfiles(nombre)')
+    .select('*, empleado_nombre, perfiles(nombre)')
     .eq('caja_id', cajaId)
     .order('creado_en', { ascending: false })
   if (error) throw error
@@ -330,7 +425,7 @@ export async function getRetiradasHoy() {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
   const { data, error } = await supabase
     .from('retiradas_caja')
-    .select('*, perfiles(nombre), casetas(nombre)')
+    .select('*, empleado_nombre, perfiles(nombre), casetas(nombre)')
     .gte('creado_en', hoy.toISOString())
     .order('creado_en', { ascending: false })
   if (error) throw error
@@ -388,7 +483,6 @@ export async function getResumenCaja(cajaId) {
 
 // ─── TICKETS ─────────────────────────────────────────────────
 export async function crearTicket(payload) {
-  console.log('[crearTicket] items a descontar:', payload.items)
   // Llama a la función RPC que genera el número secuencial y crea el ticket
   const { data: ticketId, error } = await supabase.rpc('crear_ticket', {
     p_caja_id:     payload.cajaId,
@@ -400,7 +494,6 @@ export async function crearTicket(payload) {
     p_cambio:      payload.cambio,
     p_items:       payload.items,
   })
-  console.log('[crearTicket] resultado RPC:', { ticketId, error })
   if (error) throw error
   // Recuperar el número de ticket asignado
   const { data: ticket } = await supabase
@@ -413,6 +506,18 @@ export async function crearTicket(payload) {
   _checkStockAlertasTicket(payload.casetaId, payload.items.map(i => i.producto_id))
 
   return ticket || { id: ticketId, numero_ticket: ticketId?.slice(-8).toUpperCase() }
+}
+
+// Guarda los datos del cliente de una factura sobre el ticket (para poder reimprimirla)
+export async function guardarFacturaCliente(ticketId, cliente) {
+  if (!ticketId) return
+  const { error } = await supabase.from('tickets').update({
+    factura: true,
+    cliente_nombre:    cliente?.razonSocial || null,
+    cliente_cif:       cliente?.cif || null,
+    cliente_direccion: cliente?.direccion || null,
+  }).eq('id', ticketId)
+  if (error) throw error
 }
 
 async function _checkStockAlertasTicket(casetaId, productoIds) {
@@ -478,9 +583,7 @@ export async function getTicketsAdmin(desde, hasta, casetaId) {
 }
 
 export async function deleteTicket(id) {
-  console.log('[deleteTicket] llamando cancelar_ticket con id:', id)
-  const { data, error } = await supabase.rpc('cancelar_ticket', { p_ticket_id: id })
-  console.log('[deleteTicket] resultado:', { data, error })
+  const { error } = await supabase.rpc('cancelar_ticket', { p_ticket_id: id })
   if (error) throw error
 }
 
@@ -495,13 +598,11 @@ export async function updateTicket(ticketId, nuevoTotal, nuevosItems) {
     con_oferta:      i.con_oferta || false,
     detalle_oferta:  i.detalle_oferta || null,
   }))
-  console.log('[updateTicket] llamando actualizar_ticket:', { ticketId, nuevoTotal, items })
-  const { data, error } = await supabase.rpc('actualizar_ticket', {
+  const { error } = await supabase.rpc('actualizar_ticket', {
     p_ticket_id:    ticketId,
     p_nuevo_total:  nuevoTotal,
     p_nuevos_items: items,
   })
-  console.log('[updateTicket] resultado:', { data, error })
   if (error) throw error
 }
 
@@ -528,7 +629,7 @@ export function toggleFavorito(productoId) {
 // ─── PEDIDOS ─────────────────────────────────────────────────
 export async function getPedidos(filtros = {}) {
   let q = supabase.from('pedidos')
-    .select('*, casetas(nombre), perfiles(nombre), pedido_items(id, producto_id, cantidad, cantidad_recibida, notas_item, origen, productos(id, nombre, categoria, empresa, fardo))')
+    .select('*, casetas(nombre), perfiles(nombre), pedido_items(id, producto_id, cantidad, cantidad_recibida, notas_item, origen, productos(id, nombre, categoria, empresa, fardo, envases_por_caja))')
     .order('creado_en', { ascending: false })
   if (filtros.casetaId) q = q.eq('caseta_id', filtros.casetaId)
   if (filtros.estado)   q = q.eq('estado', filtros.estado)
