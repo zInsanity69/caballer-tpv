@@ -1,7 +1,10 @@
 // ─── GENERADOR DE TIQUES / FACTURAS (única fuente de verdad) ──────────────
 // Antes este código estaba duplicado en EmpleadoPanel y AdminPanel con formatos
 // divergentes. Ahora vive aquí y lo importan ambos.
-import logoMonoSVG from '../assets/logo_caballer_monoV2.svg?raw'
+// Logo del tique: vector en blanco y negro. La impresora térmica es de 1 bit
+// (solo negro/blanco), así que un SVG de alto contraste sale nítido en pantalla
+// y en papel. Va inline (?raw) para no depender de cargar una imagen externa.
+import logoSVG from '../assets/logo_caballer_monoV2.svg?raw'
 
 // Configuración fiscal de la empresa (emisor)
 export const CONFIG_EMPRESA = {
@@ -94,7 +97,8 @@ export function generarTicketHTML(datos, opts = {}) {
 
   /* ── LOGO ── */
   .logo     { text-align: center; margin: 2px 0 1px; }
-  .logo svg { display: block; margin: 0 auto; width: 28mm; max-width: 100%; height: auto; }
+  .logo svg { display: block; margin: 0 auto; width: 28mm; max-width: 100%; height: auto;
+              -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
   /* ── EMPRESA ── */
   .empresa        { text-align: center; font-size: 13px; font-weight: bold; line-height: 1.2; }
@@ -161,8 +165,8 @@ export function generarTicketHTML(datos, opts = {}) {
 </head>
 <body>
 
-  <!-- LOGO -->
-  <div class="logo">${logoMonoSVG}</div>
+  <!-- LOGO (blanco y negro) -->
+  <div class="logo">${logoSVG}</div>
   <hr class="sep-solid">
 
   <!-- EMPRESA / FACTURA -->
@@ -243,17 +247,27 @@ export function generarTicketHTML(datos, opts = {}) {
  * @param {object} [opts] { esFactura, cliente, autoPrint }
  */
 export function imprimirTicket(datos, opts = {}) {
+  // Por defecto se imprime directo: al pulsar "imprimir" la orden sale sola a la
+  // impresora conectada sin que el usuario tenga que pulsar nada más.
+  const autoPrint = opts.autoPrint ?? true
   const html = generarTicketHTML(datos, opts)
   const ventana = window.open('', '_blank', 'width=400,height=700,scrollbars=yes')
   if (!ventana) {
     alert('El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para esta página.')
     return
   }
-  ventana.document.write(html)
+  // Inyectamos el disparador DENTRO del documento: el evento `load` espera a que
+  // el logo (imagen) termine de cargar antes de lanzar la impresión, evitando
+  // tiques sin logo o impresiones que no llegan a dispararse.
+  const printScript = autoPrint ? `
+  <script>
+    window.addEventListener('load', function () {
+      setTimeout(function () { window.focus(); window.print(); }, 150)
+    })
+    window.onafterprint = function () { window.close() }
+  <\/script>` : ''
+  ventana.document.write(html.replace('</body>', printScript + '</body>'))
   ventana.document.close()
-  if (opts.autoPrint) {
-    ventana.onload = () => { ventana.focus(); ventana.print(); ventana.onafterprint = () => ventana.close() }
-  }
 }
 
 /**
