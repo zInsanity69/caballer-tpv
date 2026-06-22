@@ -43,7 +43,7 @@ create table if not exists productos (
   precio        numeric(10,2) not null check (precio >= 0),
   categoria     text not null,
   edad_minima   int not null default 0,
-  codigo_ean    text not null unique,
+  codigo_ean    text not null,   -- NO único: un EAN puede mapear a varios productos (variantes/colisiones)
   activo        boolean not null default true,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
@@ -452,7 +452,7 @@ insert into productos (id, nombre, precio, categoria, edad_minima, codigo_ean) v
   ('p0000001-0000-0000-0000-000000000043', 'Fuchidors 10u.', 3.00, 'Efectos', 12, '8410278043'),
   ('p0000001-0000-0000-0000-000000000044', 'Magic Box 1u.', 1.75, 'Efectos', 16, '8410278044'),
   ('p0000001-0000-0000-0000-000000000045', 'Mecha Algodón 25cm.', 0.25, 'Accesorios', 0, '8410278045')
-on conflict (codigo_ean) do nothing;
+on conflict (id) do nothing;
 
 -- ============================================================
 -- 11. DATOS INICIALES — STOCK (50 unidades por producto/caseta)

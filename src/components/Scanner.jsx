@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { BrowserMultiFormatReader, BarcodeFormat } from '@zxing/browser'
-import { getProductoByEan } from '../lib/api.js'
+import { getProductosByEan } from '../lib/api.js'
 
 export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} }) {
   const videoRef  = useRef(null)
@@ -14,7 +14,22 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
   const [manual,        setManual]        = useState('')
   const [buscando,      setBuscando]      = useState(false)
   const [prodPendiente, setProdPendiente] = useState(null)
+  const [candidatos,    setCandidatos]    = useState([])   // varios productos con el mismo EAN → panel
   const [qty,           setQty]           = useState(1)
+
+  // Decide qué hacer con la lista de productos que comparten un EAN:
+  // 0 → no encontrado · 1 → directo al paso de cantidad · >1 → panel de elección.
+  const procesarResultados = (prods, codigo) => {
+    if (prods.length === 0) {
+      setMsg(`Código ${codigo} no encontrado`)
+      setManual(codigo)
+      setTimeout(() => { if (mountedRef.current) setMsg('') }, 3000)
+    } else if (prods.length === 1) {
+      setProdPendiente(prods[0]); setQty(1); setMsg('')
+    } else {
+      setCandidatos(prods); setMsg('')
+    }
+  }
 
   // ── Iniciar / reiniciar cámara ─────────────────────────────
   // Bug fix: "volver a escanear" mostraba negro porque el stream
@@ -62,15 +77,9 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
         lastTime.current = now
         if (navigator.vibrate) navigator.vibrate([80])
         setMsg(`Leyendo: ${codigo}...`)
-        const prod = await getProductoByEan(codigo)
+        const prods = await getProductosByEan(codigo)
         if (!mountedRef.current) return
-        if (prod) {
-          setProdPendiente(prod); setQty(1); setMsg('')
-        } else {
-          setMsg(`Código ${codigo} no encontrado`)
-          setManual(codigo)
-          setTimeout(() => { if (mountedRef.current) setMsg('') }, 3000)
-        }
+        procesarResultados(prods, codigo)
       })
 
       if (mountedRef.current) setEstado('activo')
@@ -98,6 +107,7 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
 
   const volverAEscanear = () => {
     setProdPendiente(null)
+    setCandidatos([])
     setQty(1)
     lastCode.current = ''
     // Incrementar camKey fuerza desmontaje+remontaje del <video>
@@ -109,9 +119,8 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
     const q = manual.trim(); if (!q) return
     setBuscando(true); setMsg('')
     try {
-      const prod = await getProductoByEan(q)
-      if (prod) { setProdPendiente(prod); setQty(1) }
-      else setMsg(`Código "${q}" no encontrado`)
+      const prods = await getProductosByEan(q)
+      procesarResultados(prods, q)
     } catch (e) { setMsg('Error: ' + e.message) }
     finally { setBuscando(false) }
   }
@@ -119,7 +128,12 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
   const confirmar = () => {
     if (!prodPendiente) return
     onDetect(prodPendiente, qty)
-    setProdPendiente(null); setQty(1); lastCode.current = ''
+    setProdPendiente(null); setCandidatos([]); setQty(1); lastCode.current = ''
+  }
+
+  // Al elegir uno de los productos que comparten EAN, pasa al paso de cantidad.
+  const elegirCandidato = (prod) => {
+    setProdPendiente(prod); setCandidatos([]); setQty(1)
   }
 
   const stockDisp = prodPendiente ? (stock[prodPendiente.id] ?? 0) : 0
@@ -160,6 +174,28 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
               Añadir {qty} × {prodPendiente.nombre} · {fmt(prodPendiente.precio * qty)}
             </button>
             {/* Bug fix: ahora volverAEscanear reinicia la cámara correctamente */}
+            <button className="btn-s" onClick={volverAEscanear}>← Volver a escanear</button>
+          </div>
+        ) : candidatos.length > 0 ? (
+          <div>
+            <div style={{ fontSize: '.82rem', color: 'var(--tx2)', textAlign: 'center', marginBottom: 12 }}>
+              Varios productos con el mismo código. Elige cuál estás vendiendo:
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+              {candidatos.map(c => (
+                <button key={c.id} onClick={() => elegirCandidato(c)} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                  textAlign: 'left', padding: '12px 14px', borderRadius: 'var(--rs)',
+                  background: 'var(--s2)', border: '1px solid var(--bd)', color: 'var(--tx)',
+                  cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                }}>
+                  <span style={{ fontSize: '1rem', fontWeight: 700 }}>{c.nombre}</span>
+                  <span style={{ fontSize: '.78rem', color: 'var(--tx2)', whiteSpace: 'nowrap' }}>
+                    {fmt(c.precio)}/u. · Stock: {stock[c.id] ?? 0}
+                  </span>
+                </button>
+              ))}
+            </div>
             <button className="btn-s" onClick={volverAEscanear}>← Volver a escanear</button>
           </div>
         ) : (

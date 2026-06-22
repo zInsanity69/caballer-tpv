@@ -1229,7 +1229,22 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const [saving, setSaving]         = useState(false)
   const [scanRec, setScanRec]       = useState('')
   const [expandido, setExpandido]   = useState(null)
+  const [recPicker, setRecPicker]   = useState(null)   // varias líneas con el mismo EAN → elegir cuál
   const recListRef                  = useRef(null)
+
+  // Marca una línea del pedido como recibida (solo si seguía pendiente) y la enfoca.
+  const marcarRecibido = (idx) => {
+    setRecItems(prev => prev.map((r, i) => {
+      if (i !== idx) return r
+      if (r.estado !== 'pendiente') return r
+      return { ...r, estado: 'ok', cantidad_recibida: r.cantidad }
+    }))
+    setScanRec(''); setRecPicker(null)
+    setTimeout(() => {
+      const el = recListRef.current?.querySelector(`[data-recidx="${idx}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }
 
   useEffect(() => {
     getPedidos({ casetaId: caseta.id }).then(setPedidos).finally(() => setLoading(false))
@@ -1376,27 +1391,56 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                 value={scanRec} onChange={e => setScanRec(e.target.value)}
                 onKeyDown={e => {
                   if (e.key !== 'Enter' || !scanRec.trim()) return
-                  const q = scanRec.trim().toLowerCase()
-                  // buscar por EAN exacto primero, luego nombre parcial
-                  const prodMatch = productos.find(p => p.codigo_ean === scanRec.trim())
-                  const idx = prodMatch
-                    ? recItems.findIndex(r => r.producto_id === prodMatch.id)
-                    : recItems.findIndex(r => r.nombre.toLowerCase().includes(q))
-                  if (idx === -1) { showToast('Producto no encontrado en el pedido', 'error'); setScanRec(''); return }
-                  // Marcar como ok si estaba pendiente
-                  setRecItems(prev => prev.map((r, i) => {
-                    if (i !== idx) return r
-                    if (r.estado !== 'pendiente') return r
-                    return { ...r, estado: 'ok', cantidad_recibida: r.cantidad }
-                  }))
-                  setScanRec('')
-                  // Scroll al item
-                  setTimeout(() => {
-                    const el = recListRef.current?.querySelector(`[data-recidx="${idx}"]`)
-                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                  }, 50)
+                  const code = scanRec.trim()
+                  const q = code.toLowerCase()
+                  // Un EAN puede pertenecer a varios productos (variantes de color o
+                  // colisiones entre proveedores). El escáner lee el EAN, idéntico en
+                  // todos, así que NO sabe cuál tienes en la mano. Si coincide con varias
+                  // líneas del pedido, abrimos un selector para que la persona elija la
+                  // correcta (mirando la caja); marcar a ciegas falsearía el recuento.
+                  const idsEan = new Set(productos.filter(p => p.codigo_ean === code).map(p => p.id))
+                  let matches = []
+                  if (idsEan.size > 0) {
+                    matches = recItems.map((r, i) => ({ r, i })).filter(x => idsEan.has(x.r.producto_id))
+                  } else {
+                    matches = recItems.map((r, i) => ({ r, i })).filter(x => x.r.nombre.toLowerCase().includes(q))
+                  }
+                  if (matches.length === 0) { showToast('Producto no encontrado en el pedido', 'error'); setScanRec(''); return }
+                  if (matches.length === 1) { marcarRecibido(matches[0].i); return }
+                  // Varias coincidencias → elegir cuál se recibe
+                  setRecPicker(matches)
                 }} />
             </div>
+
+            {/* Selector cuando un EAN coincide con varias líneas (variantes/colisiones).
+                La persona elige mirando la caja cuál está recibiendo realmente. */}
+            {recPicker && (
+              <div className="mo" onClick={e => e.target === e.currentTarget && setRecPicker(null)}>
+                <div className="mc">
+                  <div className="mt-modal">¿Cuál estás recibiendo?</div>
+                  <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
+                    Varias líneas comparten este código. Mira la caja y elige la correcta.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                    {recPicker.map(({ r, i }) => (
+                      <button key={r.id} onClick={() => marcarRecibido(i)} disabled={r.estado !== 'pendiente'} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                        textAlign: 'left', padding: '12px 14px', borderRadius: 'var(--rs)',
+                        background: 'var(--s2)', border: '1px solid var(--bd)', color: 'var(--tx)',
+                        cursor: r.estado === 'pendiente' ? 'pointer' : 'not-allowed',
+                        opacity: r.estado === 'pendiente' ? 1 : .5, fontFamily: "'DM Sans',sans-serif",
+                      }}>
+                        <span style={{ fontWeight: 700 }}>{r.nombre}</span>
+                        <span style={{ fontSize: '.74rem', color: 'var(--tx2)', whiteSpace: 'nowrap' }}>
+                          {r.estado === 'pendiente' ? `Pedido: ${r.cantidad}` : `ya: ${r.estado}`}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <button className="btn-s" onClick={() => { setRecPicker(null); setScanRec('') }}>Cancelar</button>
+                </div>
+              </div>
+            )}
 
             <div ref={recListRef} style={{ overflowY: 'auto', flex: 1 }}>
               {recItems.map((item, idx) => {

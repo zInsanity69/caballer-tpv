@@ -26,11 +26,14 @@ export async function getProductos(soloActivos = true) {
   return data
 }
 
-export async function getProductoByEan(ean) {
+// Un EAN puede mapear a varios productos (variantes de color o colisiones entre
+// proveedores), así que devolvemos SIEMPRE una lista. El escáner decide: 0 → no
+// encontrado, 1 → directo, >1 → panel para elegir.
+export async function getProductosByEan(ean) {
   const { data, error } = await supabase
-    .from('productos').select('*').eq('codigo_ean', ean).eq('activo', true).single()
-  if (error) return null
-  return data
+    .from('productos').select('*').eq('codigo_ean', ean).eq('activo', true).order('nombre')
+  if (error) return []
+  return data ?? []
 }
 
 export async function upsertProducto(producto) {

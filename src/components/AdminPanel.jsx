@@ -914,10 +914,14 @@ function GestionProductos() {
     if(!form.nombre.trim()||!form.precio||!form.codigo_ean.trim()){ showToast('Nombre, precio y EAN son obligatorios','error'); return }
     const categoria=form.categoria
     if(!categoria){ showToast('Elige una categoría','error'); return }
+    // Un EAN repetido ya NO es error: puede ser una variante de color o un petardo
+    // de otro proveedor que comparte código. Avisamos sin bloquear por si fue un descuido.
+    const eanDup=productos.some(p=>p.codigo_ean===form.codigo_ean.trim()&&p.id!==editId)
     try{
       const data=await upsertProducto({...(editId?{id:editId}:{}),nombre:form.nombre.trim(),precio:parseFloat(form.precio),categoria,edad_minima:parseInt(form.edad_minima),codigo_ean:form.codigo_ean.trim(),gramos_polvora:parseFloat(form.gramos_polvora)||0,division:form.division||null,empresa:form.empresa.trim()||null,fardo:Math.max(1,parseInt(form.fardo)||1),envases_por_caja:form.envases_por_caja?Math.max(1,parseInt(form.envases_por_caja)):null,activo:true})
-      if(editId){setProductos(prev=>prev.map(p=>p.id===editId?data:p));showToast('Producto actualizado ✓')}
-      else{setProductos(prev=>[...prev,data]);showToast('Producto añadido ✓')}
+      const aviso=eanDup?' · ⚠ EAN compartido con otro producto (se tratará como variante)':''
+      if(editId){setProductos(prev=>prev.map(p=>p.id===editId?data:p));showToast('Producto actualizado ✓'+aviso)}
+      else{setProductos(prev=>[...prev,data]);showToast('Producto añadido ✓'+aviso)}
       setForm(F0);setEditId(null)
     }catch(e){showToast(e.message,'error')}
   }
