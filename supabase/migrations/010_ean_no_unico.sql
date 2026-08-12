@@ -9,11 +9,14 @@
 -- El escáner muestra un panel para elegir cuando un EAN coincide con varios.
 -- ============================================================
 
--- 1. Quitar la restricción UNIQUE generada por el `UNIQUE` inline de la 001.
+-- 1. Quitar la restricción UNIQUE generada por el `UNIQUE` inline del esquema
+--    (Postgres la nombra productos_codigo_ean_key). Al soltar la constraint se
+--    elimina también su índice único asociado.
 alter table productos drop constraint if exists productos_codigo_ean_key;
 
 -- 2. Por si en algún entorno quedó como índice único independiente.
 drop index if exists productos_codigo_ean_key;
 
--- 3. Índice no único para mantener rápida la búsqueda por EAN.
-create index if not exists idx_productos_codigo_ean on productos(codigo_ean);
+-- 3. El índice NO único para búsqueda por EAN ya existe en el esquema
+--    (idx_productos_ean). Lo aseguramos por si acaso; no crea duplicados.
+create index if not exists idx_productos_ean on productos(codigo_ean);

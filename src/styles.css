@@ -176,9 +176,12 @@ tr:hover td { background: var(--s2); }
 
 /* ─── MODAL ──────────────────────────────────────────── */
 .mo { position: fixed; inset: 0; background: rgba(0,0,0,.82); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); }
-.mc { background: var(--s1); border: 1px solid var(--bd); border-radius: 20px; padding: 28px; width: 100%; max-width: 460px; max-height: 92vh; overflow-y: auto; }
+.mc { position: relative; background: var(--s1); border: 1px solid var(--bd); border-radius: 20px; padding: 28px; width: 100%; max-width: 460px; max-height: 92vh; overflow-y: auto; }
 .mc.wide { max-width: 640px; }
-.mt-modal { font-family: 'Bebas Neue', sans-serif; font-size: 1.65rem; margin-bottom: 16px; letter-spacing: 1px; }
+.mt-modal { font-family: 'Bebas Neue', sans-serif; font-size: 1.65rem; margin-bottom: 16px; letter-spacing: 1px; padding-right: 34px; }
+.modal-x { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 1px solid var(--bd); background: var(--s2); color: var(--tx2); cursor: pointer; z-index: 5; font-size: 1rem; line-height: 1; padding: 0; }
+.modal-x:hover { color: var(--tx); background: var(--s3); }
+.modal-x .fi { display: block; line-height: 1; }
 
 /* ─── BIG INPUT ──────────────────────────────────────── */
 .bi { width: 100%; background: var(--s2); border: 2px solid var(--bd); border-radius: var(--r); padding: 16px; font-size: 1.7rem; font-weight: 700; color: var(--tx); outline: none; transition: border .2s; margin-bottom: 14px; font-family: 'DM Sans', sans-serif; }
@@ -397,6 +400,15 @@ tr:hover td { background: var(--s2); }
 
 .hide-mobile { display: inline; }
 @media (max-width: 768px) { .hide-mobile { display: none; } }
+
+/* ─── Badge NEC (pólvora) responsive ─────────────────────── */
+@media (max-width: 768px) {
+  .nec-badge { font-size: .6rem !important; padding: 2px 7px !important; gap: 4px !important; }
+  .nec-badge .nec-div { padding-left: 5px !important; }
+}
+@media (max-width: 420px) {
+  .nec-badge .nec-lim { display: none; }   /* deja "234kg" y el 1.3G; oculta "/500kg" */
+}
 
 /* ─── BOTÓN FLOTANTE SCROLL (solo móvil) ─────────────────── */
 .btn-scroll-flotante { display: none; }

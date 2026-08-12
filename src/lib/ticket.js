@@ -26,6 +26,37 @@ const fmtFecha = d =>
 // Escapar texto que viene de la API / usuario para no romper el HTML del tique
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]))
 
+// ─── CÓDIGO DE BARRAS (Code128 B) ─────────────────────────────
+// Autónomo, sin dependencias: genera un SVG de barras a partir del número de
+// ticket para poder localizarlo escaneándolo con una pistola láser.
+const CODE128_PATTERNS = ['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232','2331112']
+
+export function barcodeSVG(text, { moduleWidth = 2, height = 60 } = {}) {
+  const clean = String(text ?? '').replace(/[^\x20-\x7E]/g, '')
+  if (!clean) return ''
+  const values = [104]           // Start Code B
+  let sum = 104
+  for (let i = 0; i < clean.length; i++) {
+    const v = clean.charCodeAt(i) - 32
+    values.push(v)
+    sum += v * (i + 1)
+  }
+  values.push(sum % 103)         // checksum
+  values.push(106)               // stop
+  let x = 0, rects = ''
+  for (const v of values) {
+    const pattern = CODE128_PATTERNS[v]
+    let bar = true
+    for (const ch of pattern) {
+      const w = parseInt(ch, 10) * moduleWidth
+      if (bar) rects += `<rect x="${x}" y="0" width="${w}" height="${height}"/>`
+      x += w
+      bar = !bar
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${x}" height="${height}" viewBox="0 0 ${x} ${height}" fill="#000" shape-rendering="crispEdges">${rects}</svg>`
+}
+
 /**
  * Genera el HTML imprimible de un tique o factura.
  * @param {object} datos  { items, total, metodo, cambio, dineroDado, descuento, descuentoPct, caseta, perfil, fecha, ticketNum }
@@ -38,9 +69,11 @@ export function generarTicketHTML(datos, opts = {}) {
   const cliente = opts.cliente ?? datos.cliente ?? null
   const {
     items = [], total = 0, metodo, cambio = 0, dineroDado = 0,
+    pagoEfectivo = 0, pagoTarjeta = 0,
     descuento = 0, descuentoPct = 0, fecha = new Date(), ticketNum = '',
   } = datos
 
+  const barcode = ticketNum ? barcodeSVG(ticketNum) : ''
   const ahorroOfertas = items.reduce((s, i) => s + (i.precio * i.cantidad - i.total_linea), 0)
   const iva = CONFIG_EMPRESA.iva / 100
   const baseImponible = total / (1 + iva)
@@ -143,6 +176,12 @@ export function generarTicketHTML(datos, opts = {}) {
   .pago   { font-size: 13px; font-weight: bold; text-align: center; margin: 2px 0; }
   .cambio { font-size: 14px; font-weight: bold; text-align: center; margin: 2px 0; }
 
+  /* ── CÓDIGO DE BARRAS ── */
+  .barcode      { text-align: center; margin: 6px 0 2px; }
+  .barcode svg  { width: 60mm; max-width: 92%; height: 13mm;
+                  -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .barcode-num  { font-size: 12px; font-weight: bold; letter-spacing: 2px; margin-top: 1px; }
+
   /* ── TEXTO LEGAL ── */
   .legal { font-size: 11px; font-weight: bold; text-align: center; line-height: 1.35; margin-top: 3px; }
 
@@ -221,11 +260,15 @@ export function generarTicketHTML(datos, opts = {}) {
   <hr class="sep-solid">
 
   <!-- PAGO -->
-  <div class="pago">Forma de pago: ${metodo === 'efectivo' ? 'Efectivo' : 'Tarjeta'}</div>
+  <div class="pago">Forma de pago: ${metodo === 'efectivo' ? 'Efectivo' : metodo === 'tarjeta' ? 'Tarjeta' : 'Mixto'}</div>
+  ${metodo === 'mixto' ? `<div class="cambio">Efectivo: ${fmtE(pagoEfectivo)} · Tarjeta: ${fmtE(pagoTarjeta)}</div>` : ''}
   ${metodo === 'efectivo' && dineroDado > 0 ? `<div class="cambio">Entregado: ${fmtE(dineroDado)}</div><div class="cambio">Cambio: ${fmtE(cambio)}</div>` : ''}
   <div class="pago">I.V.A. incluido</div>
   ${datos.perfil?.nombre ? `<div class="pago">Le atendió: ${esc(datos.perfil.nombre)}</div>` : ''}
   <hr class="sep-dash">
+
+  <!-- CÓDIGO DE BARRAS (localizar el ticket con la pistola) -->
+  ${barcode ? `<div class="barcode">${barcode}<div class="barcode-num">${esc(ticketNum)}</div></div>` : ''}
 
   <!-- TEXTO LEGAL -->
   <div class="legal">${esc(CONFIG_EMPRESA.textoLegal)}</div>
@@ -291,6 +334,8 @@ export function ticketRowToDatos(row, { caseta = null, productos = [] } = {}) {
     metodo:      row.metodo_pago,
     cambio:      row.cambio || 0,
     dineroDado:  row.dinero_dado || 0,
+    pagoEfectivo: row.pago_efectivo || 0,
+    pagoTarjeta:  row.pago_tarjeta || 0,
     descuento:   0,
     descuentoPct: 0,
     caseta:      caseta || (row.casetas ? { ...row.casetas } : null),

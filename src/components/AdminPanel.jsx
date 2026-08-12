@@ -2,15 +2,19 @@ import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { imprimirTicket, ticketRowToDatos } from '../lib/ticket.js'
 import FacturaModal from './FacturaModal.jsx'
+import ModalEditTicket from './ModalEditTicket.jsx'
+import ModalClose from './ModalClose.jsx'
 import Logo from './Logo.jsx'
 import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
   getCategorias, crearCategoria, renombrarCategoria, eliminarCategoria,
-  getOfertas, upsertOferta, deleteOferta,
+  getOfertas, upsertOferta, updateOferta, deleteOferta,
   getPerfiles, updatePerfil, eliminarPerfil, crearUsuario, actualizarCredenciales,
-  getCasetas, upsertCaseta, deleteCaseta, updateAllPedidosAuto,
+  getCasetas, upsertCaseta, deleteCaseta, updateCaseta, updateAllPedidosAuto,
   getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy, guardarFacturaCliente,
-  setStock, ajustarStock, getStockCaseta, getStockMinimos, setStockMinimo,
+  getAuditoriaTickets,
+  getDevoluciones, getDefectuosos, updateReclamacionItem,
+  setStock, ajustarStock, ajustarStockAuditado, getStockAuditoria, getStockCaseta, getStockMinimos, setStockMinimo,
   getVentasPorDia,
   getPedidos, updatePedido, updatePedidoItems,
   getFichajesAdmin, editarFichaje, deleteFichaje, calcularTurnos, calcularEstado, fmtDuracion,
@@ -26,6 +30,9 @@ const TABS = [
   ['dashboard',   'fi-rr-chart-histogram', 'Dashboard'],
   ['ventas',      'fi-rr-coins',           'Ventas'],
   ['tickets',     'fi-rr-receipt',         'Tickets'],
+  ['auditoria',   'fi-rr-time-past',       'Cambios'],
+  ['devoluciones','fi-rr-undo',            'Devoluc.'],
+  ['defectuosos', 'fi-rr-box-open',        'Defectuosos'],
   ['pedidos',     'fi-rr-truck-side',      'Pedidos'],
   ['inventarios', 'fi-rr-clipboard-list',  'Inventarios'],
   ['fichajes',    'fi-rr-clock',           'Fichajes'],
@@ -75,14 +82,18 @@ function Dashboard({ casetas }) {
   if (loading) return <div className="loading-row"><div className="spin-sm" /> Cargando...</div>
   if (!stats) return <div className="loading-row" style={{color:'var(--red)'}}>Error al cargar el dashboard — recarga la página</div>
   const totalHoy = stats.tickets.reduce((s,t) => s+t.total, 0)
-  const efectivoHoy = stats.tickets.filter(t=>t.metodo_pago==='efectivo').reduce((s,t)=>s+t.total,0)
-  const tarjetaHoy = stats.tickets.filter(t=>t.metodo_pago==='tarjeta').reduce((s,t)=>s+t.total,0)
+  const devolucionesHoy = stats.devolucionesHoy || 0
+  const ventasNetas = totalHoy - devolucionesHoy
+  const efectivoHoy = stats.tickets.reduce((s,t)=>s+(t.pago_efectivo ?? (t.metodo_pago==='efectivo'?t.total:0)),0)
+  const tarjetaHoy = stats.tickets.reduce((s,t)=>s+(t.pago_tarjeta ?? (t.metodo_pago==='tarjeta'?t.total:0)),0)
   const porCaseta = {}
   stats.tickets.forEach(t => { const n=t.casetas?.nombre||'?'; if(!porCaseta[n]) porCaseta[n]=0; porCaseta[n]+=t.total })
   return (
     <>
       <div className="ag">
-        <div className="sc"><div className="sv">{fmt(totalHoy)}</div><div className="sl2">Ventas hoy</div></div>
+        <div className="sc"><div className="sv">{fmt(totalHoy)}</div><div className="sl2">Ventas brutas hoy</div></div>
+        {devolucionesHoy>0&&<div className="sc"><div className="sv" style={{color:'var(--red)'}}>−{fmt(devolucionesHoy)}</div><div className="sl2">Devoluciones hoy</div></div>}
+        {devolucionesHoy>0&&<div className="sc"><div className="sv" style={{color:'var(--green)'}}>{fmt(ventasNetas)}</div><div className="sl2">Ventas netas hoy</div></div>}
         <div className="sc"><div className="sv">{stats.tickets.length}</div><div className="sl2">Tickets hoy</div></div>
         <div className="sc"><div className="sv">{fmt(efectivoHoy)}</div><div className="sl2">Efectivo hoy</div></div>
         <div className="sc"><div className="sv">{fmt(tarjetaHoy)}</div><div className="sl2">Tarjeta hoy</div></div>
@@ -100,6 +111,7 @@ function Dashboard({ casetas }) {
               <div style={{fontSize:'.7rem',color:'var(--tx2)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:4}}>{c.casetaNombre.replace('Caballer ','')}</div>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'2rem',color:'var(--green)',letterSpacing:1}}>{fmt(c.totalEfectivo)}</div>
               {c.totalRetiradas>0&&<div style={{fontSize:'.7rem',color:'var(--gold)',marginTop:2}}>Retiradas −{fmt(c.totalRetiradas)}</div>}
+              {c.totalDevoluciones>0&&<div style={{fontSize:'.7rem',color:'var(--red)',marginTop:2}}>Devoluciones −{fmt(c.totalDevoluciones)}</div>}
               <div style={{fontSize:'.7rem',color:'var(--tx2)',marginTop:2}}>{c.numTickets} tickets · Apertura {fmt(c.apertura)}</div>
             </div>
           ))}
@@ -145,7 +157,7 @@ function Dashboard({ casetas }) {
                 <td style={{color:'var(--tx2)'}}>{new Date(t.creado_en).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</td>
                 <td style={{color:'var(--tx2)'}}>{t.casetas?.nombre}</td>
                 <td>{t.perfiles?.nombre || t.empleado_nombre || '—'}</td>
-                <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?<><i className="fi fi-rr-coins"/> Efectivo</>:<><i className="fi fi-rr-credit-card"/> Tarjeta</>}</td>
+                <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?<><i className="fi fi-rr-coins"/> Efectivo</>:t.metodo_pago==='tarjeta'?<><i className="fi fi-rr-credit-card"/> Tarjeta</>:<><i className="fi fi-rr-coins"/> <i className="fi fi-rr-credit-card"/> Mixto <span style={{color:'var(--tx2)',fontSize:'.72rem'}}>({fmt(t.pago_efectivo)} ef · {fmt(t.pago_tarjeta)} tj)</span></>}</td>
                 <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
               </tr>
             ))}
@@ -270,101 +282,7 @@ function PanelVentas({ casetas, onVerDia }) {
 }
 
 // ─── PANEL TICKETS ────────────────────────────────────────────
-function ModalEditTicket({ ticket: t, onClose, onSave }) {
-  const [items, setItems]     = useState(t.ticket_items.map(i=>({producto_id:i.producto_id,nombre:i.nombre_producto,precio:i.precio_unitario,cantidad:i.cantidad,total_linea:i.total_linea,con_oferta:i.con_oferta||false})))
-  const [ofertas, setOfertas] = useState([])
-  const [productos, setProductos] = useState([])
-  const [busqAdd, setBusqAdd] = useState('')
-  const [saving, setSaving]   = useState(false)
-
-  useEffect(() => {
-    Promise.all([getOfertas(), getProductos(true)]).then(([o, p]) => { setOfertas(o); setProductos(p) }).catch(() => {})
-  }, [])
-
-  const recalcItem = (item, nuevaCantidad) => {
-    const nq = Math.max(1, nuevaCantidad)
-    const { total } = calcularPrecio(item.producto_id, nq, item.precio, ofertas)
-    return { ...item, cantidad: nq, total_linea: total, con_oferta: total < +(nq * item.precio).toFixed(2) }
-  }
-
-  const editQty = (idx, delta) => setItems(prev => prev.map((it, i) => i !== idx ? it : recalcItem(it, it.cantidad + delta)))
-  const editDel = idx => setItems(prev => prev.filter((_, i) => i !== idx))
-
-  const addProd = (prod) => {
-    setItems(prev => {
-      const idx = prev.findIndex(i => i.producto_id === prod.id)
-      if (idx >= 0) {
-        const it = prev[idx]
-        return prev.map((x, i) => i !== idx ? x : recalcItem(x, it.cantidad + 1))
-      }
-      const { total } = calcularPrecio(prod.id, 1, prod.precio, ofertas)
-      return [...prev, { producto_id: prod.id, nombre: prod.nombre, precio: prod.precio, cantidad: 1, total_linea: total, con_oferta: false }]
-    })
-    setBusqAdd('')
-  }
-
-  // Total final con ofertas combinadas aplicadas al conjunto
-  const ticketParaCalculo = items.map(i => ({ id: i.producto_id, cantidad: i.cantidad, precio: i.precio }))
-  const nuevoTotal = calcularTotalTicket(ticketParaCalculo, ofertas)
-  const ahorroTotal = items.reduce((s, i) => s + i.precio * i.cantidad, 0) - nuevoTotal
-
-  const guardar = async () => {
-    // Guardamos los items con total_linea tal como están (per-item offers ya aplicados)
-    // El total que se almacena en el ticket ya incluye también ofertas combinadas
-    const itemsConTotal = items.map(i => ({ ...i, total_linea: calcularPrecio(i.producto_id, i.cantidad, i.precio, ofertas).total }))
-    setSaving(true)
-    try { await onSave(t.id, nuevoTotal, itemsConTotal); onClose() } catch(e) { alert(e.message) }
-    setSaving(false)
-  }
-
-  const prodsFiltrados = busqAdd.length >= 2
-    ? productos.filter(p => p.nombre.toLowerCase().includes(busqAdd.toLowerCase()) || p.codigo_ean?.includes(busqAdd)).slice(0, 6)
-    : []
-
-  return(
-    <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="mc wide" style={{maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
-        <div className="mt-modal"><i className="fi fi-rr-pencil"/> Editar Ticket</div>
-        <div style={{fontSize:'.78rem',color:'var(--tx2)',marginBottom:12}}>{new Date(t.creado_en).toLocaleString('es-ES')} · {t.perfiles?.nombre || t.empleado_nombre || '—'} · {t.casetas?.nombre}</div>
-
-        {/* Buscador para añadir productos */}
-        <div style={{position:'relative',marginBottom:10}}>
-          <input className="si" placeholder="Añadir producto..." value={busqAdd} onChange={e=>setBusqAdd(e.target.value)} style={{width:'100%'}}/>
-          {prodsFiltrados.length>0&&(
-            <div style={{position:'absolute',top:'100%',left:0,right:0,background:'var(--s1)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',zIndex:10,maxHeight:200,overflowY:'auto'}}>
-              {prodsFiltrados.map(p=>(
-                <div key={p.id} onClick={()=>addProd(p)} style={{padding:'8px 12px',cursor:'pointer',fontSize:'.85rem',borderBottom:'1px solid var(--bd)',display:'flex',justifyContent:'space-between'}} onMouseEnter={e=>e.currentTarget.style.background='var(--s2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
-                  <span>{p.nombre}</span><span style={{color:'var(--ac)',fontWeight:700}}>{fmt(p.precio)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={{overflowY:'auto',flex:1}}>
-          {items.map((item,idx)=>(
-            <div key={idx} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid var(--bd)'}}>
-              <div style={{flex:1,fontSize:'.85rem'}}>
-                {item.nombre}
-                {item.con_oferta&&<span style={{marginLeft:5,fontSize:'.65rem',color:'var(--green)',fontWeight:700}}>oferta</span>}
-              </div>
-              <button className="qb" onClick={()=>editQty(idx,-1)}>−</button>
-              <span style={{minWidth:26,textAlign:'center',fontWeight:700}}>{item.cantidad}</span>
-              <button className="qb" onClick={()=>editQty(idx,+1)}>+</button>
-              <span style={{minWidth:55,textAlign:'right',fontSize:'.85rem',color:'var(--ac)'}}>{fmt(item.total_linea)}</span>
-              <button onClick={()=>editDel(idx)} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(var(--red-rgb),.3)',background:'rgba(var(--red-rgb),.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-cross"/></button>
-            </div>
-          ))}
-          {items.length===0&&<div style={{textAlign:'center',color:'var(--tx2)',padding:20,fontSize:'.85rem'}}>Ticket vacío</div>}
-        </div>
-        {ahorroTotal>0.005&&<div style={{fontSize:'.78rem',color:'var(--green)',padding:'4px 0'}}>✓ Ahorro ofertas: -{fmt(ahorroTotal)}</div>}
-        <div style={{display:'flex',justifyContent:'space-between',fontWeight:700,padding:'10px 0'}}><span>Nuevo total</span><span style={{color:'var(--ac)'}}>{fmt(nuevoTotal)}</span></div>
-        <button className="btn-p" disabled={saving} onClick={guardar}>{saving?'Guardando...':'✓ Guardar cambios'}</button>
-        <button className="btn-s" onClick={onClose}>Cancelar</button>
-      </div>
-    </div>
-  )
-}
+// ModalEditTicket vive ahora en ./ModalEditTicket.jsx (reutilizado por admin y empleado)
 
 function PanelTickets({ casetas, filtroInicial }) {
   const hoy=new Date(); hoy.setHours(0,0,0,0)
@@ -449,7 +367,7 @@ function PanelTickets({ casetas, filtroInicial }) {
                     {t.perfiles?.nombre || t.empleado_nombre || '—'}
                     {t.notas&&<span title={t.notas} style={{marginLeft:6,fontSize:'.65rem',fontWeight:700,color:'var(--red)',background:'rgba(var(--red-rgb),.12)',border:'1px solid rgba(var(--red-rgb),.25)',borderRadius:20,padding:'1px 6px',cursor:'help'}}><i className="fi fi-rr-triangle-warning"/> Incidencia</span>}
                   </td>
-                  <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?<><i className="fi fi-rr-coins"/> Efectivo</>:<><i className="fi fi-rr-credit-card"/> Tarjeta</>}</td>
+                  <td style={{textAlign:'left',whiteSpace:'nowrap'}}>{t.metodo_pago==='efectivo'?<><i className="fi fi-rr-coins"/> Efectivo</>:t.metodo_pago==='tarjeta'?<><i className="fi fi-rr-credit-card"/> Tarjeta</>:<><i className="fi fi-rr-coins"/> <i className="fi fi-rr-credit-card"/> Mixto <span style={{color:'var(--tx2)',fontSize:'.72rem'}}>({fmt(t.pago_efectivo)} ef · {fmt(t.pago_tarjeta)} tj)</span></>}</td>
                   <td style={{fontWeight:700,color:'var(--ac)'}}>{fmt(t.total)}</td>
                   <td><div className="acell">
                     <button className="btn-edit" onClick={()=>setExpanded(expanded===t.id?null:t.id)}>{expanded===t.id?'Ocultar':'Ver líneas'}</button>
@@ -481,6 +399,301 @@ function PanelTickets({ casetas, filtroInicial }) {
       )}
       {editando&&<ModalEditTicket ticket={editando} onClose={()=>setEditando(null)} onSave={handleSave}/>}
       {facturaT&&<FacturaModal onConfirm={onHacerFactura} onClose={()=>setFacturaT(null)}/>}
+    </>
+  )
+}
+
+// ─── PANEL AUDITORÍA (cambios en tickets) ─────────────────────
+function PanelAuditoria({ casetas }) {
+  const [tickets, setTickets]   = useState([])
+  const [stock, setStock]       = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [casetaSel, setCasetaSel] = useState('')
+  const [accionSel, setAccionSel] = useState('')   // '' | 'EDITAR' | 'BORRAR' | 'STOCK'
+  const [expand, setExpand]     = useState(null)
+
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([
+      getAuditoriaTickets(casetaSel || null).catch(e => { console.error('auditoria:', e.message); return [] }),
+      getStockAuditoria(casetaSel || null).catch(e => { console.error('stock-audit:', e.message); return [] }),
+    ]).then(([t, s]) => { setTickets(t); setStock(s) }).finally(() => setLoading(false))
+  }, [casetaSel])
+
+  const nombreProd = (it) => it?.nombre_producto || '—'
+  const resumenItems = (items) => (items || []).map(i => `${nombreProd(i)} ×${i.cantidad}`).join(', ')
+
+  // Lista unificada (tickets + ajustes de stock) ordenada por fecha
+  const combinadas = [
+    ...tickets.map(r => ({ ...r, _kind: 'ticket' })),
+    ...stock.map(r => ({ ...r, _kind: 'stock' })),
+  ]
+    .filter(r => !accionSel || (accionSel === 'STOCK' ? r._kind === 'stock' : r._kind === 'ticket' && r.accion === accionSel))
+    .sort((a, b) => new Date(b.creado_en) - new Date(a.creado_en))
+
+  return (
+    <>
+      <div className="stit"><i className="fi fi-rr-time-past"/> Cambios (tickets y stock)</div>
+      <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
+        Registro de quién editó/borró tickets y quién ajustó stock, con el antes y el después.
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <select className="si" style={{ maxWidth: 220 }} value={casetaSel} onChange={e => setCasetaSel(e.target.value)}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <select className="si" style={{ maxWidth: 200 }} value={accionSel} onChange={e => setAccionSel(e.target.value)}>
+          <option value="">Todo</option>
+          <option value="EDITAR">Solo ediciones de ticket</option>
+          <option value="BORRAR">Solo borrados de ticket</option>
+          <option value="STOCK">Solo ajustes de stock</option>
+        </select>
+      </div>
+
+      {loading
+        ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
+        : combinadas.length === 0
+          ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 40 }}>Sin cambios registrados con estos filtros</div>
+          : combinadas.map(r => {
+            const key = `${r._kind}-${r.id}`
+            if (r._kind === 'stock') {
+              const dif = (r.cantidad_despues ?? 0) - (r.cantidad_antes ?? 0)
+              return (
+                <div key={key} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span className="chip" style={{ background: 'rgba(var(--blue-rgb),.15)', color: 'var(--blue)', border: '1px solid var(--blue)' }}>AJUSTE STOCK</span>
+                    <span style={{ fontWeight: 700 }}>{r.nombre_producto || '—'}</span>
+                    <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
+                      {new Date(r.creado_en).toLocaleString('es-ES')} · {r.perfiles?.nombre || '—'} · {r.casetas?.nombre || '—'}
+                    </span>
+                    <span style={{ marginLeft: 'auto', fontWeight: 700 }}>
+                      <span style={{ color: 'var(--tx2)', textDecoration: 'line-through', marginRight: 6 }}>{r.cantidad_antes}</span>
+                      <span style={{ color: 'var(--tx)' }}>{r.cantidad_despues}</span>
+                      <span style={{ color: dif > 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>({dif > 0 ? `+${dif}` : dif})</span>
+                    </span>
+                  </div>
+                  {r.motivo && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', marginTop: 4 }}>Motivo: {r.motivo}</div>}
+                </div>
+              )
+            }
+            const esBorrado = r.accion === 'BORRAR'
+            const col = esBorrado ? 'var(--red)' : 'var(--gold)'
+            return (
+              <div key={key} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="chip" style={{ background: `rgba(var(--${esBorrado ? 'red' : 'gold'}-rgb),.15)`, color: col, border: `1px solid ${col}` }}>
+                    {esBorrado ? 'BORRADO' : 'EDITADO'}
+                  </span>
+                  {r.numero_ticket && <span style={{ color: 'var(--ac)', fontWeight: 700 }}>{r.numero_ticket}</span>}
+                  <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
+                    {new Date(r.creado_en).toLocaleString('es-ES')} · {r.perfiles?.nombre || '—'} · {r.casetas?.nombre || '—'}
+                  </span>
+                  <span style={{ marginLeft: 'auto', fontWeight: 700 }}>
+                    {esBorrado
+                      ? <span style={{ color: 'var(--red)' }}>{fmt(r.total_antes)}</span>
+                      : <><span style={{ color: 'var(--tx2)', textDecoration: 'line-through', marginRight: 6 }}>{fmt(r.total_antes)}</span><span style={{ color: 'var(--ac)' }}>{fmt(r.total_despues)}</span></>
+                    }
+                  </span>
+                  <button className="btn-o" style={{ fontSize: '.7rem' }} onClick={() => setExpand(expand === key ? null : key)}>
+                    {expand === key ? 'Ocultar' : 'Detalle'}
+                  </button>
+                </div>
+                {expand === key && (
+                  <div style={{ marginTop: 8, borderTop: '1px solid var(--bd)', paddingTop: 8, fontSize: '.78rem' }}>
+                    <div style={{ marginBottom: 6 }}>
+                      <span style={{ color: 'var(--tx2)', fontWeight: 700 }}>Antes: </span>
+                      <span style={{ color: 'var(--tx2)' }}>{resumenItems(r.items_antes) || '—'}</span>
+                    </div>
+                    {!esBorrado && (
+                      <div>
+                        <span style={{ color: 'var(--ac)', fontWeight: 700 }}>Después: </span>
+                        <span>{resumenItems(r.items_despues) || '—'}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })
+      }
+    </>
+  )
+}
+
+const TIPO_DEV = { DEVOLUCION: 'Devolución', COMPENSACION: 'Compensación', BAJA: 'Baja / rotura' }
+const MOV_DEV  = { DEVUELTO_VENDIBLE: 'Devuelto (vendible)', DEVUELTO_DEFECTUOSO: 'Devuelto (defectuoso)', ENTREGADO: 'Entregado', BAJA: 'Baja / rotura' }
+
+// ─── PANEL DEVOLUCIONES ───────────────────────────────────────
+function PanelDevoluciones({ casetas }) {
+  const [rows, setRows]         = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [casetaSel, setCasetaSel] = useState('')
+  const [tipoSel, setTipoSel]   = useState('')
+  const [expand, setExpand]     = useState(null)
+
+  useEffect(() => {
+    setLoading(true)
+    getDevoluciones(casetaSel || null)
+      .then(setRows).catch(e => { setRows([]); console.error('devoluciones:', e.message) })
+      .finally(() => setLoading(false))
+  }, [casetaSel])
+
+  const filtradas = rows.filter(r => !tipoSel || r.tipo === tipoSel)
+
+  return (
+    <>
+      <div className="stit"><i className="fi fi-rr-undo"/> Devoluciones, compensaciones y bajas</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <select className="si" style={{ maxWidth: 220 }} value={casetaSel} onChange={e => setCasetaSel(e.target.value)}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <select className="si" style={{ maxWidth: 200 }} value={tipoSel} onChange={e => setTipoSel(e.target.value)}>
+          <option value="">Todos los tipos</option>
+          <option value="DEVOLUCION">Devoluciones</option>
+          <option value="COMPENSACION">Compensaciones</option>
+          <option value="BAJA">Bajas / roturas</option>
+        </select>
+      </div>
+
+      {loading
+        ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
+        : filtradas.length === 0
+          ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 40 }}>Sin movimientos con estos filtros</div>
+          : filtradas.map(r => {
+            const col = r.tipo === 'BAJA' ? 'var(--red)' : r.tipo === 'COMPENSACION' ? 'var(--gold)' : 'var(--ac)'
+            return (
+              <div key={r.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="chip" style={{ color: col, border: `1px solid ${col}` }}>{TIPO_DEV[r.tipo] || r.tipo}</span>
+                  {r.numero_ticket && <span style={{ color: 'var(--ac)', fontWeight: 700 }}>{r.numero_ticket}</span>}
+                  <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
+                    {new Date(r.creado_en).toLocaleString('es-ES')} · {r.perfiles?.nombre || '—'} · {r.casetas?.nombre || '—'}
+                  </span>
+                  {r.importe_reembolsado > 0 && <span style={{ marginLeft: 'auto', fontWeight: 700, color: 'var(--gold)' }}>−{fmt(r.importe_reembolsado)}</span>}
+                  <button className="btn-o" style={{ fontSize: '.7rem', marginLeft: r.importe_reembolsado > 0 ? 0 : 'auto' }} onClick={() => setExpand(expand === r.id ? null : r.id)}>
+                    {expand === r.id ? 'Ocultar' : 'Detalle'}
+                  </button>
+                </div>
+                {r.notas && <div style={{ fontSize: '.75rem', color: 'var(--tx2)', marginTop: 4 }}>{r.notas}</div>}
+                {expand === r.id && (
+                  <div style={{ marginTop: 8, borderTop: '1px solid var(--bd)', paddingTop: 8, fontSize: '.78rem' }}>
+                    {(r.devolucion_items || []).map(it => (
+                      <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: 'var(--tx2)' }}>
+                        <span>{it.nombre_producto} ×{it.cantidad}</span>
+                        <span>{MOV_DEV[it.movimiento] || it.movimiento}{it.causa ? ` · ${it.causa === 'FABRICA' ? 'defecto fábrica' : 'rotura nuestra'}` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })
+      }
+    </>
+  )
+}
+
+// ─── PANEL DEFECTUOSOS (agrupado por proveedor) ───────────────
+function PanelDefectuosos({ casetas }) {
+  const [rows, setRows]         = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [casetaSel, setCasetaSel] = useState('')
+  const [soloReclamables, setSoloReclamables] = useState(false)
+
+  const cargar = () => {
+    setLoading(true)
+    getDefectuosos(casetaSel || null)
+      .then(setRows).catch(e => { setRows([]); console.error('defectuosos:', e.message) })
+      .finally(() => setLoading(false))
+  }
+  useEffect(cargar, [casetaSel])
+
+  const cambiarReclam = async (item, estado) => {
+    try {
+      await updateReclamacionItem(item.id, estado)
+      setRows(prev => prev.map(r => r.id === item.id ? { ...r, reclamacion: estado } : r))
+    } catch (e) { alert(e.message) }
+  }
+
+  const visibles = rows.filter(r => !soloReclamables || r.causa === 'FABRICA')
+
+  // Agrupar por proveedor (empresa)
+  const porEmpresa = {}
+  visibles.forEach(r => {
+    const emp = r.empresa || 'Sin proveedor'
+    if (!porEmpresa[emp]) porEmpresa[emp] = []
+    porEmpresa[emp].push(r)
+  })
+  const empresas = Object.keys(porEmpresa).sort()
+
+  const estadoChip = { PENDIENTE: 'var(--gold)', RECLAMADO: 'var(--blue)', ABONADO: 'var(--green)' }
+
+  return (
+    <>
+      <div className="stit"><i className="fi fi-rr-box-open"/> Productos defectuosos / merma</div>
+      <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
+        Agrupados por proveedor. Los de <strong>defecto de fábrica</strong> son reclamables; los de <strong>rotura nuestra</strong> son merma.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+        <select className="si" style={{ maxWidth: 220 }} value={casetaSel} onChange={e => setCasetaSel(e.target.value)}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <div onClick={() => setSoloReclamables(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '6px 12px', borderRadius: 'var(--rs)', border: '1px solid', borderColor: soloReclamables ? 'var(--ac)' : 'var(--bd)', background: soloReclamables ? 'rgba(var(--ac-rgb),.1)' : 'transparent' }}>
+          <div style={{ width: 32, height: 18, borderRadius: 9, background: soloReclamables ? 'var(--ac)' : 'var(--s3)', position: 'relative', transition: 'background .2s' }}>
+            <div style={{ position: 'absolute', top: 2, left: soloReclamables ? 14 : 2, width: 14, height: 14, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
+          </div>
+          <span style={{ fontSize: '.78rem', color: soloReclamables ? 'var(--ac)' : 'var(--tx2)', fontWeight: 600 }}>Solo reclamables (defecto de fábrica)</span>
+        </div>
+      </div>
+
+      {loading
+        ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
+        : empresas.length === 0
+          ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 40 }}>Sin productos defectuosos registrados</div>
+          : empresas.map(emp => {
+            const items = porEmpresa[emp]
+            const totalUds = items.reduce((s, i) => s + i.cantidad, 0)
+            const reclamables = items.filter(i => i.causa === 'FABRICA').reduce((s, i) => s + i.cantidad, 0)
+            return (
+              <div key={emp} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 800, fontSize: '.95rem' }}><i className="fi fi-rr-industry-windows"/> {emp}</span>
+                  <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>{totalUds} uds · {reclamables} reclamables</span>
+                </div>
+                {items.map(it => (
+                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: '1px solid var(--bd)', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <div style={{ fontSize: '.83rem', fontWeight: 600 }}>{it.nombre_producto} ×{it.cantidad}</div>
+                      <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>
+                        {it.causa === 'FABRICA' ? 'Defecto de fábrica' : it.causa === 'PROPIA' ? 'Rotura nuestra' : '—'}
+                        {' · '}{it.devoluciones?.casetas?.nombre || ''}
+                        {' · '}{it.devoluciones?.creado_en ? new Date(it.devoluciones.creado_en).toLocaleDateString('es-ES') : ''}
+                      </div>
+                    </div>
+                    {it.causa === 'FABRICA' ? (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {['PENDIENTE', 'RECLAMADO', 'ABONADO'].map(est => (
+                          <button key={est} onClick={() => cambiarReclam(it, est)} style={{
+                            padding: '3px 9px', borderRadius: 12, fontSize: '.68rem', fontWeight: 700, cursor: 'pointer',
+                            fontFamily: "'DM Sans',sans-serif",
+                            background: it.reclamacion === est ? estadoChip[est] : 'var(--s3)',
+                            border: `1px solid ${it.reclamacion === est ? estadoChip[est] : 'var(--bd)'}`,
+                            color: it.reclamacion === est ? '#fff' : 'var(--tx2)',
+                          }}>{est.charAt(0) + est.slice(1).toLowerCase()}</button>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="chip cr" style={{ fontSize: '.68rem' }}>Merma</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          })
+      }
     </>
   )
 }
@@ -521,8 +734,9 @@ function ModalEditarPedido({ pedido, items, notasAdmin, saving, onChangeItems, o
   }
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-pencil"/> Editar Pedido — {pedido.casetas?.nombre}</div>
 
         {/* Lista de items actuales */}
@@ -811,9 +1025,9 @@ function PanelInventarios({ casetas }) {
   const confirmar=async inv=>{
     setSaving(true)
     try{
-      await confirmarInventario(inv.id, { nombreCaseta: inv.casetas?.nombre || '', nombreEmpleado: inv.perfiles?.nombre || '' })
+      await confirmarInventario(inv.id, { nombreCaseta: inv.casetas?.nombre || '', nombreEmpleado: inv.perfiles?.nombre || '' }, inv.es_final)
       setInventarios(prev=>prev.map(i=>i.id===inv.id?{...i,estado:'CONFIRMADO'}:i))
-      setConfirmando(null); showToast('✓ Inventario confirmado — stock actualizado')
+      setConfirmando(null); showToast(inv.es_final?'✓ Inventario final confirmado — caseta vaciada':'✓ Inventario confirmado — stock actualizado')
     }catch(e){showToast('Error: '+e.message,'error')}
     setSaving(false)
   }
@@ -845,6 +1059,7 @@ function PanelInventarios({ casetas }) {
                 <span style={{color:'var(--tx2)',fontSize:'.78rem',marginLeft:8}}>{inv.perfiles?.nombre}</span>
                 <span style={{color:'var(--tx2)',fontSize:'.75rem',marginLeft:8}}>{new Date(inv.creado_en).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'})}</span>
               </div>
+              {inv.es_final&&<span className="chip" style={{color:'var(--red)',border:'1px solid var(--red)',fontSize:'.68rem'}}>FINAL · vacía caseta</span>}
               <span style={{fontWeight:700,fontSize:'.82rem',color:pend?'var(--gold)':'var(--green)'}}>{pend?<><i className="fi fi-rr-clock"/> Pendiente de confirmar</>:<><i className="fi fi-rr-check"/> Confirmado</>}</span>
             </div>
             <div style={{fontSize:'.8rem',color:'var(--tx2)',marginBottom:8}}>{inv.inventario_items?.length||0} productos · <span style={{color:difs>0?'var(--red)':'var(--green)'}}>{difs} diferencias</span></div>
@@ -874,14 +1089,21 @@ function PanelInventarios({ casetas }) {
       })}
 
       {confirmando&&(
-        <div className="mo" onClick={e=>e.target===e.currentTarget&&setConfirmando(null)}>
+        <div className="mo">
           <div className="mc">
+            <ModalClose onClose={() => setConfirmando(null)} />
             <div className="mt-modal"><i className="fi fi-rr-check"/> Confirmar Inventario</div>
-            <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:16,lineHeight:1.6}}>
-              Esta acción <strong style={{color:'var(--tx)'}}>sobreescribirá el stock actual</strong> de <strong style={{color:'var(--ac)'}}>{casetas.find(c=>c.id===confirmando.caseta_id)?.nombre}</strong> con los valores contados.<br/><br/>Esta acción <strong>no se puede deshacer.</strong>
-            </div>
-            <div style={{background:'var(--s2)',borderRadius:'var(--rs)',padding:'10px 12px',marginBottom:16,fontSize:'.8rem'}}>{confirmando.inventario_items?.filter(i=>i.diferencia!==0).length||0} productos con diferencias serán ajustados.</div>
-            <button className="btn-p" disabled={saving} onClick={()=>confirmar(confirmando)}>{saving?'Aplicando...':'<i className="fi fi-rr-check"/> Confirmar y actualizar stock'}</button>
+            {confirmando.es_final?(
+              <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:16,lineHeight:1.6}}>
+                Es un <strong style={{color:'var(--red)'}}>inventario final</strong>: al confirmarlo, el stock de <strong style={{color:'var(--ac)'}}>{casetas.find(c=>c.id===confirmando.caseta_id)?.nombre}</strong> quedará <strong style={{color:'var(--red)'}}>a 0</strong> (caseta retirada al almacén). El recuento se conserva como registro.<br/><br/>Esta acción <strong>no se puede deshacer.</strong>
+              </div>
+            ):(
+              <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:16,lineHeight:1.6}}>
+                Esta acción <strong style={{color:'var(--tx)'}}>sobreescribirá el stock actual</strong> de <strong style={{color:'var(--ac)'}}>{casetas.find(c=>c.id===confirmando.caseta_id)?.nombre}</strong> con los valores contados.<br/><br/>Esta acción <strong>no se puede deshacer.</strong>
+              </div>
+            )}
+            {!confirmando.es_final&&<div style={{background:'var(--s2)',borderRadius:'var(--rs)',padding:'10px 12px',marginBottom:16,fontSize:'.8rem'}}>{confirmando.inventario_items?.filter(i=>i.diferencia!==0).length||0} productos con diferencias serán ajustados.</div>}
+            <button className="btn-p" disabled={saving} onClick={()=>confirmar(confirmando)}>{saving?'Aplicando...':confirmando.es_final?'Confirmar y vaciar caseta':'Confirmar y actualizar stock'}</button>
             <button className="btn-s" onClick={()=>setConfirmando(null)}>Cancelar</button>
           </div>
         </div>
@@ -1067,8 +1289,9 @@ function ModalCategorias({ categorias, productos, onChanged, onClose, showToast 
     try{ await eliminarCategoria(c); onChanged(); showToast('Borrada ✓') }catch(e){ showToast(e.message,'error') } }
 
   return (
-    <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="mo">
       <div className="mc">
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-tags"/> Gestionar categorías</div>
         <div style={{display:'flex',gap:8,marginBottom:14}}>
           <input value={nueva} onChange={e=>setNueva(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()} placeholder="Nueva categoría..."
@@ -1148,7 +1371,7 @@ function GestionStock({ casetas }) {
     const cantidad=parseInt(val); if(isNaN(cantidad)||cantidad<=0){showToast('Cantidad no válida','error');return}
     setSaving(productoId)
     try{
-      const nueva=await ajustarStock(productoId,casetaSel,delta*cantidad)
+      const nueva=await ajustarStockAuditado(productoId,casetaSel,delta*cantidad,'Ajuste admin')
       setStockData(prev=>({...prev,[casetaSel]:{...prev[casetaSel],[productoId]:nueva}}))
       setEditVals(prev=>{const n={...prev};delete n[productoId];return n})
       showToast(`Stock ${delta>0?'añadido':'restado'} ✓`)
@@ -1173,7 +1396,7 @@ function GestionStock({ casetas }) {
     if(busq&&!p.nombre.toLowerCase().includes(busq.toLowerCase())&&!p.codigo_ean?.includes(busq)) return false
     return true
   }).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'))
-  const colStock=n=>n===0?'var(--red)':n<10?'var(--gold)':'var(--green)'
+  const colStock=(n,min=0)=>n===0?'var(--red)':(min>0&&n<min)?'var(--gold)':'var(--green)'
   if(loading&&!productos.length) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
   return(
@@ -1245,7 +1468,7 @@ function GestionStock({ casetas }) {
                 <td style={{fontWeight:600}}>{p.nombre}{bajominimo&&<span style={{marginLeft:6,fontSize:'.65rem',background:'rgba(var(--red-rgb),.15)',color:'var(--red)',border:'1px solid rgba(var(--red-rgb),.3)',borderRadius:6,padding:'1px 5px',fontWeight:700}}>bajo mín.</span>}</td>
                 <td style={{color:'var(--tx2)',fontSize:'.78rem'}}>{p.categoria}</td>
                 <td style={{color:'var(--tx2)',fontSize:'.74rem',fontFamily:'monospace'}}>{p.codigo_ean}</td>
-                <td style={{textAlign:'center'}}><span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.2rem',color:colStock(cant)}}>{cant}</span></td>
+                <td style={{textAlign:'center'}}><span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1.2rem',color:colStock(cant,minimo)}}>{cant}</span></td>
                 <td style={{textAlign:'center'}}>
                   <input type="number" min="0"
                     value={editMinimos[p.id]!==undefined?editMinimos[p.id]:minimo}
@@ -1288,7 +1511,16 @@ function GestionOfertas() {
   const [formComb,setFormComb]=useState(F0comb)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
 
-  useEffect(()=>{ Promise.all([getOfertas(),getProductos()]).then(([o,p])=>{setOfertas(o);setProductos(p)}).finally(()=>setLoading(false)) },[])
+  useEffect(()=>{ Promise.all([getOfertas(false),getProductos()]).then(([o,p])=>{setOfertas(o);setProductos(p)}).finally(()=>setLoading(false)) },[])
+
+  const toggleActiva=async o=>{
+    const activa=o.activa!==false
+    try{
+      await updateOferta(o.id,{activa:!activa})
+      setOfertas(prev=>prev.map(x=>x.id===o.id?{...x,activa:!activa}:x))
+      showToast(activa?'Oferta desactivada — no se aplica en las ventas':'Oferta activada ✓')
+    }catch(e){showToast(e.message,'error')}
+  }
 
   const guardarPack=async()=>{
     const {producto_id,etiqueta,cantidad_pack,precio_pack}=formPack
@@ -1366,22 +1598,24 @@ function GestionOfertas() {
           <div style={{display:'flex',gap:9}}><button className="btn-add" onClick={guardarCombinada}>{editId?'Guardar':'Añadir combinada'}</button>{editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setFormComb(F0comb)}}>Cancelar</button>}</div>
         </div>
       )}
-      <div className="stit">Ofertas activas ({ofertas.length})</div>
+      <div className="stit">Ofertas ({ofertas.length})</div>
       <div className="tw"><table>
-        <thead><tr><th>Tipo</th><th>Descripción</th><th>Precio</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Tipo</th><th>Descripción</th><th>Precio</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
-          {ofertas.length===0?<tr><td colSpan={4} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>Sin ofertas</td></tr>
+          {ofertas.length===0?<tr><td colSpan={5} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>Sin ofertas</td></tr>
             :ofertas.map(o=>{
             const esComb=o.tipo==='combinada'; const p=!esComb&&productos.find(x=>x.id===o.producto_id)
+            const activa=o.activa!==false
             return(
-              <tr key={o.id}>
+              <tr key={o.id} style={{opacity:activa?1:.5}}>
                 <td><span className={`chip ${esComb?'cb2':'cy'}`}>{esComb?'Combinada':'Pack'}</span></td>
                 <td style={{fontWeight:600}}>
                   {esComb?<>{o.etiqueta}<br/><span style={{fontWeight:400,fontSize:'.74rem',color:'var(--tx2)'}}>{(o.productos_requeridos||[]).map(r=>`${r.cantidad}× ${r.nombre}`).join(' + ')}</span></>
                     :<>{p?p.nombre:<span style={{color:'var(--red)'}}>Eliminado</span>}<br/><span style={{fontWeight:400,fontSize:'.74rem',color:'var(--tx2)'}}>{o.etiqueta} · {o.cantidad_pack}u.</span></>}
                 </td>
                 <td style={{color:'var(--ac)',fontWeight:700}}>{fmt(o.precio_pack)}</td>
-                <td><div className="acell"><button className="btn-edit" onClick={()=>editar(o)}>Editar</button><button className="btn-del" onClick={()=>eliminar(o.id)}>Eliminar</button></div></td>
+                <td><span className={`chip ${activa?'cg':'cr'}`}>{activa?'Activa':'Inactiva'}</span></td>
+                <td><div className="acell"><button className="btn-edit" onClick={()=>editar(o)}>Editar</button><button className="btn-tog" style={{color:activa?'var(--gold)':'var(--green)'}} onClick={()=>toggleActiva(o)}>{activa?'Desactivar':'Activar'}</button><button className="btn-del" onClick={()=>eliminar(o.id)}>Eliminar</button></div></td>
               </tr>
             )
           })}
@@ -1423,6 +1657,14 @@ export function GestionCasetas({ casetas, setCasetas }) {
     if(!window.confirm('¿Eliminar caseta?')) return
     try{await deleteCaseta(id);setCasetas(prev=>prev.filter(c=>c.id!==id));showToast('Caseta eliminada')}
     catch(e){showToast(e.message,'error')}
+  }
+  const toggleActiva=async c=>{
+    const activaAhora=c.activo!==false
+    try{
+      await updateCaseta(c.id,{activo:!activaAhora})
+      setCasetas(prev=>prev.map(x=>x.id===c.id?{...x,activo:!activaAhora}:x))
+      showToast(activaAhora?'Caseta desactivada — no cuenta en las alertas de stock':'Caseta activada ✓')
+    }catch(e){showToast(e.message,'error')}
   }
   return(
     <>
@@ -1513,7 +1755,7 @@ export function GestionCasetas({ casetas, setCasetas }) {
         </div>
       </div>
       <div className="tw"><table>
-        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Geo</th><th>Pedidos auto</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Dirección</th><th>Límite pólvora</th><th>Geo</th><th>Pedidos auto</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
           {casetas.map(c=>(
             <tr key={c.id}>
@@ -1530,8 +1772,10 @@ export function GestionCasetas({ casetas, setCasetas }) {
                   ?<span style={{color:'var(--green)',fontSize:'.78rem',fontWeight:700}}><i className="fi fi-rr-settings"/> {c.hora_corte_pedidos?.slice(0,5)||'20:00'}</span>
                   :<span style={{color:'var(--tx2)',fontSize:'.78rem',opacity:.5}}>—</span>}
               </td>
+              <td><span className={`chip ${c.activo!==false?'cg':'cr'}`}>{c.activo!==false?'Activa':'Inactiva'}</span></td>
               <td><div className="acell">
                 <button className="btn-edit" onClick={()=>{setEditId(c.id);setForm({nombre:c.nombre,prefijo:c.prefijo||'',direccion:c.direccion||'',limite_kg_polvora:String(c.limite_kg_polvora||10),latitud:c.latitud?String(c.latitud):'',longitud:c.longitud?String(c.longitud):'',radio_metros:String(c.radio_metros||150),geo_activo:c.geo_activo||false,pedidos_auto_activos:c.pedidos_auto_activos||false,hora_corte_pedidos:c.hora_corte_pedidos?.slice(0,5)||'20:00'})}}>Editar</button>
+                <button className="btn-tog" style={{color:c.activo!==false?'var(--gold)':'var(--green)'}} onClick={()=>toggleActiva(c)}>{c.activo!==false?'Desactivar':'Activar'}</button>
                 <button className="btn-del" onClick={()=>eliminar(c.id)}>Eliminar</button>
               </div></td>
             </tr>
@@ -1549,6 +1793,9 @@ export function GestionUsuarios({ casetas, soloEmpleados = false }) {
   const [saving,setSaving]=useState(false)
   const [toast,setToast]=useState(null)
   const [editId,setEditId]=useState(null)
+  const [busq,setBusq]=useState('')
+  const [rolFiltro,setRolFiltro]=useState('')
+  const [casetaFiltro,setCasetaFiltro]=useState('')
   const F0={nombre:'',email:'',password:'',rol:'EMPLEADO',caseta_id:''}
   const [showPass, setShowPass] = useState(false)
   const PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/
@@ -1598,13 +1845,19 @@ export function GestionUsuarios({ casetas, soloEmpleados = false }) {
     }catch(e){showMsg(e.message,false)}finally{setSaving(false)}
   }
   const toggleActivo=async(id,activo)=>{ await updatePerfil(id,{activo:!activo}); setPerfiles(prev=>prev.map(p=>p.id===id?{...p,activo:!activo}:p)); showToast(activo?'Desactivado':'Activado') }
+  const toggleEncargado=async(id,val)=>{ try{ await updatePerfil(id,{es_encargado:!val}); setPerfiles(prev=>prev.map(p=>p.id===id?{...p,es_encargado:!val}:p)); showToast(val?'Ya no es encargado':'Ahora es encargado (puede borrar tickets y ajustar stock)') }catch(e){ showMsg(e.message,false) } }
   const editar=p=>{ setForm({nombre:p.nombre,email:'',password:'',rol:p.rol,caseta_id:p.caseta_id||''}); setEditId(p.id) }
   const eliminar=async(p)=>{
     if(!window.confirm(`¿Eliminar permanentemente a ${p.nombre}? Esta acción no se puede deshacer.`)) return
     try{ await eliminarPerfil(p.id); setPerfiles(prev=>prev.filter(u=>u.id!==p.id)); showToast('Empleado eliminado') }
     catch(e){ showMsg(e.message,false) }
   }
-  const perfilesMostrados = soloEmpleados ? perfiles.filter(p => p.rol === 'EMPLEADO') : perfiles
+  const ordenRol = { ADMIN:0, RRHH:1, EMPLEADO:2 }
+  const perfilesMostrados = (soloEmpleados ? perfiles.filter(p => p.rol === 'EMPLEADO') : perfiles)
+    .filter(p => !rolFiltro || p.rol === rolFiltro)
+    .filter(p => !casetaFiltro || p.caseta_id === casetaFiltro)
+    .filter(p => !busq || p.nombre.toLowerCase().includes(busq.toLowerCase()))
+    .sort((a,b) => (ordenRol[a.rol]??9) - (ordenRol[b.rol]??9) || a.nombre.localeCompare(b.nombre,'es'))
   if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
 
   return(
@@ -1642,7 +1895,22 @@ export function GestionUsuarios({ casetas, soloEmpleados = false }) {
         </div>
         <div style={{display:'flex',gap:9}}><button className="btn-add" onClick={guardar} disabled={saving}>{saving?'Guardando...':editId?'Guardar cambios':'Crear usuario'}</button>{editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setForm(F0);setMsg(null)}}>Cancelar</button>}</div>
       </div>
-      <div className="stit">{soloEmpleados?'Empleados':'Usuarios'} ({perfilesMostrados.length})</div>
+      <div className="stit" style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <span>{soloEmpleados?'Empleados':'Usuarios'} ({perfilesMostrados.length})</span>
+        <input className="si" style={{maxWidth:220,marginBottom:0}} placeholder="Buscar por nombre..." value={busq} onChange={e=>setBusq(e.target.value)}/>
+        {!soloEmpleados&&(
+          <select value={rolFiltro} onChange={e=>setRolFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",fontSize:'.82rem'}}>
+            <option value="">Todos los roles</option>
+            <option value="ADMIN">Administradores</option>
+            <option value="EMPLEADO">Empleados</option>
+            <option value="RRHH">Recursos Humanos</option>
+          </select>
+        )}
+        <select value={casetaFiltro} onChange={e=>setCasetaFiltro(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",fontSize:'.82rem'}}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+      </div>
       <div className="tw"><table>
         <thead><tr><th>Nombre</th>{!soloEmpleados&&<th>Rol</th>}<th>Caseta</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
@@ -1654,6 +1922,11 @@ export function GestionUsuarios({ casetas, soloEmpleados = false }) {
               <td><span className={`chip ${p.activo?'cg':'cr'}`}>{p.activo?'Activo':'Inactivo'}</span></td>
               <td><div className="acell">
                 <button className="btn-edit" onClick={()=>editar(p)}>Editar</button>
+                {p.rol==='EMPLEADO'&&(
+                  <button className="btn-tog" style={{color:p.es_encargado?'var(--green)':'var(--tx2)'}} title="Encargado: puede borrar tickets y ajustar stock" onClick={()=>toggleEncargado(p.id,p.es_encargado)}>
+                    <i className="fi fi-rr-shield-check"/> {p.es_encargado?'Encargado':'Encargado: No'}
+                  </button>
+                )}
                 <button className="btn-tog" style={{color:p.activo?'var(--gold)':'var(--green)'}} onClick={()=>toggleActivo(p.id,p.activo)}>{p.activo?'Desact.':'Activar'}</button>
                 <button className="btn-del" onClick={()=>eliminar(p)}>Eliminar</button>
               </div></td>
@@ -1905,8 +2178,9 @@ export function PanelFichajes({ casetas, adminId }) {
 
       {/* Modal edición fichaje */}
       {editando&&(
-        <div className="mo" onClick={e=>e.target===e.currentTarget&&setEditando(null)}>
+        <div className="mo">
           <div className="mc">
+            <ModalClose onClose={() => setEditando(null)} />
             <div className="mt-modal"><i className="fi fi-rr-pencil"/> Editar Fichaje</div>
             <div style={{fontSize:'.8rem',color:'var(--tx2)',marginBottom:16}}>
               <strong>{fichajes.find(f=>f.id===editando.id)?.perfiles?.nombre||editando.perfiles?.nombre}</strong> · {editando.tipo}
@@ -1944,12 +2218,14 @@ const ALERTA_LABELS = {
   pedido_recibido:        { icon: <i className="fi fi-rr-check"/>,            label: 'Pedido recibido' },
   stock_agotado:          { icon: <i className="fi fi-rr-cross-circle"/>,     label: 'Producto agotado' },
   stock_bajo:             { icon: <i className="fi fi-rr-triangle-warning"/>, label: 'Stock bajo en producto' },
+  devolucion:             { icon: <i className="fi fi-rr-undo"/>,             label: 'Devolución o compensación' },
+  baja_producto:          { icon: <i className="fi fi-rr-box-open"/>,         label: 'Baja / rotura de producto' },
 }
 
 const ALERTA_GRUPOS = [
   { icon: 'fi-rr-briefcase', titulo: 'Caja & Fichajes',     tipos: ['caja_cerrada_descuadre', 'retirada_caja', 'fichaje'] },
   { icon: 'fi-rr-truck-side',titulo: 'Pedidos',             tipos: ['nuevo_pedido', 'pedido_recibido', 'incidencia_pedido'] },
-  { icon: 'fi-rr-note',      titulo: 'Tickets & Inventario',tipos: ['incidencia_ticket', 'inventario_enviado'] },
+  { icon: 'fi-rr-note',      titulo: 'Tickets, Devoluciones & Inventario', tipos: ['incidencia_ticket', 'devolucion', 'baja_producto', 'inventario_enviado'] },
   { icon: 'fi-rr-chart-histogram', titulo: 'Stock & Pólvora', tipos: ['stock_bajo', 'stock_agotado', 'limite_polvora'] },
   { icon: 'fi-rr-user',      titulo: 'Usuarios',            tipos: ['login_usuario'] },
 ]
@@ -2240,18 +2516,24 @@ export default function AdminPanel({ perfil, casetas: casetasInit, onModoVenta }
 
       {/* Picker de caseta para Modo venta (el admin es global, elige dónde vender) */}
       {showVentaPicker&&(
-        <div className="mo" onClick={e=>e.target===e.currentTarget&&setShowVentaPicker(false)}>
+        <div className="mo">
           <div className="mc">
+            <ModalClose onClose={() => setShowVentaPicker(false)} />
             <div className="mt-modal"><i className="fi fi-rr-shopping-cart"/> Modo venta</div>
             <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:14}}>Elige en qué caseta vas a vender:</div>
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {casetas.map(c=>(
-                <button key={c.id} className="btn-s" style={{marginTop:0,textAlign:'left',padding:'12px 14px',display:'flex',alignItems:'center',gap:10}}
-                  onClick={()=>{setShowVentaPicker(false);onModoVenta(c.id)}}>
-                  <i className="fi fi-rr-shop" style={{color:'var(--ac)'}}/>
-                  <span style={{fontWeight:700,color:'var(--tx)'}}>{c.nombre}</span>
+              {casetas.map(c=>{
+                const inactiva=c.activo===false
+                return(
+                <button key={c.id} className="btn-s" disabled={inactiva}
+                  style={{marginTop:0,textAlign:'left',padding:'12px 14px',display:'flex',alignItems:'center',gap:10,opacity:inactiva?.5:1,cursor:inactiva?'not-allowed':'pointer'}}
+                  title={inactiva?'Caseta desactivada — actívala en Casetas para vender':undefined}
+                  onClick={()=>{ if(inactiva) return; setShowVentaPicker(false);onModoVenta(c.id) }}>
+                  <i className="fi fi-rr-shop" style={{color:inactiva?'var(--tx2)':'var(--ac)'}}/>
+                  <span style={{fontWeight:700,color:inactiva?'var(--tx2)':'var(--tx)'}}>{c.nombre}</span>
+                  {inactiva&&<span className="chip cr" style={{marginLeft:'auto',fontSize:'.68rem'}}>Inactiva</span>}
                 </button>
-              ))}
+              )})}
               {casetas.length===0&&<div style={{color:'var(--tx2)',fontSize:'.85rem'}}>No hay casetas configuradas.</div>}
             </div>
             <button className="btn-s" onClick={()=>setShowVentaPicker(false)}>Cancelar</button>
@@ -2276,6 +2558,9 @@ export default function AdminPanel({ perfil, casetas: casetasInit, onModoVenta }
         {tab==='dashboard'   && <Dashboard casetas={casetas}/>}
         {tab==='ventas'      && <PanelVentas casetas={casetas} onVerDia={irATickets}/>}
         {tab==='tickets'     && <PanelTickets casetas={casetas} filtroInicial={ticketFiltro}/>}
+        {tab==='auditoria'   && <PanelAuditoria casetas={casetas}/>}
+        {tab==='devoluciones'&& <PanelDevoluciones casetas={casetas}/>}
+        {tab==='defectuosos' && <PanelDefectuosos casetas={casetas}/>}
         {tab==='pedidos'     && <PanelPedidos casetas={casetas} onPedidoAceptado={()=>setPedidosPend(n=>Math.max(0,n-1))}/>}
         {tab==='inventarios' && <PanelInventarios casetas={casetas}/>}
         {tab==='fichajes'     && <PanelFichajes casetas={casetas} adminId={perfil.id}/>}

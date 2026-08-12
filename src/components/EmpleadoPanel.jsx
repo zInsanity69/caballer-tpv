@@ -5,16 +5,19 @@ import Logo from './Logo.jsx'
 import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
-  getResumenCaja, getRetiradas, registrarRetirada, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
+  getResumenCaja, getRetiradas, registrarRetirada, getDevolucionesEfectivoCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
   getFavoritos, toggleFavorito,
-  getPedidos, crearPedido, confirmarRecepcionPedido, getStockMinimos,
+  getPedidos, crearPedido, confirmarRecepcionPedido, recibirItemPedido, getStockMinimos,
   crearInventario, getInventarios, confirmarInventario,
   getLimitePolvora, getNECDetalle,
   getUltimoFichaje, fichar, getFichajesEmpleado, calcularTurnos, calcularEstado, fmtDuracion,
   getEmpleadosActivosCaseta, obtenerUbicacion, verificarUbicacion,
   guardarFacturaCliente,
+  registrarDevolucion, getTicketPorNumero, ajustarStockAuditado,
 } from '../lib/api.js'
-import { calcularPrecio, calcularTotalTicket, detectarOfertasCombinadas, fmt } from '../lib/precios.js'
+import ModalEditTicket from './ModalEditTicket.jsx'
+import ModalClose from './ModalClose.jsx'
+import { calcularPrecio, calcularTotalTicket, vecesAplicables, fmt } from '../lib/precios.js'
 import { evaluarNEC, MAX_NEC_COMPRADOR } from '../lib/nec.js'
 import Scanner from './Scanner.jsx'
 import ThemeToggle from './ThemeToggle.jsx'
@@ -255,48 +258,119 @@ function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong,
   )
 }
 
+// ─── TARJETA OFERTA PACK ─────────────────────────────────────
+// Tap → toggle (añade el pack o lo retira si ya está). Mantener pulsado →
+// abre el modal de cantidad para añadir varias de golpe.
+function TarjetaOfertaPack({ oferta, prod, stockDisp, qtyEnTicket, onTap, onLong }) {
+  const sinStock = stockDisp < oferta.cantidad_pack
+  const yaAnadida = qtyEnTicket >= oferta.cantidad_pack
+  const lp = useLongPress(onTap, onLong)
+  return (
+    <div
+      {...lp}
+      style={{
+        background: yaAnadida ? 'rgba(var(--green-rgb),.1)' : sinStock ? 'var(--s2)' : 'rgba(var(--gold-rgb),.08)',
+        border: `1px solid ${yaAnadida ? 'rgba(var(--green-rgb),.5)' : sinStock ? 'var(--bd)' : 'rgba(var(--gold-rgb),.35)'}`,
+        borderRadius: 'var(--rs)', padding: '13px 14px', cursor: sinStock ? 'not-allowed' : 'pointer',
+        opacity: sinStock ? .5 : 1, textAlign: 'left', userSelect: 'none', touchAction: 'pan-y',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--tx)', fontSize: '.95rem' }}>
+          <i className="fi fi-rr-box" style={{ color: 'var(--gold)' }}/> {prod.nombre}
+          {yaAnadida && <span style={{ marginLeft: 6, fontSize: '.62rem', color: 'var(--green)', fontWeight: 700 }}>✓ en ticket</span>}
+        </span>
+        <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(oferta.precio_pack)}</span>
+      </div>
+      <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
+        {oferta.etiqueta || oferta.nombre} · {oferta.cantidad_pack} uds · Stock: {stockDisp}
+      </div>
+    </div>
+  )
+}
+
+// Oferta combinada en la pestaña Ofertas. Tap → toggle. Mantener pulsado →
+// modal para añadir varias combinaciones de golpe.
+function TarjetaOfertaComb({ oferta, productos, sinStock, yaAnadida, onTap, onLong }) {
+  const reqs = oferta.productos_requeridos || []
+  const bloqueada = sinStock && !yaAnadida
+  const lp = useLongPress(onTap, onLong)
+  return (
+    <div
+      {...lp}
+      style={{
+        background: yaAnadida ? 'rgba(var(--green-rgb),.1)' : bloqueada ? 'var(--s2)' : 'rgba(var(--blue-rgb),.1)',
+        border: `1px solid ${yaAnadida ? 'rgba(var(--green-rgb),.5)' : bloqueada ? 'var(--bd)' : 'rgba(var(--blue-rgb),.4)'}`,
+        borderRadius: 'var(--rs)', padding: '13px 14px', cursor: bloqueada ? 'not-allowed' : 'pointer',
+        opacity: bloqueada ? .5 : 1, textAlign: 'left', userSelect: 'none', touchAction: 'pan-y',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ fontWeight: 700, color: bloqueada ? 'var(--tx2)' : 'var(--blue)', fontSize: '.95rem' }}>
+          <i className="fi fi-rr-gift" style={{ color: 'var(--blue)' }}/> {oferta.etiqueta || oferta.nombre}
+          {yaAnadida && <span style={{ marginLeft: 6, fontSize: '.62rem', color: 'var(--green)', fontWeight: 700 }}>✓ en ticket</span>}
+        </span>
+        <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(oferta.precio_pack)}</span>
+      </div>
+      <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
+        {reqs.map(r => `${r.cantidad}× ${r.nombre || productos.find(p => p.id === r.producto_id)?.nombre || '?'}`).join(' + ')}
+      </div>
+    </div>
+  )
+}
+
 // ─── MODAL CANTIDAD ──────────────────────────────────────────
-function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
-  const [qty, setQty] = useState(1)
+// Si `packSize > 1` (abierto desde una oferta) el número elegido son PACKS:
+// se añaden qty × packSize unidades y el precio aplica la oferta.
+function ModalCantidad({ producto, stockDisp, ofertas, initialQty = 1, packSize = 1, etiquetaOferta, onConfirm, onClose }) {
+  const esPack = packSize > 1
+  const maxSel = esPack ? Math.floor(stockDisp / packSize) : stockDisp
+  const [qty, setQty] = useState(Math.max(1, Math.min(initialQty, maxSel || 1)))
   const [regalo, setRegalo] = useState(false)
   const inputRef = useRef(null)
   useEffect(() => { setTimeout(() => inputRef.current?.select(), 50) }, [])
-  const { total, desglose } = calcularPrecio(producto.id, qty, producto.precio, ofertas)
+  const unidades = qty * packSize
+  const { total, desglose } = calcularPrecio(producto.id, unidades, producto.precio, ofertas)
   const hayOferta = !!desglose
+  const clamp = n => Math.max(1, Math.min(maxSel || 1, n))
+  const presets = esPack ? [1, 2, 3, 4, 5, 6, 8, 10] : [1, 2, 3, 4, 5, 6, 8, 10, 15, 20]
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc">
-        <div className="mt-modal">Añadir al ticket</div>
+        <ModalClose onClose={onClose} />
+        <div className="mt-modal">{esPack ? 'Añadir oferta' : 'Añadir al ticket'}</div>
         <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: 4 }}>{producto.nombre}</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 16 }}>
-          {fmt(producto.precio)}/u. · Stock: {stockDisp}
+          {esPack
+            ? <><i className="fi fi-rr-box" style={{ color: 'var(--gold)' }}/> {etiquetaOferta ? `${etiquetaOferta} · ` : ''}{packSize} uds/oferta · Stock: {stockDisp}</>
+            : <>{fmt(producto.precio)}/u. · Stock: {stockDisp}</>}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 6, marginBottom: 12 }}>
-          {[1, 2, 3, 4, 5, 6, 8, 10, 15, 20].map(n => (
-            <button key={n} onClick={() => setQty(n)} disabled={n > stockDisp} style={{
+          {presets.map(n => (
+            <button key={n} onClick={() => setQty(n)} disabled={n > maxSel} style={{
               padding: '8px 4px', borderRadius: 'var(--rs)',
               background: qty === n ? 'var(--ac)' : 'var(--s2)',
               border: '1px solid', borderColor: qty === n ? 'var(--ac)' : 'var(--bd)',
               color: qty === n ? 'white' : 'var(--tx)', fontWeight: 700,
-              cursor: n > stockDisp ? 'not-allowed' : 'pointer',
-              opacity: n > stockDisp ? 0.3 : 1,
+              cursor: n > maxSel ? 'not-allowed' : 'pointer',
+              opacity: n > maxSel ? 0.3 : 1,
               fontSize: '.9rem', fontFamily: "'DM Sans',sans-serif",
             }}>{n}</button>
           ))}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
-          <input ref={inputRef} type="number" min="1" max={stockDisp} value={qty}
-            onChange={e => setQty(Math.max(1, Math.min(stockDisp, parseInt(e.target.value) || 1)))}
+          <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => clamp(q - 1))}>−</button>
+          <input ref={inputRef} type="number" min="1" max={maxSel} value={qty}
+            onChange={e => setQty(clamp(parseInt(e.target.value) || 1))}
             onFocus={e => e.target.select()}
-            onKeyDown={e => e.key === 'Enter' && onConfirm(qty)}
+            onKeyDown={e => e.key === 'Enter' && onConfirm(unidades)}
             style={{ flex: 1, background: 'var(--s2)', border: '2px solid var(--ac)', borderRadius: 'var(--rs)', padding: '10px', color: 'var(--tx)', fontSize: '1.4rem', fontWeight: 700, textAlign: 'center', outline: 'none', fontFamily: "'DM Sans',sans-serif" }}
             inputMode="numeric" />
-          <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => Math.min(stockDisp, q + 1))}>+</button>
+          <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => clamp(q + 1))}>+</button>
         </div>
         <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.82rem' }}>
-            <span style={{ color: 'var(--tx2)' }}>{qty} × {fmt(producto.precio)}</span>
+            <span style={{ color: 'var(--tx2)' }}>{esPack ? `${qty} oferta${qty !== 1 ? 's' : ''} = ${unidades} uds` : `${qty} × ${fmt(producto.precio)}`}</span>
             {hayOferta
               ? <span style={{ color: 'var(--green)', fontWeight: 700 }}>Con oferta: {fmt(total)}</span>
               : <span style={{ fontWeight: 700 }}>{fmt(total)}</span>}
@@ -309,8 +383,78 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
           </div>
           <span style={{ fontSize: '.82rem', color: regalo ? 'var(--green)' : 'var(--tx2)', fontWeight: 600 }}><i className="fi fi-rr-gift"/> Añadir como regalo (gratis)</span>
         </div>
-        <button className="btn-p" onClick={() => onConfirm(qty, regalo)}>
-          {regalo ? `Regalar ${qty} unidad${qty !== 1 ? 'es' : ''}` : `Añadir ${qty} unidad${qty !== 1 ? 'es' : ''} · ${fmt(total)}`}
+        <button className="btn-p" disabled={maxSel < 1} onClick={() => onConfirm(unidades, regalo)}>
+          {regalo
+            ? `Regalar ${unidades} unidad${unidades !== 1 ? 'es' : ''}`
+            : esPack
+              ? `Añadir ${qty} oferta${qty !== 1 ? 's' : ''} (${unidades} uds) · ${fmt(total)}`
+              : `Añadir ${qty} unidad${qty !== 1 ? 'es' : ''} · ${fmt(total)}`}
+        </button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── MODAL CANTIDAD OFERTA COMBINADA ─────────────────────────
+// Pregunta cuántas combinaciones añadir. Cada combinación añade
+// r.cantidad uds de cada producto requerido y suma precio_pack al total.
+function ModalCantidadComb({ oferta, productos, stock, ticket, onConfirm, onClose }) {
+  const reqs = oferta.productos_requeridos || []
+  const disp = id => {
+    const enTicket = ticket.filter(i => i.id === id).reduce((s, i) => s + i.cantidad, 0)
+    return Math.max(0, (stock[id] ?? 0) - enTicket)
+  }
+  const maxSel = reqs.length ? Math.min(...reqs.map(r => Math.floor(disp(r.producto_id) / r.cantidad))) : 0
+  const [qty, setQty] = useState(1)
+  const clamp = n => Math.max(1, Math.min(maxSel || 1, n))
+  const total = oferta.precio_pack * qty
+  const presets = [1, 2, 3, 4, 5, 6, 8, 10]
+  return (
+    <div className="mo">
+      <div className="mc">
+        <ModalClose onClose={onClose} />
+        <div className="mt-modal">Añadir oferta</div>
+        <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: 4 }}>
+          <i className="fi fi-rr-gift" style={{ color: 'var(--blue)' }}/> {oferta.etiqueta || oferta.nombre}
+        </div>
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 16 }}>
+          {reqs.map(r => `${r.cantidad}× ${r.nombre || productos.find(p => p.id === r.producto_id)?.nombre || '?'}`).join(' + ')} · {fmt(oferta.precio_pack)}/oferta
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 6, marginBottom: 12 }}>
+          {presets.map(n => (
+            <button key={n} onClick={() => setQty(n)} disabled={n > maxSel} style={{
+              padding: '8px 4px', borderRadius: 'var(--rs)',
+              background: qty === n ? 'var(--ac)' : 'var(--s2)',
+              border: '1px solid', borderColor: qty === n ? 'var(--ac)' : 'var(--bd)',
+              color: qty === n ? 'white' : 'var(--tx)', fontWeight: 700,
+              cursor: n > maxSel ? 'not-allowed' : 'pointer', opacity: n > maxSel ? 0.3 : 1,
+              fontSize: '.9rem', fontFamily: "'DM Sans',sans-serif",
+            }}>{n}</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => clamp(q - 1))}>−</button>
+          <input type="number" min="1" max={maxSel} value={qty}
+            onChange={e => setQty(clamp(parseInt(e.target.value) || 1))}
+            onFocus={e => e.target.select()}
+            onKeyDown={e => e.key === 'Enter' && maxSel >= 1 && onConfirm(qty)}
+            style={{ flex: 1, background: 'var(--s2)', border: '2px solid var(--ac)', borderRadius: 'var(--rs)', padding: '10px', color: 'var(--tx)', fontSize: '1.4rem', fontWeight: 700, textAlign: 'center', outline: 'none', fontFamily: "'DM Sans',sans-serif" }}
+            inputMode="numeric" />
+          <button className="qb" style={{ width: 38, height: 38 }} onClick={() => setQty(q => clamp(q + 1))}>+</button>
+        </div>
+        <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 14 }}>
+          <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 4 }}>
+            {qty} oferta{qty !== 1 ? 's' : ''} ={' '}
+            {reqs.map(r => `${r.cantidad * qty}× ${r.nombre || productos.find(p => p.id === r.producto_id)?.nombre || '?'}`).join(' + ')}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.82rem' }}>
+            <span style={{ color: 'var(--tx2)' }}>Total oferta</span>
+            <span style={{ color: 'var(--green)', fontWeight: 700 }}>{fmt(total)}</span>
+          </div>
+        </div>
+        <button className="btn-p" disabled={maxSel < 1} onClick={() => onConfirm(qty)}>
+          {maxSel < 1 ? 'Stock insuficiente' : `Añadir ${qty} oferta${qty !== 1 ? 's' : ''} · ${fmt(total)}`}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
@@ -319,18 +463,25 @@ function ModalCantidad({ producto, stockDisp, ofertas, onConfirm, onClose }) {
 }
 
 // ─── MODAL PAGO ──────────────────────────────────────────────
-function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, noImprimir, onToggleNoImprimir }) {
+function ModalPago({ total, onConfirm, onClose }) {
   const [metodo, setMetodo]     = useState('')
   const [recibido, setRecibido] = useState('')
   const [loading, setLoading]   = useState(false)
   const [cliente, setCliente]   = useState(null)   // datos de factura capturados antes de cobrar
   const [showFact, setShowFact] = useState(false)
-  const cambio = metodo === 'efectivo' ? Math.max(0, (parseFloat(recibido) || 0) - total) : 0
-  const puedeConfirmar = metodo && (metodo === 'tarjeta' || (parseFloat(recibido) || 0) >= total)
+  const recibidoNum  = parseFloat(recibido) || 0
+  const cambio       = metodo === 'efectivo' ? Math.max(0, recibidoNum - total) : 0
+  const tarjetaMixto = metodo === 'mixto' ? Math.max(0, +(total - recibidoNum).toFixed(2)) : 0
+  const puedeConfirmar = !!metodo && (
+    metodo === 'tarjeta' ||
+    (metodo === 'efectivo' && recibidoNum >= total) ||
+    (metodo === 'mixto' && recibidoNum > 0 && recibidoNum < total)
+  )
 
   return (
     <div className="mo">
       <div className="mc">
+        <ModalClose onClose={onClose} />
         <div className="mt-modal">Finalizar Venta</div>
         <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '2.8rem', color: 'var(--ac)', marginBottom: 16 }}>{fmt(total)}</div>
         <div className="mg2">
@@ -339,6 +490,9 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
           </div>
           <div className={`mb ${metodo === 'tarjeta' ? 'on' : ''}`} onClick={() => setMetodo('tarjeta')}>
             <div className="mi2"><i className="fi fi-rr-credit-card"/></div><div className="ml">Tarjeta</div>
+          </div>
+          <div className={`mb ${metodo === 'mixto' ? 'on' : ''}`} style={{ gridColumn: '1 / -1' }} onClick={() => { setMetodo('mixto'); setRecibido('') }}>
+            <div className="mi2"><i className="fi fi-rr-coins"/><i className="fi fi-rr-credit-card" style={{ marginLeft: 4 }}/></div><div className="ml">Mixto (efectivo + tarjeta)</div>
           </div>
         </div>
         {metodo === 'efectivo' && (
@@ -355,26 +509,20 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
             </div>
           </>
         )}
-        {/* Toggle modo rápido */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
-          <div onClick={onToggleModoRapido} style={{
-            width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all .2s',
-            background: modoRapido ? 'var(--green)' : 'var(--s3)', position: 'relative', flexShrink: 0,
-          }}>
-            <div style={{ position: 'absolute', top: 3, left: modoRapido ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
-          </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-bolt"/> Venta rápida — imprime el ticket y sigue</span>
-        </div>
-        {/* Toggle no imprimir tickets */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', marginBottom: 4 }}>
-          <div onClick={onToggleNoImprimir} style={{
-            width: 40, height: 22, borderRadius: 11, cursor: 'pointer', transition: 'all .2s',
-            background: noImprimir ? 'var(--red)' : 'var(--s3)', position: 'relative', flexShrink: 0,
-          }}>
-            <div style={{ position: 'absolute', top: 3, left: noImprimir ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
-          </div>
-          <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}><i className="fi fi-rr-ban"/> No imprimir tickets (sin papel)</span>
-        </div>
+        {metodo === 'mixto' && (
+          <>
+            <div className="fg">
+              <label>Efectivo (el resto va a tarjeta)</label>
+              <input type="number" className="bi" style={{ fontSize: '1.5rem', marginBottom: 0 }}
+                value={recibido} onChange={e => setRecibido(e.target.value)}
+                placeholder="0,00" autoFocus min={0} max={total} step=".5" inputMode="decimal" />
+            </div>
+            <div className="cbox">
+              <div className="clbl"><i className="fi fi-rr-credit-card"/> A tarjeta</div>
+              <div className="camt">{fmt(tarjetaMixto)}</div>
+            </div>
+          </>
+        )}
         {/* Factura: capturar datos del cliente antes de cobrar */}
         {cliente ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 6, borderRadius: 'var(--rs)', background: 'rgba(var(--sec-rgb),.12)', border: '1px solid var(--sec)' }}>
@@ -389,7 +537,10 @@ function ModalPago({ total, onConfirm, onClose, modoRapido, onToggleModoRapido, 
         )}
         <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={async () => {
           setLoading(true)
-          await onConfirm({ metodo, dineroDado: parseFloat(recibido) || total, cambio, cliente })
+          const pagoEfectivo = metodo === 'efectivo' ? total : metodo === 'tarjeta' ? 0 : recibidoNum
+          const pagoTarjeta  = metodo === 'efectivo' ? 0 : metodo === 'tarjeta' ? total : tarjetaMixto
+          const dineroDado   = metodo === 'efectivo' ? (recibidoNum || total) : metodo === 'mixto' ? recibidoNum : 0
+          await onConfirm({ metodo, pagoEfectivo, pagoTarjeta, dineroDado, cambio, cliente })
           setLoading(false)
         }}>
           {loading ? 'Procesando...' : cliente ? '✓ Confirmar y facturar' : '✓ Confirmar Venta'}
@@ -412,20 +563,22 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
   const [loading,   setLoading]   = useState(false)
   const [retiradas, setRetiradas] = useState([])
   const [ventas,    setVentas]    = useState([])
+  const [devolucionesEf, setDevolucionesEf] = useState(0)
 
   useEffect(() => {
     Promise.all([
       getRetiradas(caja.id).catch(() => []),
       getResumenCaja(caja.id).catch(() => []),
-    ]).then(([r, v]) => { setRetiradas(r); setVentas(v) })
+      getDevolucionesEfectivoCaja(caja.id).catch(() => 0),
+    ]).then(([r, v, d]) => { setRetiradas(r); setVentas(v); setDevolucionesEf(d) })
   }, [caja.id])
 
   const MIN_RETIRADA = 100  // mínimo por retirada
   const apertura         = caja.apertura_dinero || 0
   const totalRetiradas   = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
-  const ventasEfectivo   = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + (v.total || 0), 0)
-  // Saldo real = apertura + ventas efectivo − retiradas anteriores
-  const saldoActual      = apertura + ventasEfectivo - totalRetiradas
+  const ventasEfectivo   = ventas.reduce((s, v) => s + (v.pago_efectivo ?? (v.metodo_pago === 'efectivo' ? v.total : 0)), 0)
+  // Saldo real = apertura + ventas efectivo − retiradas − devoluciones en efectivo
+  const saldoActual      = apertura + ventasEfectivo - totalRetiradas - devolucionesEf
   // Máximo retirable = lo que hay por encima de la apertura (la apertura siempre debe quedar)
   const maxRetirable     = saldoActual - apertura
   const imp              = parseFloat(cantidad) || 0
@@ -449,8 +602,9 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
   }
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc">
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-coins"/> Retirada de Caja</div>
 
         {/* Saldo disponible */}
@@ -530,15 +684,17 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
   const [contado,   setContado]   = useState('')
   const [loading,   setLoading]   = useState(false)
   const [retiradas, setRetiradas] = useState([])
+  const [devolucionesEf, setDevolucionesEf] = useState(0)
 
   useEffect(() => {
     getRetiradas(caja.id).then(setRetiradas).catch(() => {})
+    getDevolucionesEfectivoCaja(caja.id).then(setDevolucionesEf).catch(() => {})
   }, [caja.id])
 
-  const totalEfectivo  = ventas.filter(v => v.metodo_pago === 'efectivo').reduce((s, v) => s + v.total, 0)
-  const totalTarjeta   = ventas.filter(v => v.metodo_pago === 'tarjeta').reduce((s, v) => s + v.total, 0)
+  const totalEfectivo  = ventas.reduce((s, v) => s + (v.pago_efectivo ?? (v.metodo_pago === 'efectivo' ? v.total : 0)), 0)
+  const totalTarjeta   = ventas.reduce((s, v) => s + (v.pago_tarjeta ?? (v.metodo_pago === 'tarjeta' ? v.total : 0)), 0)
   const totalRetiradas = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
-  const esperado       = (caja.apertura_dinero || 0) + totalEfectivo - totalRetiradas
+  const esperado       = (caja.apertura_dinero || 0) + totalEfectivo - totalRetiradas - devolucionesEf
   const diferencia     = (parseFloat(contado) || 0) - esperado
 
   const filas = [
@@ -547,11 +703,13 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
     ['Ventas tarjeta',  fmt(totalTarjeta),               'var(--blue)'],
     ['Total tickets',   String(ventas.length),           'var(--tx)'],
     ...(totalRetiradas > 0 ? [['Retiradas de caja', `−${fmt(totalRetiradas)}`, 'var(--gold)']] : []),
+    ...(devolucionesEf > 0 ? [['Devoluciones efectivo', `−${fmt(devolucionesEf)}`, 'var(--red)']] : []),
   ]
 
   return (
     <div className="mo">
       <div className="mc wide">
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-lock"/> Cierre de Caja</div>
         <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 13, marginBottom: 16, fontSize: '.83rem' }}>
           {filas.map(([l, v, c]) => (
@@ -595,10 +753,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
   const [loading, setLoading]           = useState(true)
   const [expanded, setExpanded]         = useState(null)
   const [editando, setEditando]         = useState(null)
-  const [editItems, setEditItems]       = useState([])
-  const [editBusq, setEditBusq]         = useState('')
   const [busq, setBusq]                 = useState('')
-  const [saving, setSaving]             = useState(false)
   const [incidenciaTicket, setIncidenciaTicket] = useState(null)
   const [notaIncidencia, setNotaIncidencia]     = useState('')
   const [guardandoNota, setGuardandoNota]       = useState(false)
@@ -619,10 +774,15 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
     setFacturaT(null)
   }
 
+  // Normaliza a solo alfanumérico: así el nº escaneado (p.ej. ALZ'00003 por el
+  // teclado del escáner) casa con el guardado (ALZ-00003).
+  const normNum = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
   const ticketsFiltrados = tickets.filter(t => {
     if (!busq) return true
     const b = busq.toLowerCase()
+    const nb = normNum(busq)
     return (
+      (nb && normNum(t.numero_ticket).includes(nb)) ||
       t.perfiles?.nombre?.toLowerCase().includes(b) ||
       fmt(t.total).includes(b) ||
       t.ticket_items?.some(i => i.nombre_producto?.toLowerCase().includes(b)) ||
@@ -632,64 +792,24 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
 
   const eliminar = async (id) => {
     if (!window.confirm('¿Eliminar este ticket? El stock se restaurará automáticamente.')) return
-    await deleteTicket(id)
-    setTickets(prev => prev.filter(t => t.id !== id))
-  }
-
-  const abrirEdicion = (t) => {
-    setEditando(t)
-    setEditItems(t.ticket_items.map(i => ({
-      producto_id:    i.producto_id,
-      nombre:         i.nombre_producto,
-      precio:         i.precio_unitario,
-      cantidad:       i.cantidad,
-      total_linea:    i.total_linea,
-      con_oferta:     i.con_oferta || false,
-    })))
-  }
-
-  const guardarEdicion = async () => {
-    setSaving(true)
     try {
-      const ticketParaCalculo = editItems.map(i => ({ id: i.producto_id, cantidad: i.cantidad, precio: i.precio }))
-      const nuevoTotal = calcularTotalTicket(ticketParaCalculo, ofertas)
-      await updateTicket(editando.id, nuevoTotal, editItems)
-
-      setTickets(prev => prev.map(t => t.id === editando.id
-        ? { ...t, total: nuevoTotal, ticket_items: editItems.map(i => ({ ...i, nombre_producto: i.nombre, precio_unitario: i.precio })) }
-        : t))
-      setEditando(null)
-    } catch (e) { alert('Error guardando: ' + e.message) }
-    setSaving(false)
+      await deleteTicket(id)
+      setTickets(prev => prev.filter(t => t.id !== id))
+    } catch (e) {
+      alert(e.message || 'No se pudo eliminar el ticket.')
+    }
   }
 
-  const recalcItem = (item, nq) => {
-    const { total } = calcularPrecio(item.producto_id, nq, item.precio, ofertas)
-    return { ...item, cantidad: nq, total_linea: total, con_oferta: total < +(nq * item.precio).toFixed(2) }
-  }
+  const puedeBorrar = perfil?.es_encargado === true || perfil?.rol === 'ADMIN'
 
-  const editQty = (idx, delta) => {
-    setEditItems(prev => prev.map((item, i) => i !== idx ? item : recalcItem(item, Math.max(1, item.cantidad + delta))))
-  }
+  const abrirEdicion = (t) => setEditando(t)
 
-  const editDel = (idx) => setEditItems(prev => prev.filter((_, i) => i !== idx))
-
-  // Añadir un producto existente al ticket en edición
-  const editAddProd = (prod) => {
-    setEditItems(prev => {
-      const idx = prev.findIndex(i => i.producto_id === prod.id)
-      if (idx >= 0) {
-        const it = prev[idx]
-        return prev.map((x, i) => i !== idx ? x : recalcItem(x, it.cantidad + 1))
-      }
-      const { total } = calcularPrecio(prod.id, 1, prod.precio, ofertas)
-      return [...prev, {
-        producto_id: prod.id, nombre: prod.nombre,
-        precio: prod.precio, cantidad: 1,
-        total_linea: total, con_oferta: false,
-      }]
-    })
-    setEditBusq('')
+  // Guardar la edición (reutiliza el modal del admin). Actualiza la lista local.
+  const guardarEdicionTicket = async (ticketId, nuevoTotal, items) => {
+    await updateTicket(ticketId, nuevoTotal, items)
+    setTickets(prev => prev.map(t => t.id === ticketId
+      ? { ...t, total: nuevoTotal, ticket_items: items.map(i => ({ ...i, nombre_producto: i.nombre, precio_unitario: i.precio })) }
+      : t))
   }
 
   const guardarIncidencia = async () => {
@@ -709,13 +829,14 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
   const totalTurno = tickets.reduce((s, t) => s + t.total, 0)
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-receipt"/> Tickets del turno</div>
 
-        {/* Buscador */}
-        <input className="si" placeholder="Buscar por empleado, producto, importe..."
-          value={busq} onChange={e => setBusq(e.target.value)}
+        {/* Buscador — escanea el ticket o escribe nº, empleado, producto, importe */}
+        <input className="si" placeholder="Escanea el ticket o busca por nº, empleado, producto..."
+          value={busq} onChange={e => setBusq(e.target.value)} autoFocus
           style={{ marginBottom: 10 }} />
 
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
@@ -730,28 +851,36 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
                 ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30 }}>Sin resultados</div>
                 : ticketsFiltrados.map(t => (
                   <div key={t.id} style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 13px', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>
                           {t.numero_ticket && <span style={{ color: 'var(--ac)', fontWeight: 700, marginRight: 4 }}>{t.numero_ticket}</span>}
                           {t.factura && <span style={{ fontSize: '.6rem', background: 'rgba(var(--sec-rgb),.15)', color: 'var(--sec)', border: '1px solid var(--sec)', borderRadius: 6, padding: '0 5px', fontWeight: 700, marginRight: 4 }}>FACTURA</span>}
                           {new Date(t.creado_en).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                           {' · '}{t.perfiles?.nombre}
-                          {' · '}{t.metodo_pago === 'efectivo' ? <><i className="fi fi-rr-coins"/></> : <><i className="fi fi-rr-credit-card"/></>}
+                          {' · '}{t.metodo_pago === 'efectivo' ? <i className="fi fi-rr-coins"/> : t.metodo_pago === 'tarjeta' ? <i className="fi fi-rr-credit-card"/> : <><i className="fi fi-rr-coins"/><i className="fi fi-rr-credit-card" style={{ marginLeft: 3 }}/></>}
                         </div>
                         <div style={{ fontWeight: 700, color: 'var(--ac)', fontSize: '1rem' }}>{fmt(t.total)}</div>
                       </div>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       <button className="btn-o" style={{ fontSize: '.7rem' }} onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
                         {expanded === t.id ? 'Ocultar' : 'Ver'}
                       </button>
-                      <button className="btn-o" style={{ fontSize: '.7rem' }}
+                      <button className="btn-o" style={{ fontSize: '.7rem' }} title="Imprimir"
                         onClick={() => imprimirTicket(ticketRowToDatos(t, { caseta, productos }))}><i className="fi fi-rr-print"/></button>
                       <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--sec)', color: 'var(--sec)' }}
                         title="Hacer factura" onClick={() => setFacturaT(t)}><i className="fi fi-rr-file-invoice"/></button>
                       <button className="btn-o" style={{ fontSize: '.7rem', borderColor: t.notas ? 'var(--red)' : 'var(--gold)', color: t.notas ? 'var(--red)' : 'var(--gold)' }}
                         onClick={() => { setIncidenciaTicket(t); setNotaIncidencia(t.notas || '') }}>
-                        {t.notas ? <i className="fi fi-rr-triangle-warning"/> : '+ Incidencia'}
+                        {t.notas ? <><i className="fi fi-rr-triangle-warning"/> Incidencia</> : '+ Incidencia'}
                       </button>
+                      <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--ac)', color: 'var(--ac)' }}
+                        title="Editar ticket" onClick={() => abrirEdicion(t)}><i className="fi fi-rr-pencil"/> Editar</button>
+                      {puedeBorrar && (
+                        <button className="btn-o" style={{ fontSize: '.7rem', borderColor: 'var(--red)', color: 'var(--red)' }}
+                          title="Eliminar ticket" onClick={() => eliminar(t.id)}><i className="fi fi-rr-trash"/> Eliminar</button>
+                      )}
                     </div>
                     {t.notas && (
                       <div style={{ marginTop: 6, fontSize: '.75rem', color: 'var(--red)', background: 'rgba(var(--red-rgb),.08)', borderRadius: 'var(--rs)', padding: '4px 8px' }}>
@@ -784,8 +913,9 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
 
       {/* Modal incidencia */}
       {incidenciaTicket && (
-        <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setIncidenciaTicket(null)}>
+        <div className="mo" style={{ zIndex: 999 }}>
           <div className="mc">
+            <ModalClose onClose={() => setIncidenciaTicket(null)} />
             <div className="mt-modal"><i className="fi fi-rr-triangle-warning"/> Incidencia en ticket</div>
             <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 12 }}>
               {incidenciaTicket.numero_ticket} · {fmt(incidenciaTicket.total)}
@@ -804,74 +934,421 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
         </div>
       )}
 
-      {/* Modal edición ticket */}
+      {/* Modal edición ticket — reutiliza el del admin */}
       {editando && (
-        <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setEditando(null)}>
-          <div className="mc wide" style={{ maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-            <div className="mt-modal"><i className="fi fi-rr-pencil"/> Editar Ticket</div>
-            <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 12 }}>
-              {new Date(editando.creado_en).toLocaleString('es-ES')} · {editando.perfiles?.nombre}
+        <ModalEditTicket ticket={editando} onClose={() => setEditando(null)} onSave={guardarEdicionTicket} />
+      )}
+    </div>
+  )
+}
+
+// ─── BUSCADOR DE PRODUCTOS (reutilizable en devoluciones/bajas) ─
+function ProductoBuscador({ productos, stock = {}, onPick, placeholder = 'Buscar o escanear EAN...', autoFocus = false }) {
+  const [q, setQ] = useState('')
+  const term = q.trim()
+  const res = term.length >= 1
+    ? productos.filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()) || p.codigo_ean?.includes(term)).slice(0, 8)
+    : []
+  // Escaneo con pistola: al pulsar Enter, si el código coincide EXACTO con un
+  // único producto por EAN se añade solo; si hay varios con ese mismo EAN se
+  // deja la lista abierta para elegir a mano.
+  const onScan = () => {
+    if (!term) return
+    const exactos = productos.filter(p => p.codigo_ean === term)
+    if (exactos.length === 1) { onPick(exactos[0]); setQ('') }
+    else if (res.length === 1) { onPick(res[0]); setQ('') }
+  }
+  return (
+    <div style={{ position: 'relative', marginBottom: 8 }}>
+      <input className="si" style={{ width: '100%' }} placeholder={placeholder} value={q} autoFocus={autoFocus}
+        onChange={e => setQ(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onScan() } }} />
+      {res.length > 0 && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', maxHeight: 210, overflowY: 'auto' }}>
+          {res.map(p => (
+            <div key={p.id} onClick={() => { onPick(p); setQ('') }}
+              style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '.83rem', borderBottom: '1px solid var(--bd)', display: 'flex', justifyContent: 'space-between', gap: 8 }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <span>{p.nombre}</span>
+              <span style={{ color: 'var(--tx2)', flexShrink: 0 }}>stock {stock[p.id] ?? 0}</span>
             </div>
-            <div style={{ overflowY: 'auto', flex: 1 }}>
-              {editItems.map((item, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
-                  <div style={{ flex: 1, fontSize: '.85rem' }}>{item.nombre}</div>
-                  <button className="qb" onClick={() => editQty(idx, -1)}>−</button>
-                  <span style={{ minWidth: 26, textAlign: 'center', fontWeight: 700 }}>{item.cantidad}</span>
-                  <button className="qb" onClick={() => editQty(idx, +1)}>+</button>
-                  <span style={{ minWidth: 52, textAlign: 'right', fontSize: '.85rem', color: 'var(--ac)' }}>{fmt(item.total_linea)}</span>
-                  <button onClick={() => editDel(idx)} style={{
-                    width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)',
-                    background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer', fontSize: '.8rem',
-                  }}>✕</button>
-                </div>
-              ))}
-              {/* Buscador para añadir productos al ticket */}
-              <div style={{ position: 'relative', marginBottom: 10, marginTop: 16 }}>
-                <input
-                  className="si"
-                  placeholder="+ Añadir producto al ticket..."
-                  value={editBusq}
-                  onChange={e => setEditBusq(e.target.value)}
-                />
-                {editBusq.length > 1 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', maxHeight: 180, overflowY: 'auto' }}>
-                    {productos
-                      .filter(p => p.nombre.toLowerCase().includes(editBusq.toLowerCase()))
-                      .slice(0, 15)
-                      .map(p => (
-                        <div key={p.id} onClick={() => editAddProd(p)}
-                          style={{ padding: '9px 13px', cursor: 'pointer', fontSize: '.83rem', borderBottom: '1px solid var(--bd)', display: 'flex', justifyContent: 'space-between' }}
-                          onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
-                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                          <span>{p.nombre}</span>
-                          <span style={{ color: 'var(--ac)', fontWeight: 700 }}>{fmt(p.precio)}</span>
-                        </div>
-                      ))
-                    }
-                    {productos.filter(p => p.nombre.toLowerCase().includes(editBusq.toLowerCase())).length === 0 && (
-                      <div style={{ padding: 12, color: 'var(--tx2)', fontSize: '.82rem', textAlign: 'center' }}>Sin resultados</div>
-                    )}
-                  </div>
-                )}
-              </div>
-              {editItems.length === 0 && (
-                <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 20, fontSize: '.85rem' }}>
-                  Sin artículos — el ticket quedará vacío
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, padding: '10px 0', fontSize: '1rem' }}>
-              <span>Nuevo total</span>
-              <span style={{ color: 'var(--ac)' }}>{fmt(editItems.reduce((s, i) => s + i.total_linea, 0))}</span>
-            </div>
-            <button className="btn-p" disabled={saving} onClick={guardarEdicion}>
-              {saving ? 'Guardando...' : '✓ Guardar cambios'}
-            </button>
-            <button className="btn-s" onClick={() => setEditando(null)}>Cancelar</button>
-          </div>
+          ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── MODAL DEVOLUCIÓN / COMPENSACIÓN ──────────────────────────
+function ModalDevolucion({ caseta, perfil, caja, productos, stock, onClose, onDone, showToast }) {
+  const [tipo, setTipo]           = useState('DEVOLUCION') // DEVOLUCION | COMPENSACION
+  const [devueltos, setDevueltos] = useState([])           // lo que trae el cliente
+  const [entregados, setEntregados] = useState([])         // lo que le das (compensación)
+  const [importeManual, setImporteManual] = useState('')
+  const [metodo, setMetodo]       = useState('efectivo')
+  const [numeroTicket, setNumeroTicket] = useState('')
+  const [ticketId, setTicketId]   = useState(null)
+  const [notas, setNotas]         = useState('')
+  const [loading, setLoading]     = useState(false)
+  const [buscandoTicket, setBuscandoTicket] = useState(false)
+
+  const addDevuelto = (p) => setDevueltos(prev => {
+    const i = prev.findIndex(x => x.producto_id === p.id)
+    if (i >= 0) return prev.map((x, j) => j === i ? { ...x, cantidad: x.cantidad + 1 } : x)
+    return [...prev, { producto_id: p.id, nombre: p.nombre, empresa: p.empresa || '', precio: p.precio, cantidad: 1, destino: 'VENDIBLE', causa: 'FABRICA' }]
+  })
+  const addEntregado = (p) => setEntregados(prev => {
+    const i = prev.findIndex(x => x.producto_id === p.id)
+    if (i >= 0) return prev.map((x, j) => j === i ? { ...x, cantidad: x.cantidad + 1 } : x)
+    return [...prev, { producto_id: p.id, nombre: p.nombre, empresa: p.empresa || '', precio: p.precio, cantidad: 1 }]
+  })
+  const chgDev = (idx, campo, val) => setDevueltos(prev => prev.map((x, i) => i === idx ? { ...x, [campo]: val } : x))
+  const chgEnt = (idx, campo, val) => setEntregados(prev => prev.map((x, i) => i === idx ? { ...x, [campo]: val } : x))
+  const delDev = (idx) => setDevueltos(prev => prev.filter((_, i) => i !== idx))
+  const delEnt = (idx) => setEntregados(prev => prev.filter((_, i) => i !== idx))
+
+  const importeAuto = devueltos.reduce((s, x) => s + (x.precio || 0) * x.cantidad, 0)
+  const importe = tipo === 'COMPENSACION' ? 0 : (importeManual !== '' ? (parseFloat(importeManual) || 0) : importeAuto)
+
+  const buscarTicket = async () => {
+    const num = numeroTicket.trim()
+    if (!num) return
+    setBuscandoTicket(true)
+    try {
+      const t = await getTicketPorNumero(caseta.id, num)
+      if (!t) { showToast('Ticket no encontrado', 'error'); setTicketId(null) }
+      else {
+        setTicketId(t.id)
+        if (t.numero_ticket) setNumeroTicket(t.numero_ticket)
+        setDevueltos((t.ticket_items || []).map(it => {
+          const prod = productos.find(p => p.id === it.producto_id)
+          return { producto_id: it.producto_id, nombre: it.nombre_producto, empresa: prod?.empresa || '', precio: it.precio_unitario, cantidad: it.cantidad, destino: 'VENDIBLE', causa: 'FABRICA' }
+        }))
+        showToast('Ticket cargado ✓')
+      }
+    } catch (e) { showToast(e.message, 'error') }
+    setBuscandoTicket(false)
+  }
+
+  const confirmar = async () => {
+    if (devueltos.length === 0 && entregados.length === 0) { showToast('Añade al menos un producto', 'error'); return }
+    if (tipo === 'DEVOLUCION' && importe > 0 && metodo === 'efectivo' && !caja) {
+      showToast('Abre la caja para devolver dinero en efectivo', 'error'); return
+    }
+    const items = [
+      ...devueltos.map(x => ({
+        producto_id: x.producto_id, nombre_producto: x.nombre, empresa: x.empresa, cantidad: x.cantidad,
+        precio_unitario: x.precio,
+        movimiento: x.destino === 'VENDIBLE' ? 'DEVUELTO_VENDIBLE' : 'DEVUELTO_DEFECTUOSO',
+        causa: x.destino === 'DEFECTUOSO' ? x.causa : null,
+      })),
+      ...(tipo === 'COMPENSACION' ? entregados.map(x => ({
+        producto_id: x.producto_id, nombre_producto: x.nombre, empresa: x.empresa, cantidad: x.cantidad,
+        precio_unitario: x.precio, movimiento: 'ENTREGADO', causa: null,
+      })) : []),
+    ]
+    const cab = {
+      caseta_id: caseta.id, caja_id: caja?.id || null, tipo,
+      ticket_id: ticketId, numero_ticket: numeroTicket.trim() || null,
+      importe_reembolsado: importe, metodo, notas: notas.trim() || null,
+    }
+    setLoading(true)
+    try {
+      await registrarDevolucion(cab, items, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
+      // Ajuste local de stock: vendible devuelto suma, entregado resta
+      const delta = {}
+      devueltos.forEach(x => { if (x.destino === 'VENDIBLE') delta[x.producto_id] = (delta[x.producto_id] || 0) + x.cantidad })
+      if (tipo === 'COMPENSACION') entregados.forEach(x => { delta[x.producto_id] = (delta[x.producto_id] || 0) - x.cantidad })
+      onDone && onDone(delta)
+      showToast(tipo === 'COMPENSACION' ? '✓ Compensación registrada' : '✓ Devolución registrada')
+      onClose()
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setLoading(false)
+  }
+
+  return (
+    <div className="mo">
+      <div className="mc wide" style={{ maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={onClose} />
+        <div className="mt-modal"><i className="fi fi-rr-undo"/> Devolución / Compensación</div>
+
+        {/* Tipo */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          {[['DEVOLUCION', 'Devolución (dinero)'], ['COMPENSACION', 'Compensación (0€)']].map(([k, lbl]) => (
+            <button key={k} onClick={() => setTipo(k)} style={{
+              flex: 1, padding: '8px 0', borderRadius: 'var(--rs)', fontWeight: 700, cursor: 'pointer', fontSize: '.8rem',
+              fontFamily: "'DM Sans',sans-serif",
+              background: tipo === k ? 'var(--ac)' : 'var(--s2)',
+              border: `1px solid ${tipo === k ? 'var(--ac)' : 'var(--bd)'}`,
+              color: tipo === k ? '#fff' : 'var(--tx2)',
+            }}>{lbl}</button>
+          ))}
+        </div>
+
+        {/* Nº ticket opcional */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          <input className="si" style={{ flex: 1, marginBottom: 0 }} placeholder="Escanea el ticket o escribe su nº — opcional"
+            value={numeroTicket} onChange={e => setNumeroTicket(e.target.value)} autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') buscarTicket() }} />
+          <button className="btn-o" style={{ flexShrink: 0 }} disabled={buscandoTicket} onClick={buscarTicket}>
+            {buscandoTicket ? '...' : 'Buscar'}
+          </button>
+        </div>
+
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {/* Productos que devuelve el cliente */}
+          <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--tx2)', margin: '4px 0 6px' }}>Producto que devuelve el cliente</div>
+          <ProductoBuscador productos={productos} stock={stock} onPick={addDevuelto} placeholder="Escanea o escribe para añadir producto devuelto..." />
+          {devueltos.map((x, idx) => (
+            <div key={idx} style={{ padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, fontSize: '.83rem', fontWeight: 600 }}>{x.nombre}</div>
+                <button className="qb" onClick={() => chgDev(idx, 'cantidad', Math.max(1, x.cantidad - 1))}>−</button>
+                <span style={{ minWidth: 24, textAlign: 'center', fontWeight: 700 }}>{x.cantidad}</span>
+                <button className="qb" onClick={() => chgDev(idx, 'cantidad', x.cantidad + 1)}>+</button>
+                <button onClick={() => delDev(idx)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)', background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer' }}>✕</button>
+              </div>
+              <div style={{ display: 'flex', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
+                {[['VENDIBLE', 'Vuelve a stock'], ['DEFECTUOSO', 'Defectuoso']].map(([k, lbl]) => (
+                  <button key={k} onClick={() => chgDev(idx, 'destino', k)} style={{
+                    padding: '2px 9px', borderRadius: 12, fontSize: '.68rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                    background: x.destino === k ? (k === 'DEFECTUOSO' ? 'var(--red)' : 'var(--green)') : 'var(--s2)',
+                    border: `1px solid ${x.destino === k ? (k === 'DEFECTUOSO' ? 'var(--red)' : 'var(--green)') : 'var(--bd)'}`,
+                    color: x.destino === k ? '#fff' : 'var(--tx2)',
+                  }}>{lbl}</button>
+                ))}
+                {x.destino === 'DEFECTUOSO' && [['FABRICA', 'Defecto fábrica'], ['PROPIA', 'Rotura nuestra']].map(([k, lbl]) => (
+                  <button key={k} onClick={() => chgDev(idx, 'causa', k)} style={{
+                    padding: '2px 9px', borderRadius: 12, fontSize: '.68rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                    background: x.causa === k ? 'var(--gold)' : 'var(--s2)',
+                    border: `1px solid ${x.causa === k ? 'var(--gold)' : 'var(--bd)'}`,
+                    color: x.causa === k ? '#000' : 'var(--tx2)',
+                  }}>{lbl}</button>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* Productos que entregas (solo compensación) */}
+          {tipo === 'COMPENSACION' && (
+            <>
+              <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--tx2)', margin: '12px 0 6px' }}>Producto que entregas (gratis)</div>
+              <ProductoBuscador productos={productos} stock={stock} onPick={addEntregado} placeholder="+ Añadir producto entregado..." />
+              {entregados.map((x, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
+                  <div style={{ flex: 1, fontSize: '.83rem', fontWeight: 600 }}>{x.nombre}</div>
+                  <button className="qb" onClick={() => chgEnt(idx, 'cantidad', Math.max(1, x.cantidad - 1))}>−</button>
+                  <span style={{ minWidth: 24, textAlign: 'center', fontWeight: 700 }}>{x.cantidad}</span>
+                  <button className="qb" onClick={() => chgEnt(idx, 'cantidad', x.cantidad + 1)}>+</button>
+                  <button onClick={() => delEnt(idx)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)', background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer' }}>✕</button>
+                </div>
+              ))}
+            </>
+          )}
+
+          <div className="fg" style={{ marginTop: 12 }}>
+            <label>Notas (opcional)</label>
+            <input value={notas} onChange={e => setNotas(e.target.value)} placeholder="Ej: 3 de 5 fallaron" />
+          </div>
+        </div>
+
+        {/* Reembolso (solo devolución) */}
+        {tipo === 'DEVOLUCION' && (
+          <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '10px 12px', margin: '10px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <label style={{ fontSize: '.8rem', color: 'var(--tx2)', flex: 1 }}>Importe a devolver</label>
+              <input type="number" inputMode="decimal" step="0.5" style={{ width: 90, background: 'var(--s1)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '5px', textAlign: 'right', fontWeight: 700 }}
+                value={importeManual === '' ? importeAuto.toFixed(2) : importeManual}
+                onChange={e => setImporteManual(e.target.value)} />
+              <span style={{ fontWeight: 700 }}>€</span>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta']].map(([k, lbl]) => (
+                <button key={k} onClick={() => setMetodo(k)} style={{
+                  flex: 1, padding: '6px 0', borderRadius: 'var(--rs)', fontWeight: 700, cursor: 'pointer', fontSize: '.78rem', fontFamily: "'DM Sans',sans-serif",
+                  background: metodo === k ? 'var(--ac)' : 'var(--s1)',
+                  border: `1px solid ${metodo === k ? 'var(--ac)' : 'var(--bd)'}`,
+                  color: metodo === k ? '#fff' : 'var(--tx2)',
+                }}>{lbl}</button>
+              ))}
+            </div>
+            {metodo === 'efectivo' && importe > 0 && <div style={{ fontSize: '.72rem', color: 'var(--tx2)', marginTop: 6 }}>Saldrá de la caja y se reflejará en el cierre.</div>}
+          </div>
+        )}
+
+        <button className="btn-p" disabled={loading} onClick={confirmar}>
+          {loading ? 'Guardando...' : tipo === 'COMPENSACION' ? '✓ Registrar compensación' : `✓ Registrar devolución${importe > 0 ? ` (${fmt(importe)})` : ''}`}
+        </button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── MODAL BAJA / ROTURA INTERNA ──────────────────────────────
+function ModalBaja({ caseta, perfil, caja, productos, stock, onClose, onDone, showToast }) {
+  const [items, setItems]   = useState([])
+  const [notas, setNotas]   = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const add = (p) => setItems(prev => {
+    const i = prev.findIndex(x => x.producto_id === p.id)
+    if (i >= 0) return prev.map((x, j) => j === i ? { ...x, cantidad: x.cantidad + 1 } : x)
+    return [...prev, { producto_id: p.id, nombre: p.nombre, empresa: p.empresa || '', cantidad: 1, causa: 'PROPIA' }]
+  })
+  const chg = (idx, campo, val) => setItems(prev => prev.map((x, i) => i === idx ? { ...x, [campo]: val } : x))
+  const del = (idx) => setItems(prev => prev.filter((_, i) => i !== idx))
+
+  const confirmar = async () => {
+    if (items.length === 0) { showToast('Añade al menos un producto', 'error'); return }
+    const payloadItems = items.map(x => ({
+      producto_id: x.producto_id, nombre_producto: x.nombre, empresa: x.empresa,
+      cantidad: x.cantidad, precio_unitario: null, movimiento: 'BAJA', causa: x.causa,
+    }))
+    const cab = {
+      caseta_id: caseta.id, caja_id: caja?.id || null, tipo: 'BAJA',
+      ticket_id: null, numero_ticket: null, importe_reembolsado: 0, metodo: 'efectivo', notas: notas.trim() || null,
+    }
+    setLoading(true)
+    try {
+      await registrarDevolucion(cab, payloadItems, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
+      const delta = {}
+      items.forEach(x => { delta[x.producto_id] = (delta[x.producto_id] || 0) - x.cantidad })
+      onDone && onDone(delta)
+      showToast('✓ Baja registrada')
+      onClose()
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setLoading(false)
+  }
+
+  return (
+    <div className="mo">
+      <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={onClose} />
+        <div className="mt-modal"><i className="fi fi-rr-box-open"/> Baja / rotura de producto</div>
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
+          Producto roto o defectuoso antes de venderlo. Sale del stock y va a defectuosos.
+        </div>
+        <ProductoBuscador productos={productos} stock={stock} onPick={add} autoFocus placeholder="Escanea con la pistola o escribe para añadir..." />
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {items.map((x, idx) => (
+            <div key={idx} style={{ padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, fontSize: '.83rem', fontWeight: 600 }}>{x.nombre}<span style={{ color: 'var(--tx2)', fontWeight: 400 }}> · stock {stock[x.producto_id] ?? 0}</span></div>
+                <button className="qb" onClick={() => chg(idx, 'cantidad', Math.max(1, x.cantidad - 1))}>−</button>
+                <span style={{ minWidth: 24, textAlign: 'center', fontWeight: 700 }}>{x.cantidad}</span>
+                <button className="qb" onClick={() => chg(idx, 'cantidad', x.cantidad + 1)}>+</button>
+                <button onClick={() => del(idx)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1px solid rgba(var(--red-rgb),.3)', background: 'rgba(var(--red-rgb),.1)', color: 'var(--red)', cursor: 'pointer' }}>✕</button>
+              </div>
+              <div style={{ display: 'flex', gap: 5, marginTop: 5 }}>
+                {[['FABRICA', 'Defecto fábrica'], ['PROPIA', 'Rotura nuestra']].map(([k, lbl]) => (
+                  <button key={k} onClick={() => chg(idx, 'causa', k)} style={{
+                    padding: '2px 9px', borderRadius: 12, fontSize: '.68rem', fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                    background: x.causa === k ? 'var(--gold)' : 'var(--s2)',
+                    border: `1px solid ${x.causa === k ? 'var(--gold)' : 'var(--bd)'}`,
+                    color: x.causa === k ? '#000' : 'var(--tx2)',
+                  }}>{lbl}</button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="fg" style={{ marginTop: 12 }}>
+            <label>Notas (opcional)</label>
+            <input value={notas} onChange={e => setNotas(e.target.value)} placeholder="Ej: se cayeron al montar la tienda" />
+          </div>
+        </div>
+        <button className="btn-p" disabled={loading} onClick={confirmar}>{loading ? 'Guardando...' : '✓ Registrar baja'}</button>
+        <button className="btn-s" onClick={onClose}>Cancelar</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── MODAL AJUSTAR STOCK (encargados) ─────────────────────────
+function ModalAjusteStock({ caseta, perfil, productos, stock, onClose, onDone, showToast }) {
+  const [prod, setProd]     = useState(null)
+  const [nueva, setNueva]   = useState('')
+  const [motivo, setMotivo] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const pick = (p) => { setProd(p); setNueva(String(stock[p.id] ?? 0)) }
+  const actual   = prod ? (stock[prod.id] ?? 0) : 0
+  const nuevaNum = Math.max(0, parseInt(nueva) || 0)
+  const delta    = nuevaNum - actual
+
+  const guardar = async () => {
+    if (!prod || delta === 0) { showToast('No hay cambio que guardar', 'error'); return }
+    setLoading(true)
+    try {
+      await ajustarStockAuditado(prod.id, caseta.id, delta, motivo)
+      onDone && onDone({ [prod.id]: delta })
+      showToast(`✓ ${prod.nombre}: stock → ${nuevaNum}`)
+      setProd(null); setNueva(''); setMotivo('')
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setLoading(false)
+  }
+
+  return (
+    <div className="mo">
+      <div className="mc">
+        <ModalClose onClose={onClose} />
+        <div className="mt-modal"><i className="fi fi-rr-refresh"/> Ajustar stock</div>
+        <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>{caseta.nombre} · corrige el stock real de un producto</div>
+        {!prod ? (
+          <ProductoBuscador productos={productos} stock={stock} onPick={pick} autoFocus placeholder="Escanea o busca el producto a corregir..." />
+        ) : (
+          <>
+            <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: '12px 14px', marginBottom: 12 }}>
+              <div style={{ fontWeight: 700 }}>{prod.nombre}</div>
+              <div style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Stock actual en el sistema: <strong>{actual}</strong></div>
+            </div>
+            <div className="fg">
+              <label>Stock real (corregido)</label>
+              <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }} value={nueva} min={0} inputMode="numeric" autoFocus onChange={e => setNueva(e.target.value)} />
+            </div>
+            {delta !== 0 && <div style={{ fontSize: '.8rem', color: delta > 0 ? 'var(--green)' : 'var(--red)', margin: '4px 0', fontWeight: 700 }}>{delta > 0 ? `+${delta}` : delta} respecto al sistema</div>}
+            <div className="fg" style={{ marginTop: 8 }}>
+              <label>Motivo (opcional)</label>
+              <input value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Ej: descuadre, recuento..." />
+            </div>
+            <button className="btn-p" disabled={loading || delta === 0} onClick={guardar}>{loading ? 'Guardando...' : '✓ Guardar ajuste'}</button>
+            <button className="btn-s" onClick={() => { setProd(null); setNueva(''); setMotivo('') }}>Elegir otro producto</button>
+          </>
+        )}
+        {!prod && <button className="btn-s" onClick={onClose}>Cerrar</button>}
+      </div>
+    </div>
+  )
+}
+
+// ─── MODAL AJUSTES ────────────────────────────────────────────
+function ModalAjustes({ modoRapido, onToggleModoRapido, noImprimir, onToggleNoImprimir, modalAlEscanear, onToggleModalEscanear, onClose }) {
+  const ToggleRow = ({ on, onToggle, color, icon, label, desc }) => (
+    <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 4px', cursor: 'pointer', borderBottom: '1px solid var(--bd)' }}>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: '.88rem', fontWeight: 700 }}><i className={`fi ${icon}`}/> {label}</div>
+        {desc && <div style={{ fontSize: '.72rem', color: 'var(--tx2)', marginTop: 2 }}>{desc}</div>}
+      </div>
+      <div style={{ width: 44, height: 24, borderRadius: 12, background: on ? color : 'var(--s3)', position: 'relative', flexShrink: 0, transition: 'background .2s' }}>
+        <div style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 18, height: 18, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
+      </div>
+    </div>
+  )
+  return (
+    <div className="mo">
+      <div className="mc">
+        <ModalClose onClose={onClose} />
+        <div className="mt-modal"><i className="fi fi-rr-settings"/> Ajustes</div>
+        <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 8 }}>Preferencias de este dispositivo.</div>
+        <ToggleRow on={modoRapido} onToggle={onToggleModoRapido} color="var(--green)" icon="fi-rr-bolt" label="Venta rápida" desc="Al cobrar, imprime el ticket y sigue sin confirmación." />
+        <ToggleRow on={noImprimir} onToggle={onToggleNoImprimir} color="var(--red)" icon="fi-rr-ban" label="No imprimir tickets" desc="No saca papel al cobrar (sin ticket)." />
+        <ToggleRow on={modalAlEscanear} onToggle={onToggleModalEscanear} color="var(--ac)" icon="fi-rr-barcode" label="Modal de cantidad al escanear" desc="Si está apagado, escanear añade 1 unidad directa." />
+        <div style={{ marginTop: 6 }}>
+          <ThemeToggle variant="item" />
+        </div>
+        <button className="btn-s" style={{ marginTop: 12 }} onClick={onClose}>Cerrar</button>
+      </div>
     </div>
   )
 }
@@ -999,8 +1476,9 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
   }
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose(items)}>
+    <div className="mo">
       <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={() => onClose(items)} />
         <div className="mt-modal"><i className="fi fi-rr-truck-side"/> Nuevo Pedido</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
           {caseta.nombre} · {perfil.nombre}
@@ -1220,7 +1698,7 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
 }
 
 // ─── MODAL MIS PEDIDOS ────────────────────────────────────────
-function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onRecibido }) {
+function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onRecibido, onStock }) {
   const [pedidos, setPedidos]       = useState([])
   const [loading, setLoading]       = useState(true)
   const [recibiendo, setRecibiendo] = useState(null)
@@ -1232,14 +1710,34 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const [recPicker, setRecPicker]   = useState(null)   // varias líneas con el mismo EAN → elegir cuál
   const recListRef                  = useRef(null)
 
-  // Marca una línea del pedido como recibida (solo si seguía pendiente) y la enfoca.
+  // Aplica al stock (al instante) lo recibido de una línea: calcula el delta
+  // respecto a lo ya aplicado, lo manda a la BD y refresca el stock del TPV.
+  // El producto queda vendible en cuanto se marca, sin esperar al resto.
+  const aplicarItem = async (idx, estado, cantidadRecibida) => {
+    const item = recItems[idx]
+    if (!item) return
+    const delta = cantidadRecibida - (item.cantidad_aplicada ?? 0)
+    setRecItems(prev => prev.map((r, i) => i !== idx ? r : { ...r, estado, cantidad_recibida: cantidadRecibida }))
+    try {
+      const nueva = await recibirItemPedido(item.id, item.producto_id, caseta.id, delta, cantidadRecibida, item.notas_item)
+      setRecItems(prev => prev.map((r, i) => i !== idx ? r : { ...r, cantidad_aplicada: cantidadRecibida }))
+      // Mantener fresca la lista para que, si se cierra y reabre, no se recuente.
+      setPedidos(prev => prev.map(p => p.id !== recibiendo?.id ? p : {
+        ...p,
+        pedido_items: (p.pedido_items || []).map(pi => pi.id !== item.id ? pi : { ...pi, cantidad_recibida: cantidadRecibida }),
+      }))
+      if (nueva !== null && nueva !== undefined) onStock && onStock(item.producto_id, nueva)
+      if (estado === 'no_llegado') showToast(`✕ ${item.nombre}: marcado como no llegado`)
+      else showToast(`✓ ${item.nombre}: ${cantidadRecibida} uds en stock`)
+    } catch (e) {
+      showToast('Error al actualizar stock: ' + e.message, 'error')
+    }
+  }
+
+  // Marca una línea como recibida completa (escáner/selector) y aplica su stock.
   const marcarRecibido = (idx) => {
-    setRecItems(prev => prev.map((r, i) => {
-      if (i !== idx) return r
-      if (r.estado !== 'pendiente') return r
-      return { ...r, estado: 'ok', cantidad_recibida: r.cantidad }
-    }))
     setScanRec(''); setRecPicker(null)
+    aplicarItem(idx, 'ok', recItems[idx].cantidad)
     setTimeout(() => {
       const el = recListRef.current?.querySelector(`[data-recidx="${idx}"]`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -1252,21 +1750,39 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 
   const abrirRecepcion = (pedido) => {
     setRecibiendo(pedido)
-    setRecItems(pedido.pedido_items.map(i => ({
-      id:                i.id,
-      producto_id:       i.producto_id,
-      nombre:            i.productos?.nombre || '?',
-      cantidad:          i.cantidad,
-      cantidad_recibida: i.cantidad,   // por defecto = lo pedido
-      notas_item:        '',
-      estado:            'pendiente',  // pendiente | ok | diferencia | no_llegado
-    })))
+    setRecItems(pedido.pedido_items.map(i => {
+      // cantidad_recibida en BD = lo ya aplicado al stock en sesiones previas.
+      // null → aún sin revisar.
+      const yaRec = i.cantidad_recibida
+      const estado = yaRec == null ? 'pendiente'
+        : yaRec === 0 ? 'no_llegado'
+        : yaRec === i.cantidad ? 'ok' : 'diferencia'
+      return {
+        id:                i.id,
+        producto_id:       i.producto_id,
+        nombre:            i.productos?.nombre || '?',
+        cantidad:          i.cantidad,
+        cantidad_recibida: yaRec ?? i.cantidad,   // valor mostrado en el input
+        cantidad_aplicada: yaRec ?? 0,            // lo realmente sumado al stock
+        notas_item:        i.notas_item || '',
+        estado,
+      }
+    }))
     setNotasRec('')
   }
 
   const confirmarRec = async () => {
     setSaving(true)
     try {
+      // Reconcilia cualquier cantidad editada que no se llegara a aplicar
+      // (p.ej. una diferencia escrita sin salir del campo).
+      for (const it of recItems) {
+        const delta = it.cantidad_recibida - (it.cantidad_aplicada ?? 0)
+        if (delta !== 0) {
+          const nueva = await recibirItemPedido(it.id, it.producto_id, caseta.id, delta, it.cantidad_recibida, it.notas_item)
+          if (nueva !== null && nueva !== undefined) onStock && onStock(it.producto_id, nueva)
+        }
+      }
       await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
       const hayIncidencia = notasRec?.trim() ||
         recItems.some(i => i.estado === 'no_llegado' || i.estado === 'diferencia' || i.notas_item?.trim())
@@ -1292,8 +1808,9 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const ESTADO_LABEL = {PENDIENTE:'Pendiente', ACEPTADO:'Aceptado', EN_CAMINO:'En camino', RECIBIDO:'Recibido', INCIDENCIA:'Incidencia', RECHAZADO:'Rechazado'}
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-truck-side"/> Mis Pedidos</div>
         {loading
           ? <div className="loading-row"><div className="spin-sm" />Cargando...</div>
@@ -1362,11 +1879,12 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 
       {/* Modal confirmar recepción — rediseñado con estado por producto */}
       {recibiendo && (
-        <div className="mo" style={{ zIndex: 999 }} onClick={e => e.target === e.currentTarget && setRecibiendo(null)}>
+        <div className="mo" style={{ zIndex: 999 }}>
           <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
+            <ModalClose onClose={() => setRecibiendo(null)} />
             <div className="mt-modal"><i className="fi fi-rr-box"/> Confirmar Recepción</div>
             <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 4 }}>
-              Revisa cada producto. Confirma lo que ha llegado o marca lo que no vino.
+              Marca cada producto según lo revisas: <strong style={{ color: 'var(--green)' }}>el stock se actualiza al instante</strong> y ya puedes venderlo. Al final, confirma para cerrar el pedido.
             </div>
             {/* Resumen rápido */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -1415,8 +1933,9 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
             {/* Selector cuando un EAN coincide con varias líneas (variantes/colisiones).
                 La persona elige mirando la caja cuál está recibiendo realmente. */}
             {recPicker && (
-              <div className="mo" onClick={e => e.target === e.currentTarget && setRecPicker(null)}>
+              <div className="mo">
                 <div className="mc">
+                  <ModalClose onClose={() => setRecPicker(null)} />
                   <div className="mt-modal">¿Cuál estás recibiendo?</div>
                   <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
                     Varias líneas comparten este código. Mira la caja y elige la correcta.
@@ -1444,17 +1963,21 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 
             <div ref={recListRef} style={{ overflowY: 'auto', flex: 1 }}>
               {recItems.map((item, idx) => {
-                const setBand = (estado) => setRecItems(prev => prev.map((r, i) => {
-                  if (i !== idx) return r
-                  const cantidad_recibida = estado === 'no_llegado' ? 0 : estado === 'ok' ? r.cantidad : r.cantidad_recibida
-                  return { ...r, estado, cantidad_recibida }
-                }))
-                const setQtyRec = (val) => setRecItems(prev => prev.map((r, i) => {
+                // "Todo llegó" y "No llegó" aplican el stock al instante.
+                // "Diferencia" solo abre el input; el stock se aplica al salir
+                // del campo (onBlur) o con +/−.
+                const marcarDiferencia = () => setRecItems(prev => prev.map((r, i) => i !== idx ? r : { ...r, estado: 'diferencia' }))
+                const editQtyLocal = (val) => setRecItems(prev => prev.map((r, i) => {
                   if (i !== idx) return r
                   const cantidad_recibida = Math.max(0, parseInt(val) || 0)
                   const estado = cantidad_recibida === 0 ? 'no_llegado' : cantidad_recibida === r.cantidad ? 'ok' : 'diferencia'
                   return { ...r, cantidad_recibida, estado }
                 }))
+                const aplicarQty = (n) => {
+                  const q = Math.max(0, n)
+                  const estado = q === 0 ? 'no_llegado' : q === item.cantidad ? 'ok' : 'diferencia'
+                  aplicarItem(idx, estado, q)
+                }
                 const setNota = (val) => setRecItems(prev => prev.map((r, i) => i !== idx ? r : { ...r, notas_item: val }))
 
                 const borderCol = item.estado === 'ok' ? 'rgba(var(--green-rgb),.4)'
@@ -1476,21 +1999,21 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 
                     {/* Botones de estado rápido */}
                     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-                      <button onClick={() => setBand('ok')} style={{
+                      <button onClick={() => aplicarItem(idx, 'ok', item.cantidad)} style={{
                         flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
                         cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                         background: item.estado === 'ok' ? 'var(--green)' : 'transparent',
                         border: `1px solid ${item.estado === 'ok' ? 'var(--green)' : 'rgba(var(--green-rgb),.4)'}`,
                         color: item.estado === 'ok' ? 'white' : 'var(--green)',
                       }}>✓ Todo llegó</button>
-                      <button onClick={() => { setBand('diferencia'); }} style={{
+                      <button onClick={marcarDiferencia} style={{
                         flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
                         cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                         background: item.estado === 'diferencia' ? 'var(--gold)' : 'transparent',
                         border: `1px solid ${item.estado === 'diferencia' ? 'var(--gold)' : 'rgba(var(--gold-rgb),.4)'}`,
                         color: item.estado === 'diferencia' ? '#000' : 'var(--gold)',
                       }}>± Diferencia</button>
-                      <button onClick={() => setBand('no_llegado')} style={{
+                      <button onClick={() => aplicarItem(idx, 'no_llegado', 0)} style={{
                         flex: 1, padding: '8px 4px', borderRadius: 'var(--rs)', fontSize: '.75rem', fontWeight: 700,
                         cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                         background: item.estado === 'no_llegado' ? 'var(--red)' : 'transparent',
@@ -1503,12 +2026,14 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
                     {item.estado === 'diferencia' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                         <span style={{ fontSize: '.78rem', color: 'var(--tx2)' }}>Cantidad recibida:</span>
-                        <button className="qb" onClick={() => setQtyRec(item.cantidad_recibida - 1)}>−</button>
+                        <button className="qb" onClick={() => aplicarQty(item.cantidad_recibida - 1)}>−</button>
                         <input type="number" value={item.cantidad_recibida} min="0" max={item.cantidad * 2}
-                          onChange={e => setQtyRec(e.target.value)}
+                          onChange={e => editQtyLocal(e.target.value)}
+                          onBlur={e => aplicarQty(Math.max(0, parseInt(e.target.value) || 0))}
+                          onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                           style={{ width: 60, background: 'var(--s1)', border: '2px solid var(--gold)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '5px 8px', fontFamily: "'DM Sans',sans-serif", fontWeight: 700, textAlign: 'center' }}
                           inputMode="numeric" />
-                        <button className="qb" onClick={() => setQtyRec(item.cantidad_recibida + 1)}>+</button>
+                        <button className="qb" onClick={() => aplicarQty(item.cantidad_recibida + 1)}>+</button>
                         <span style={{ fontSize: '.78rem', fontWeight: 700, color: item.cantidad_recibida < item.cantidad ? 'var(--red)' : 'var(--green)' }}>
                           {item.cantidad_recibida > item.cantidad ? '+' : ''}{item.cantidad_recibida - item.cantidad}
                         </span>
@@ -1545,9 +2070,9 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
               onClick={confirmarRec}>
               {saving ? 'Guardando...' : recItems.some(i => i.estado === 'pendiente')
                 ? `⏳ Revisa los ${recItems.filter(i=>i.estado==='pendiente').length} productos pendientes`
-                : '✓ Confirmar recepción y actualizar stock'}
+                : '✓ Confirmar y cerrar pedido'}
             </button>
-            <button className="btn-s" onClick={() => setRecibiendo(null)}>Cancelar</button>
+            <button className="btn-s" onClick={() => setRecibiendo(null)}>Cerrar (seguir luego)</button>
           </div>
         </div>
       )}
@@ -1557,13 +2082,35 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
 
 // ─── MODAL INVENTARIO ─────────────────────────────────────────
 function ModalInventario({ caseta, perfil, productos, stockActual, onClose, showToast }) {
-  const [items, setItems]       = useState(() =>
-    productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, codigo_ean: p.codigo_ean, cantidad_real: 0 }))
-  )
+  // Borrador persistente: guarda lo contado en localStorage por si se cierra la
+  // pantalla o se cuelga a media cuenta, para no perder el recuento.
+  const LSKEY = `inv_draft_${caseta.id}`
+  const [items, setItems]       = useState(() => {
+    let saved = {}
+    try { saved = JSON.parse(localStorage.getItem(LSKEY) || '{}') } catch (_) {}
+    return productos.map(p => ({ producto_id: p.id, nombre: p.nombre, categoria: p.categoria, codigo_ean: p.codigo_ean, cantidad_real: saved[p.id] ?? 0 }))
+  })
+
+  // Avisar (una vez) si se recuperó un conteo previo.
+  useEffect(() => {
+    try { if (localStorage.getItem(LSKEY)) showToast('Recuperado el conteo guardado') } catch (_) {}
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persistir el borrador cada vez que cambia lo contado (solo cantidades > 0).
+  useEffect(() => {
+    const map = {}
+    for (const i of items) if (i.cantidad_real) map[i.producto_id] = i.cantidad_real
+    try {
+      if (Object.keys(map).length) localStorage.setItem(LSKEY, JSON.stringify(map))
+      else localStorage.removeItem(LSKEY)
+    } catch (_) {}
+  }, [items])   // eslint-disable-line react-hooks/exhaustive-deps
+
   const [busq, setBusq]         = useState('')
   const [catFiltro, setCatFiltro] = useState('Todos')
   const [loading, setLoading]   = useState(false)
   const [enviado, setEnviado]   = useState(false)
+  const [esFinal, setEsFinal]   = useState(false)
 
   const cats = ['Todos', ...new Set(productos.map(p => p.categoria).sort())]
 
@@ -1582,7 +2129,8 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
   const enviar = async () => {
     setLoading(true)
     try {
-      await crearInventario(caseta.id, perfil.id, items)
+      await crearInventario(caseta.id, perfil.id, items, esFinal)
+      try { localStorage.removeItem(LSKEY) } catch (_) {}   // enviado: borrar borrador
       showToast('✓ Inventario enviado al administrador para confirmación')
       setEnviado(true)
     } catch (e) { showToast('Error: ' + e.message, 'error') }
@@ -1592,6 +2140,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
   if (enviado) return (
     <div className="mo">
       <div className="mc" style={{ textAlign: 'center' }}>
+        <ModalClose onClose={onClose} />
         <div style={{ fontSize: '2.5rem', marginBottom: 12, color: 'var(--green)' }}><i className="fi fi-rr-check-circle"/></div>
         <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 8 }}>Inventario enviado</div>
         <div style={{ color: 'var(--tx2)', fontSize: '.85rem', marginBottom: 20 }}>
@@ -1603,8 +2152,9 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
   )
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc wide" style={{ maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-clipboard-list"/> Inventario de Cierre</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>
           {caseta.nombre} · Cuenta el stock físico restante
@@ -1635,7 +2185,7 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
                 <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>{item.categoria}</div>
               </div>
               <button className="qb" onClick={() => setQty(item.producto_id, item.cantidad_real - 1)}>−</button>
-              <input type="number" value={item.cantidad_real} min="0"
+              <input type="number" value={item.cantidad_real || ''} min="0" placeholder="0"
                 onChange={e => setQty(item.producto_id, e.target.value)}
                 onFocus={e => e.target.select()}
                 style={{ width: 60, background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', color: 'var(--tx)', padding: '5px', textAlign: 'center', fontFamily: "'DM Sans',sans-serif", fontWeight: 700 }}
@@ -1647,6 +2197,17 @@ function ModalInventario({ caseta, perfil, productos, stockActual, onClose, show
 
         <div style={{ padding: '10px 0', fontSize: '.78rem', color: 'var(--tx2)' }}>
           {items.filter(i => i.cantidad_real > 0).length} de {items.length} productos con stock contado
+        </div>
+
+        {/* Inventario final: al confirmarlo el admin, la caseta queda a 0 */}
+        <div onClick={() => setEsFinal(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', marginBottom: 10, cursor: 'pointer', borderRadius: 'var(--rs)', border: `1px solid ${esFinal ? 'var(--red)' : 'var(--bd)'}`, background: esFinal ? 'rgba(var(--red-rgb),.08)' : 'var(--s2)' }}>
+          <div style={{ width: 40, height: 22, borderRadius: 11, background: esFinal ? 'var(--red)' : 'var(--s3)', position: 'relative', flexShrink: 0, transition: 'background .2s' }}>
+            <div style={{ position: 'absolute', top: 3, left: esFinal ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left .2s' }} />
+          </div>
+          <div>
+            <div style={{ fontSize: '.82rem', fontWeight: 700, color: esFinal ? 'var(--red)' : 'var(--tx)' }}>Inventario final (cierre de caseta)</div>
+            <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>Al confirmarlo, el stock de la caseta queda a 0. Úsalo solo al retirar la caseta.</div>
+          </div>
         </div>
 
         <button className="btn-p" disabled={loading} onClick={enviar}>
@@ -1672,15 +2233,16 @@ function BadgeKgPolvora({ kgActual, kgLimite, necDetalle }) {
     + (d13 ? `\n1.3G: ${d13.kg.toFixed(2)}/${d13.maxKg.toFixed(2)} kg (máx 20%)` : '')
     + (sinClasif > 0 ? `\nSin clasificar: ${sinClasif.toFixed(2)} kg` : '')
   return (
-    <div title={titulo} style={{
+    <div title={titulo} className="nec-badge" style={{
       display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
       background: (alerta || incumple) ? `rgba(${pct >= 90 || incumple ? 'var(--red-rgb)' : 'var(--gold-rgb)'},.15)` : 'var(--s2)',
       border: `1px solid ${incumple ? 'var(--red)' : color}`, borderRadius: 20, fontSize: '.72rem', cursor: 'default',
+      flexShrink: 1, minWidth: 0, whiteSpace: 'nowrap',
     }}>
       <span style={{ color, fontWeight: 700 }}><i className="fi fi-rr-flame"/> {kgActual.toFixed(2)}kg</span>
-      <span style={{ color: 'var(--tx2)' }}>/ {kgLimite}kg</span>
+      <span className="nec-lim" style={{ color: 'var(--tx2)' }}>/ {kgLimite}kg</span>
       {d13 && (
-        <span style={{ color: d13.excedido ? 'var(--red)' : 'var(--tx2)', fontWeight: d13.excedido ? 800 : 600, borderLeft: '1px solid var(--bd)', paddingLeft: 6 }}>
+        <span className="nec-div" style={{ color: d13.excedido ? 'var(--red)' : 'var(--tx2)', fontWeight: d13.excedido ? 800 : 600, borderLeft: '1px solid var(--bd)', paddingLeft: 6 }}>
           1.3G {d13.kg.toFixed(1)}/{d13.maxKg.toFixed(1)}{d13.excedido && <i className="fi fi-rr-triangle-warning" style={{ marginLeft: 3 }}/>}
         </span>
       )}
@@ -1803,8 +2365,9 @@ function ModalFichajes({ perfil, caseta, ultimoFichaje, caja, esSoloEmpleado, on
     : `${getLunesSemana(semana).toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${getFinSemana(semana).toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`
 
   return (
-    <div className="mo" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="mo">
       <div className="mc wide" style={{maxHeight:'93vh',display:'flex',flexDirection:'column'}}>
+        <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-clock"/> Control de Presencia</div>
         <div style={{fontSize:'.8rem',color:'var(--tx2)',marginBottom:14}}>{perfil.nombre} · {caseta.nombre}</div>
 
@@ -2027,10 +2590,15 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const busqRef                             = useRef(null)
   const [cat,            setCat]            = useState('Todos')
   const [showScan,       setShowScan]       = useState(false)
+  const [eanPicker,      setEanPicker]      = useState(null)   // productos que comparten EAN
+  const [showAjustes,    setShowAjustes]    = useState(false)
   const [showPago,       setShowPago]       = useState(false)
   const [showCierre,       setShowCierre]       = useState(false)
   const [showRetirada,     setShowRetirada]     = useState(false)
   const [showAperturaCaja, setShowAperturaCaja] = useState(false)
+  const [showDevolucion, setShowDevolucion] = useState(false)
+  const [showBaja,       setShowBaja]       = useState(false)
+  const [showAjuste,     setShowAjuste]     = useState(false)
   const [showHistorial,  setShowHistorial]  = useState(false)
   const [showOk,         setShowOk]         = useState(null)
   const [showFactura,    setShowFactura]    = useState(false)
@@ -2039,11 +2607,13 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   // ── Persistidos en sessionStorage para sobrevivir a cambios de página ──
   const [modoRapido,     setModoRapido]     = useState(() => sessionStorage.getItem('tpv_rapido') === '1')
   const [noImprimir,     setNoImprimir]     = useState(() => sessionStorage.getItem('tpv_noimprimir') === '1') // por defecto SÍ se imprime
+  const [modalAlEscanear, setModalAlEscanear] = useState(() => localStorage.getItem('tpv_modal_escanear') === '1') // por defecto: escanear añade 1 directo
   const [tabTPV,         setTabTPV]         = useState(() => sessionStorage.getItem('tpv_tab') || 'todos')
   const [cat2,           setCat2]           = useState(() => sessionStorage.getItem('tpv_cat') || 'Todos')
 
   const [favoritos,      setFavoritos]      = useState(() => getFavoritos())
   const [prodModal,      setProdModal]      = useState(null)
+  const [combModal,      setCombModal]      = useState(null)
   // Persistir panel abierto (pedidos/inventario) para que al volver no pierdan su posición
   const [showPedido,     setShowPedido]     = useState(false)
   const [pedidoBorrador, setPedidoBorrador] = useState(null) // items guardados al cerrar sin enviar
@@ -2095,6 +2665,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   // Persistir estado simple en sessionStorage
   useEffect(() => { sessionStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
   useEffect(() => { sessionStorage.setItem('tpv_noimprimir', noImprimir ? '1' : '0') }, [noImprimir])
+  useEffect(() => { localStorage.setItem('tpv_modal_escanear', modalAlEscanear ? '1' : '0') }, [modalAlEscanear])
   useEffect(() => { sessionStorage.setItem('tpv_tab', tabTPV) }, [tabTPV])
   useEffect(() => { sessionStorage.setItem('tpv_cat', cat2) }, [cat2])
 
@@ -2227,7 +2798,10 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   // Para salir: si hay otros activos puede salir sin cerrar caja; si es el último, no
   const esSoloEmpleado = otrosActivos.length === 0
 
-  const agregar = useCallback((prod, cantidad = 1, regalo = false) => {
+  // `permitirToggle`: solo el grid de productos lo activa (tocar un producto ya
+  // en el ticket lo quita). El resto (ofertas, modal, escáner) SIEMPRE suma —
+  // así una oferta no borra un producto compartido que ya estaba en el ticket.
+  const agregar = useCallback((prod, cantidad = 1, regalo = false, permitirToggle = false) => {
     if (!puedeOperar) {
       showToast(enDescanso ? 'Estás en descanso — termina el descanso para vender' : 'Ficha tu entrada antes de vender', 'error')
       setShowFichajes(true)
@@ -2245,8 +2819,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       const totalEnTicket = prev.filter(i => i.id === prod.id).reduce((s, i) => s + i.cantidad, 0)
       const idx = prev.findIndex(i => i.id === prod.id && !!i.regalo === regalo)
       if (idx >= 0) {
-        // Tap simple en la línea pagada → toggle: quitar del ticket
-        if (!regalo && cantidad === 1) return prev.filter((_, j) => j !== idx)
+        // Tap simple en el grid sobre la línea pagada → toggle: quitar del ticket
+        if (permitirToggle && !regalo && cantidad === 1) return prev.filter((_, j) => j !== idx)
         if (totalEnTicket + cantidad > stockDisp) { showToast('Stock insuficiente', 'error'); return prev }
         const n = [...prev]; n[idx] = { ...n[idx], cantidad: n[idx].cantidad + cantidad }; return n
       }
@@ -2256,11 +2830,26 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
     setShowScan(false)
   }, [stock, caja, puedeOperar, enDescanso])
 
-  const abrirModalCantidad = (prod) => {
+  const abrirModalCantidad = (prod, packSize = 1, etiquetaOferta = null) => {
     const stockDisp = stock[prod.id] ?? 0
-    if (stockDisp <= 0) { showToast('Sin stock disponible', 'error'); return }
-    setProdModal(prod)
+    if (stockDisp < packSize) { showToast('Stock insuficiente para la oferta', 'error'); return }
+    setProdModal({ ...prod, _packSize: packSize, _etiquetaOferta: etiquetaOferta })
   }
+
+  // Al escanear/elegir: por defecto añade 1 directo; con el toggle activo abre el modal de cantidad
+  const añadirEscaneado = (prod) => {
+    if (modalAlEscanear) abrirModalCantidad(prod)
+    else agregar(prod, 1)
+  }
+
+  // Resta `cantidad` unidades de la línea pagada de un producto. Si llega a 0, la elimina.
+  const quitar = (prod, cantidad = 1) => setTicket(prev => {
+    const idx = prev.findIndex(i => i.id === prod.id && !i.regalo)
+    if (idx < 0) return prev
+    const nuevaCant = prev[idx].cantidad - cantidad
+    if (nuevaCant <= 0) return prev.filter((_, j) => j !== idx)
+    const n = [...prev]; n[idx] = { ...n[idx], cantidad: nuevaCant }; return n
+  })
 
   const cambiarQty = (key, delta) => setTicket(prev => {
     const line = prev.find(i => lineKey(i) === key)
@@ -2302,7 +2891,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const descuentoImporte = Math.round(totalBruto * descuento) / 100
   const total = Math.max(0, totalBruto - descuentoImporte)
 
-  const confirmarVenta = async ({ metodo, dineroDado, cambio, cliente }) => {
+  const confirmarVenta = async ({ metodo, dineroDado, cambio, cliente, pagoEfectivo, pagoTarjeta }) => {
     // Doble check en el momento de ejecutar (no en el render)
     if (!caja) { showToast('La caja está cerrada — no se puede registrar la venta', 'error'); return }
     // Límite legal de 10 kg NEC por comprador (ITC 17)
@@ -2324,15 +2913,17 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
           detalle_oferta: desglose ? desglose.map(d => d.tipo === 'pack' ? `${d.packs}x ${d.etiqueta}` : `${d.unidades}u normal`).join(' + ') : null,
         }
       })
-      const ticketResult = await crearTicket({ cajaId: caja.id, casetaId: caseta.id, empleadoId: perfil.id, metodoPago: metodo, total, dineroDado, cambio, items })
+      const efec = pagoEfectivo ?? (metodo === 'efectivo' ? total : 0)
+      const tarj = pagoTarjeta ?? (metodo === 'tarjeta' ? total : 0)
+      const ticketResult = await crearTicket({ cajaId: caja.id, casetaId: caseta.id, empleadoId: perfil.id, metodoPago: metodo, total, dineroDado, cambio, items, pagoEfectivo: efec, pagoTarjeta: tarj })
       setStock(prev => {
         const next = { ...prev }
         ticket.forEach(i => { if (next[i.id] !== undefined) next[i.id] -= i.cantidad })
         return next
       })
-      setVentas(prev => [...prev, { metodo_pago: metodo, total, perfiles: { nombre: perfil.nombre } }])
+      setVentas(prev => [...prev, { metodo_pago: metodo, total, pago_efectivo: efec, pago_tarjeta: tarj, perfiles: { nombre: perfil.nombre } }])
       const ticketData = {
-        metodo, total, cambio, dineroDado, descuento: descuentoImporte, descuentoPct: descuento,
+        metodo, total, cambio, dineroDado, pagoEfectivo: efec, pagoTarjeta: tarj, descuento: descuentoImporte, descuentoPct: descuento,
         items: ticket.map(i => {
           const { total: tl } = calcularPrecio(i.id, i.cantidad, i.precio, ofertas)
           return { nombre: i.nombre, cantidad: i.cantidad, precio: i.regalo ? 0 : i.precio, total_linea: i.regalo ? 0 : tl, gramos_polvora: i.gramos_polvora || 0, regalo: !!i.regalo }
@@ -2410,9 +3001,18 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   )
   prodsFiltrados = [...prodsFiltrados].sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
 
+  const KW_RAPIDOS = ['mecha', 'bolsa', 'cebador']
   const botonesRapidos = productos.filter(p =>
-    ['mecha', 'bolsa', 'cebador'].some(kw => p.nombre.toLowerCase().includes(kw))
+    KW_RAPIDOS.some(kw => p.nombre.toLowerCase().includes(kw))
   ).slice(0, 4)
+
+  // Ofertas pack SOLO de esos productos frecuentes (un toque aplica la oferta del pack)
+  const ofertasRapidas = [...new Map(
+    ofertas.filter(o => (!o.tipo || o.tipo === 'pack') && o.cantidad_pack > 1).map(o => [o.producto_id, o])
+  ).values()].filter(o => {
+    const prod = productos.find(p => p.id === o.producto_id)
+    return prod && KW_RAPIDOS.some(kw => prod.nombre.toLowerCase().includes(kw))
+  }).slice(0, 4)
 
   const pctPolvora = kgLimite > 0 ? (kgPolvora / kgLimite) * 100 : 0
 
@@ -2422,8 +3022,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
         <div className="tl"><Logo style={{ height: 28 }} /></div>
         <div className="ti">
           <BadgeKgPolvora kgActual={kgPolvora} kgLimite={kgLimite} necDetalle={necDetalle} />
-          {/* Botón fichaje compacto */}
-          {(() => {
+          {/* Botón fichaje compacto — en móvil se mueve al menú desplegable */}
+          <span className="hide-mobile">{(() => {
             const est = calcularEstado(ultimoFichaje)
             const dot = { libre:'var(--s3)', trabajando:'var(--green)', descanso:'var(--gold)' }[est]
             const col = { libre:'var(--tx2)', trabajando:'var(--green)', descanso:'var(--gold)' }[est]
@@ -2440,8 +3040,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                 {caseta?.nombre?.replace('Caballer ','').replace('La Petardería ','') || 'Fichar'}
               </button>
             )
-          })()}
-          <span className="hide-mobile"><ThemeToggle /></span>
+          })()}</span>
+          <button className="btn-o btn-eye hide-mobile" title="Ajustes" onClick={() => setShowAjustes(true)} style={{ padding: '6px 9px', flexShrink: 0 }}><i className="fi fi-rr-settings"/></button>
           {onSalirVenta
             ? <button className="btn-o topbar-salir" style={{padding:'5px 10px',fontSize:'.75rem',borderColor:'var(--ac)',color:'var(--ac)'}} onClick={onSalirVenta}>Panel admin</button>
             : <button className="btn-o topbar-salir" style={{padding:'5px 10px',fontSize:'.75rem'}} onClick={() => supabase.auth.signOut()}>Salir</button>}
@@ -2540,6 +3140,17 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
           <button className="btn-o subbar-btn" onClick={() => { setShowInventario(true); sessionStorage.setItem('tpv_panel','inventario') }}>
             <i className="fi fi-rr-chart-histogram btn-icon"/><span className="btn-label">Inventario</span>
           </button>
+          <button className="btn-o subbar-btn" onClick={() => setShowDevolucion(true)}>
+            <i className="fi fi-rr-undo btn-icon"/><span className="btn-label">Devolución</span>
+          </button>
+          <button className="btn-o subbar-btn" onClick={() => setShowBaja(true)}>
+            <i className="fi fi-rr-box-open btn-icon"/><span className="btn-label">Baja</span>
+          </button>
+          {(perfil?.es_encargado || perfil?.rol === 'ADMIN') && (
+            <button className="btn-o subbar-btn" onClick={() => setShowAjuste(true)}>
+              <i className="fi fi-rr-refresh btn-icon"/><span className="btn-label">Ajustar stock</span>
+            </button>
+          )}
           {caja ? (
             <>
               <button className="btn-o subbar-btn" style={{ borderColor: 'rgba(var(--gold-rgb),.3)', color: 'var(--gold)' }} onClick={() => setShowRetirada(true)}>
@@ -2575,6 +3186,17 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             </div>
             <button className="drawer-close" onClick={() => setShowHamburger(false)}><i className="fi fi-rr-cross"/></button>
           </div>
+          {(() => {
+            const est = calcularEstado(ultimoFichaje)
+            const col = { libre:'var(--tx2)', trabajando:'var(--green)', descanso:'var(--gold)' }[est]
+            const lbl = { libre:'Sin fichar', trabajando:'Trabajando', descanso:'En descanso' }[est]
+            return (
+              <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowFichajes(true) }}>
+                <i className="fi fi-rr-clock"/> Control de presencia
+                <span style={{ marginLeft:'auto', fontSize:'.72rem', fontWeight:700, color:col }}>{lbl}</span>
+              </button>
+            )
+          })()}
           <button className="hamburger-item" onClick={() => {
               setShowHamburger(false)
               if (!caja) { showToast('Abre la caja para ver los tickets del turno', 'error'); return }
@@ -2599,6 +3221,17 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
           <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowInventario(true); sessionStorage.setItem('tpv_panel','inventario') }}>
             <i className="fi fi-rr-chart-histogram"/> Inventario
           </button>
+          <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowDevolucion(true) }}>
+            <i className="fi fi-rr-undo"/> Devolución
+          </button>
+          <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowBaja(true) }}>
+            <i className="fi fi-rr-box-open"/> Baja / rotura
+          </button>
+          {(perfil?.es_encargado || perfil?.rol === 'ADMIN') && (
+            <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowAjuste(true) }}>
+              <i className="fi fi-rr-refresh"/> Ajustar stock
+            </button>
+          )}
           <div className="drawer-sep" />
           {caja ? (
             <>
@@ -2624,7 +3257,9 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               <i className="fi fi-rr-arrow-left"/> Volver al panel admin
             </button>
           )}
-          <ThemeToggle variant="item" />
+          <button className="hamburger-item" onClick={() => { setShowHamburger(false); setShowAjustes(true) }}>
+            <i className="fi fi-rr-settings"/> Ajustes
+          </button>
           <button className="hamburger-item" style={{ color: 'var(--tx2)' }}
             onClick={() => { setShowHamburger(false); supabase.auth.signOut() }}>
             <i className="fi fi-rr-sign-out-alt"/> Cerrar sesión
@@ -2673,15 +3308,23 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
           <div className="pp">
             <div className="srch">
               <input ref={busqRef} className="si" placeholder="Buscar producto o EAN..."
-                value={busq} onChange={e => { setBusq(e.target.value); if (e.target.value) setTabTPV('todos') }}
+                value={busq} onChange={e => setBusq(e.target.value)}
                 onKeyDown={e => {
                   if (e.key !== 'Enter') return
-                  const matches = prodsFiltrados
-                  if (matches.length === 0) return
-                  const prod = matches[0]
-                  setBusq('')
-                  if (stock[prod.id] > 0) abrirModalCantidad(prod)
-                  else showToast('Sin stock disponible', 'error')
+                  const term = busq.trim()
+                  if (!term) return
+                  // EAN exacto → esos productos; si no, lo que coincide por nombre en la pestaña
+                  const porEan = productos.filter(p => p.codigo_ean === term)
+                  const candidatos = porEan.length >= 1 ? porEan : prodsFiltrados
+                  if (candidatos.length === 0) return
+                  // Un solo producto → añadir (1 directo, o modal según el toggle)
+                  if (candidatos.length === 1) {
+                    setBusq('')
+                    añadirEscaneado(candidatos[0])
+                    return
+                  }
+                  // Varios (por EAN duplicado o por nombre) → elegir cuál
+                  setBusq(''); setEanPicker(candidatos)
                 }} />
               <button className="bsc" onClick={() => setShowScan(true)}><i className="fi fi-rr-camera"/></button>
             </div>
@@ -2713,7 +3356,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             )}
 
             {/* Botones rápidos */}
-            {botonesRapidos.length > 0 && !busq && tabTPV !== 'ofertas' && (
+            {(botonesRapidos.length > 0 || ofertasRapidas.length > 0) && !busq && tabTPV !== 'ofertas' && (
               <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--bd)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '.67rem', color: 'var(--tx2)', alignSelf: 'center', marginRight: 2 }}><i className="fi fi-rr-bolt"/></span>
                 {botonesRapidos.map(p => (
@@ -2723,6 +3366,21 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                     fontWeight: 600, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                   }}>{p.nombre}</button>
                 ))}
+                {ofertasRapidas.map(o => {
+                  const prod = productos.find(p => p.id === o.producto_id)
+                  if (!prod) return null
+                  return (
+                    <button key={'of-' + o.producto_id} onClick={() => {
+                      if ((stock[prod.id] ?? 0) < o.cantidad_pack) { showToast('Stock insuficiente', 'error'); return }
+                      agregar(prod, o.cantidad_pack)
+                      showToast(`✓ ${o.etiqueta || o.nombre || prod.nombre} añadido`)
+                    }} style={{
+                      padding: '5px 11px', borderRadius: 20, border: '1px solid var(--green)',
+                      background: 'rgba(var(--green-rgb),.12)', color: 'var(--green)', fontSize: '.73rem',
+                      fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                    }}><i className="fi fi-rr-label"/> {prod.nombre} ×{o.cantidad_pack}</button>
+                  )
+                })}
               </div>
             )}
 
@@ -2738,7 +3396,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                     key={p.id} p={p}
                     stockDisp={stockDisp} enT={enT}
                     tieneOferta={tieneOferta} esFav={esFav}
-                    onTap={() => agregar(p)}
+                    onTap={() => agregar(p, 1, false, true)}
                     onLong={() => abrirModalCantidad(p)}
                     onFav={(id) => {
                       const nuevos = toggleFavorito(id)
@@ -2757,56 +3415,71 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             {/* Tab ofertas */}
             {tabTPV === 'ofertas' && (
               <div style={{ padding: 12, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {ofertas.filter(o => o.tipo === 'combinada').map(o => {
-                  const sinStock = (o.productos_requeridos || []).some(r => (stock[r.producto_id] ?? 0) < r.cantidad)
+                {ofertas.filter(o => o.tipo === 'combinada').filter(o => {
+                  if (!busq) return true
+                  const b = busq.toLowerCase()
+                  if ((o.etiqueta || o.nombre || '').toLowerCase().includes(b)) return true
+                  return (o.productos_requeridos || []).some(r => productos.find(p => p.id === r.producto_id)?.nombre.toLowerCase().includes(b))
+                }).map(o => {
+                  const reqs = o.productos_requeridos || []
+                  const sinStock = reqs.some(r => (stock[r.producto_id] ?? 0) < r.cantidad)
+                  const paidQty = id => ticket.filter(i => i.id === id && !i.regalo).reduce((s, i) => s + i.cantidad, 0)
+                  const yaAnadida = reqs.length > 0 && reqs.every(r => paidQty(r.producto_id) >= r.cantidad)
                   return (
-                    <button key={o.id} disabled={sinStock} onClick={() => {
-                      if (sinStock) return
-                      ;(o.productos_requeridos || []).forEach(r => {
-                        const prod = productos.find(p => p.id === r.producto_id)
-                        if (prod) agregar(prod, r.cantidad)
-                      })
-                      showToast(`✓ ${o.etiqueta} añadida`)
-                    }} style={{
-                      background: sinStock ? 'var(--s2)' : 'rgba(var(--blue-rgb),.1)',
-                      border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(var(--blue-rgb),.4)'}`,
-                      borderRadius: 'var(--rs)', padding: '13px 14px', cursor: sinStock ? 'not-allowed' : 'pointer',
-                      opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--blue)', fontSize: '.95rem' }}><i className="fi fi-rr-gift" style={{color:'var(--blue)'}}/> {o.etiqueta || o.nombre}</span>
-                        <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(o.precio_pack)}</span>
-                      </div>
-                      <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
-                        {(o.productos_requeridos || []).map(r => `${r.cantidad}× ${r.nombre || productos.find(p => p.id === r.producto_id)?.nombre || '?'}`).join(' + ')}
-                      </div>
-                    </button>
+                    <TarjetaOfertaComb
+                      key={o.id} oferta={o} productos={productos}
+                      sinStock={sinStock} yaAnadida={yaAnadida}
+                      onTap={() => {
+                        if (yaAnadida) {
+                          reqs.forEach(r => {
+                            const prod = productos.find(p => p.id === r.producto_id)
+                            if (prod) quitar(prod, r.cantidad)
+                          })
+                          showToast(`✕ ${o.etiqueta || o.nombre} retirada`, 'error')
+                          return
+                        }
+                        if (sinStock) { showToast('Stock insuficiente', 'error'); return }
+                        reqs.forEach(r => {
+                          const prod = productos.find(p => p.id === r.producto_id)
+                          if (prod) agregar(prod, r.cantidad)
+                        })
+                        showToast(`✓ ${o.etiqueta || o.nombre} añadida`)
+                      }}
+                      onLong={() => {
+                        if (!puedeOperar) { showToast(enDescanso ? 'Termina el descanso para vender' : 'Ficha tu entrada antes de vender', 'error'); setShowFichajes(true); return }
+                        if (!caja) { showToast('Abre la caja antes de vender', 'error'); setShowAperturaCaja(true); return }
+                        setCombModal(o)
+                      }}
+                    />
                   )
                 })}
-                {[...new Map(ofertas.filter(o => !o.tipo || o.tipo === 'pack').map(o => [o.producto_id, o])).values()].map(o => {
+                {[...new Map(ofertas.filter(o => !o.tipo || o.tipo === 'pack').map(o => [o.producto_id, o])).values()].filter(o => {
+                  if (!busq) return true
+                  const b = busq.toLowerCase()
+                  const prod = productos.find(p => p.id === o.producto_id)
+                  return (prod?.nombre.toLowerCase().includes(b)) || (o.etiqueta || o.nombre || '').toLowerCase().includes(b)
+                }).map(o => {
                   const prod = productos.find(p => p.id === o.producto_id)
                   if (!prod) return null
                   const stockDisp = stock[prod.id] ?? 0
-                  const sinStock = stockDisp < o.cantidad_pack
+                  const qtyEnTicket = ticket.filter(i => i.id === prod.id && !i.regalo).reduce((s, i) => s + i.cantidad, 0)
                   return (
-                    <button key={o.producto_id} disabled={sinStock} onClick={() => {
-                      if (sinStock) { showToast('Stock insuficiente', 'error'); return }
-                      agregar(prod, o.cantidad_pack)
-                      showToast(`✓ ${o.etiqueta || o.nombre} añadido`)
-                    }} style={{
-                      background: sinStock ? 'var(--s2)' : 'rgba(var(--gold-rgb),.08)',
-                      border: `1px solid ${sinStock ? 'var(--bd)' : 'rgba(var(--gold-rgb),.35)'}`,
-                      borderRadius: 'var(--rs)', padding: '13px 14px', cursor: sinStock ? 'not-allowed' : 'pointer',
-                      opacity: sinStock ? .5 : 1, textAlign: 'left', fontFamily: "'DM Sans',sans-serif",
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, color: sinStock ? 'var(--tx2)' : 'var(--gold)', fontSize: '.95rem' }}><i className="fi fi-rr-box" style={{color:'var(--gold)'}}/> {o.etiqueta || o.nombre}</span>
-                        <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(o.precio_pack)}</span>
-                      </div>
-                      <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
-                        {prod.nombre} · {o.cantidad_pack} uds · Stock: {stockDisp}
-                      </div>
-                    </button>
+                    <TarjetaOfertaPack
+                      key={o.producto_id} oferta={o} prod={prod}
+                      stockDisp={stockDisp} qtyEnTicket={qtyEnTicket}
+                      onTap={() => {
+                        if (qtyEnTicket >= o.cantidad_pack) {
+                          quitar(prod, o.cantidad_pack)
+                          showToast(`✕ ${o.etiqueta || o.nombre} retirada`, 'error')
+                        } else if (stockDisp < o.cantidad_pack) {
+                          showToast('Stock insuficiente', 'error')
+                        } else {
+                          agregar(prod, o.cantidad_pack)
+                          showToast(`✓ ${o.etiqueta || o.nombre} añadido`)
+                        }
+                      }}
+                      onLong={() => abrirModalCantidad(prod, o.cantidad_pack, o.etiqueta || o.nombre)}
+                    />
                   )
                 })}
               </div>
@@ -2831,21 +3504,30 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             </div>
             <div className="tf">
               <div className="tsb"><span>Artículos</span><span>{ticket.reduce((s, i) => s + i.cantidad, 0)}</span></div>
-              {detectarOfertasCombinadas(ticket, ofertas).map(o => {
-                const sinOferta = (o.productos_requeridos || []).reduce((s, req) => {
-                  const item = ticket.find(i => i.id === req.producto_id)
-                  if (!item) return s
-                  const { total: t } = calcularPrecio(item.id, req.cantidad, item.precio, ofertas)
-                  return s + t
-                }, 0)
-                const ahorro = sinOferta - o.precio_pack
-                return ahorro > 0 ? (
-                  <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px dashed rgba(var(--green-rgb),.3)', margin: '2px 0' }}>
-                    <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 600 }}><i className="fi fi-rr-label"/> {o.etiqueta || o.nombre}</span>
-                    <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 700 }}>-{fmt(ahorro)}</span>
-                  </div>
-                ) : null
-              })}
+              {(() => {
+                // Mismo orden de consumo que calcularTotalTicket: cada combinada
+                // consume unidades para no contarlas dos veces entre ofertas.
+                const restante = new Map(ticket.map(i => [i.id, i.cantidad]))
+                const rows = []
+                for (const o of ofertas.filter(x => x.tipo === 'combinada' && x.activa !== false)) {
+                  const veces = vecesAplicables(o, restante)
+                  if (veces <= 0) continue
+                  let costeNormal = 0
+                  for (const req of o.productos_requeridos) {
+                    const item = ticket.find(i => i.id === req.producto_id)
+                    costeNormal += (item ? item.precio : 0) * req.cantidad * veces
+                    restante.set(req.producto_id, (restante.get(req.producto_id) || 0) - req.cantidad * veces)
+                  }
+                  const ahorro = costeNormal - o.precio_pack * veces
+                  if (ahorro > 0) rows.push(
+                    <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px dashed rgba(var(--green-rgb),.3)', margin: '2px 0' }}>
+                      <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 600 }}><i className="fi fi-rr-label"/> {o.etiqueta || o.nombre}{veces > 1 && ` ×${veces}`}</span>
+                      <span style={{ fontSize: '.72rem', color: 'var(--green)', fontWeight: 700 }}>-{fmt(ahorro)}</span>
+                    </div>
+                  )
+                }
+                return rows
+              })()}
                 {ticket.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0', borderTop: '1px dashed rgba(255,255,255,.1)', margin: '2px 0' }}>
                   <span style={{ fontSize: '.72rem', color: 'var(--tx2)', flexShrink: 0 }}>Descuento</span>
@@ -2896,9 +3578,21 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       {prodModal && (
         <ModalCantidad producto={prodModal}
           stockDisp={Math.max(0, (stock[prodModal.id] ?? 0) - ticket.filter(i => i.id === prodModal.id).reduce((s, i) => s + i.cantidad, 0))}
-          ofertas={ofertas}
+          ofertas={ofertas} packSize={prodModal._packSize || 1} etiquetaOferta={prodModal._etiquetaOferta}
           onConfirm={(qty, regalo) => { agregar(prodModal, qty, regalo); setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }}
           onClose={() => { setProdModal(null); setTimeout(() => busqRef.current?.focus(), 50) }} />
+      )}
+      {combModal && (
+        <ModalCantidadComb oferta={combModal} productos={productos} stock={stock} ticket={ticket}
+          onConfirm={(n) => {
+            ;(combModal.productos_requeridos || []).forEach(r => {
+              const prod = productos.find(p => p.id === r.producto_id)
+              if (prod) agregar(prod, r.cantidad * n)
+            })
+            showToast(`✓ ${combModal.etiqueta || combModal.nombre}${n > 1 ? ` ×${n}` : ''} añadida`)
+            setCombModal(null)
+          }}
+          onClose={() => setCombModal(null)} />
       )}
       {showScan && (
         <Scanner
@@ -2906,10 +3600,46 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
           onClose={() => setShowScan(false)}
           stock={stock} ofertas={ofertas} />
       )}
-      {showPago && (
-        <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => setShowPago(false)}
+      {showAjustes && (
+        <ModalAjustes
           modoRapido={modoRapido} onToggleModoRapido={() => setModoRapido(m => !m)}
-          noImprimir={noImprimir} onToggleNoImprimir={() => setNoImprimir(n => !n)} />
+          noImprimir={noImprimir} onToggleNoImprimir={() => setNoImprimir(n => !n)}
+          modalAlEscanear={modalAlEscanear} onToggleModalEscanear={() => setModalAlEscanear(v => !v)}
+          onClose={() => setShowAjustes(false)} />
+      )}
+      {eanPicker && (
+        <div className="mo">
+          <div className="mc">
+            <ModalClose onClose={() => setEanPicker(null)} />
+            <div className="mt-modal"><i className="fi fi-rr-interrogation"/> ¿Cuál es?</div>
+            <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
+              Varios productos coinciden. Elige el correcto.
+            </div>
+            <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+              {eanPicker.map(p => {
+                const st = stock[p.id] ?? 0
+                return (
+                  <button key={p.id} onClick={() => { setEanPicker(null); añadirEscaneado(p) }} style={{
+                    width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', marginBottom: 6, borderRadius: 'var(--rs)',
+                    background: 'var(--s2)', border: '1px solid var(--bd)', cursor: 'pointer',
+                    color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif", opacity: st > 0 ? 1 : .5,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '.88rem' }}>{p.nombre}</div>
+                      <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>{p.empresa ? `${p.empresa} · ` : ''}{p.categoria} · {fmt(p.precio)}</div>
+                    </div>
+                    <span style={{ fontSize: '.75rem', fontWeight: 700, color: st > 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{st > 0 ? `Stock ${st}` : 'Agotado'}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <button className="btn-s" onClick={() => setEanPicker(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      {showPago && (
+        <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => setShowPago(false)} />
       )}
       {showCierre && (
         <ModalCierreCaja caja={caja} caseta={caseta?.nombre} ventas={ventas}
@@ -2923,8 +3653,9 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
 
       {/* Modal apertura de caja */}
       {showAperturaCaja && (
-        <div className="mo" onClick={e => e.target === e.currentTarget && setShowAperturaCaja(false)}>
+        <div className="mo">
           <div className="mc">
+            <ModalClose onClose={() => setShowAperturaCaja(false)} />
             <div className="mt-modal"><i className="fi fi-rr-lock-open-alt"/> Abrir Caja</div>
             <div style={{ fontSize: '.85rem', color: 'var(--tx2)', marginBottom: 16 }}>
               Hola <strong style={{ color: 'var(--tx)' }}>{perfil.nombre}</strong> · {caseta?.nombre}
@@ -2974,20 +3705,52 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
         <ModalMisPedidos caseta={caseta} perfil={perfil} productos={productos}
           showToast={showToast}
           onRecibido={refrescarTras}
+          onStock={(pid, cant) => setStock(prev => ({ ...prev, [pid]: cant }))}
           onClose={() => { setShowMisPedidos(false); sessionStorage.removeItem('tpv_panel'); refrescarTras() }} />
       )}
       {showInventario && (
         <ModalInventario caseta={caseta} perfil={perfil} productos={productos} stockActual={stock}
           showToast={showToast} onClose={() => { setShowInventario(false); sessionStorage.removeItem('tpv_panel') }} />
       )}
+      {showDevolucion && (
+        <ModalDevolucion caseta={caseta} perfil={perfil} caja={caja} productos={productos} stock={stock}
+          showToast={showToast}
+          onDone={(delta) => setStock(prev => {
+            const next = { ...prev }
+            Object.entries(delta).forEach(([id, d]) => { next[id] = Math.max(0, (next[id] || 0) + d) })
+            return next
+          })}
+          onClose={() => setShowDevolucion(false)} />
+      )}
+      {showBaja && (
+        <ModalBaja caseta={caseta} perfil={perfil} caja={caja} productos={productos} stock={stock}
+          showToast={showToast}
+          onDone={(delta) => setStock(prev => {
+            const next = { ...prev }
+            Object.entries(delta).forEach(([id, d]) => { next[id] = Math.max(0, (next[id] || 0) + d) })
+            return next
+          })}
+          onClose={() => setShowBaja(false)} />
+      )}
+      {showAjuste && (perfil?.es_encargado || perfil?.rol === 'ADMIN') && (
+        <ModalAjusteStock caseta={caseta} perfil={perfil} productos={productos} stock={stock}
+          showToast={showToast}
+          onDone={(delta) => setStock(prev => {
+            const next = { ...prev }
+            Object.entries(delta).forEach(([id, d]) => { next[id] = Math.max(0, (next[id] || 0) + d) })
+            return next
+          })}
+          onClose={() => setShowAjuste(false)} />
+      )}
       {showOk && (
         <div className="mo">
           <div className="mc" style={{ textAlign: 'center' }}>
+            <ModalClose onClose={() => setShowOk(null)} />
             <div style={{ fontSize: '2rem', marginBottom: 8, color: 'var(--green)' }}><i className="fi fi-rr-check-circle"/></div>
             <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '1.8rem', color: 'var(--green)', marginBottom: 6 }}>¡Venta Confirmada!</div>
             <div style={{ fontSize: '.9rem', fontWeight: 700, color: 'var(--ac)', marginBottom: 4 }}>{fmt(showOk.total)}</div>
             <div style={{ fontSize: '.83rem', color: 'var(--tx2)', marginBottom: 16 }}>
-              {showOk.metodo === 'efectivo' ? `Efectivo · Cambio: ${fmt(showOk.cambio)}` : 'Tarjeta'}
+              {showOk.metodo === 'efectivo' ? `Efectivo · Cambio: ${fmt(showOk.cambio)}` : showOk.metodo === 'tarjeta' ? 'Tarjeta' : `Mixto · ${fmt(showOk.pagoEfectivo)} efectivo + ${fmt(showOk.pagoTarjeta)} tarjeta`}
             </div>
             {/* Botones imprimir — ticket y factura, en fila y mismo color */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>

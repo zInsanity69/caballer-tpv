@@ -60,40 +60,55 @@ export function calcularPrecio(productoId, cantidad, precioBase, ofertas) {
 }
 
 export function calcularTotalTicket(items, ofertas) {
-  // Primero sumar precios normales/pack por producto
-  let total = redondear(items.reduce((sum, item) => {
-    const { total } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
-    return sum + total
-  }, 0))
+  // Cantidades disponibles por producto (se irán consumiendo con las combinadas)
+  const restante = new Map(items.map(i => [i.id, i.cantidad]))
 
-  // Luego aplicar descuentos de ofertas combinadas
-  // Una oferta combinada sustituye la suma de precios normales por su precio_pack
-  const combinadasAplicadas = detectarOfertasCombinadas(items, ofertas)
-  for (const oferta of combinadasAplicadas) {
-    // Calcular lo que costarían esos productos sin la oferta combinada
-    const sinOferta = (oferta.productos_requeridos || []).reduce((s, req) => {
-      const item = items.find(i => i.id === req.producto_id)
-      if (!item) return s
-      const { total: t } = calcularPrecio(item.id, req.cantidad, item.precio, ofertas)
-      return s + t
-    }, 0)
-    // Aplicar descuento: precio_pack - lo que ya costaría
-    total = redondear(total - sinOferta + oferta.precio_pack)
+  let total = 0
+
+  // 1. Aplicar ofertas combinadas consumiendo unidades.
+  //    Cada combinada se aplica tantas veces como permitan las cantidades y
+  //    consume los productos para que no se cuenten dos veces.
+  const combinadas = (ofertas || []).filter(o => o.tipo === 'combinada' && o.activa !== false)
+  for (const oferta of combinadas) {
+    const veces = vecesAplicables(oferta, restante)
+    if (veces <= 0) continue
+    for (const req of oferta.productos_requeridos) {
+      restante.set(req.producto_id, (restante.get(req.producto_id) || 0) - req.cantidad * veces)
+    }
+    total += oferta.precio_pack * veces
   }
 
-  return total
+  // 2. Las unidades restantes se cobran con sus ofertas pack / precio normal.
+  for (const item of items) {
+    const q = restante.get(item.id) || 0
+    if (q <= 0) continue
+    const { total: t } = calcularPrecio(item.id, q, item.precio, ofertas)
+    total += t
+  }
+
+  return redondear(total)
 }
 
-// Detecta ofertas combinadas que aplican al ticket actual
+// Nº de veces que una oferta combinada puede aplicarse dadas las cantidades
+// disponibles. `cantidades` puede ser un Map(producto_id -> cantidad) o la lista
+// de items del ticket.
+export function vecesAplicables(oferta, cantidades) {
+  const reqs = oferta.productos_requeridos
+  if (!reqs || !reqs.length) return 0
+  const disp = cantidades instanceof Map
+    ? cantidades
+    : new Map((cantidades || []).map(i => [i.id, i.cantidad]))
+  let veces = Infinity
+  for (const req of reqs) {
+    veces = Math.min(veces, Math.floor((disp.get(req.producto_id) || 0) / req.cantidad))
+  }
+  return Number.isFinite(veces) ? veces : 0
+}
+
+// Detecta ofertas combinadas que aplican al ticket actual (al menos 1 vez)
 export function detectarOfertasCombinadas(items, ofertas) {
   const combinadas = (ofertas || []).filter(o => o.tipo === 'combinada' && o.activa !== false)
-  return combinadas.filter(oferta => {
-    if (!oferta.productos_requeridos) return false
-    return oferta.productos_requeridos.every(req => {
-      const item = items.find(i => i.id === req.producto_id)
-      return item && item.cantidad >= req.cantidad
-    })
-  })
+  return combinadas.filter(oferta => vecesAplicables(oferta, items) > 0)
 }
 
 function redondear(n) {

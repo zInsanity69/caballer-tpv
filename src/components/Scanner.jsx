@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { BrowserMultiFormatReader, BarcodeFormat } from '@zxing/browser'
 import { getProductosByEan } from '../lib/api.js'
+import ModalClose from './ModalClose.jsx'
 
 export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} }) {
   const videoRef  = useRef(null)
@@ -140,8 +141,9 @@ export default function Scanner({ onDetect, onClose, ofertas = [], stock = {} })
   const fmt = n => n.toLocaleString('es-ES', { style: 'currency', currency: 'EUR' })
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="mc">
+        <ModalClose onClose={onClose} />
         <div className="mt-modal">📷 Escanear Producto</div>
 
         {prodPendiente ? (

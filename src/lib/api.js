@@ -206,9 +206,10 @@ export async function getNECDetalle(casetaId) {
 }
 
 // ─── OFERTAS ─────────────────────────────────────────────────
-export async function getOfertas() {
-  const { data, error } = await supabase
-    .from('ofertas').select('*').eq('activa', true).order('producto_id').order('cantidad_pack')
+export async function getOfertas(soloActivas = true) {
+  let q = supabase.from('ofertas').select('*').order('producto_id').order('cantidad_pack')
+  if (soloActivas) q = q.eq('activa', true)
+  const { data, error } = await q
   if (error) throw error
   return data
 }
@@ -218,6 +219,11 @@ export async function upsertOferta(oferta) {
     .from('ofertas').upsert(oferta, { onConflict: 'id' }).select().single()
   if (error) throw error
   return data
+}
+
+export async function updateOferta(id, cambios) {
+  const { error } = await supabase.from('ofertas').update(cambios).eq('id', id)
+  if (error) throw error
 }
 
 export async function deleteOferta(id) {
@@ -244,6 +250,11 @@ export async function deleteCaseta(id) {
   if (error) throw error
 }
 
+export async function updateCaseta(id, cambios) {
+  const { error } = await supabase.from('casetas').update(cambios).eq('id', id)
+  if (error) throw error
+}
+
 export async function updateAllPedidosAuto(activos) {
   const { error } = await supabase.from('casetas').update({ pedidos_auto_activos: activos })
     .neq('id', '00000000-0000-0000-0000-000000000000') // aplica a todas
@@ -263,6 +274,76 @@ export async function getPerfilesEmpleados() {
     .from('perfiles').select('*, casetas(nombre)').eq('rol', 'EMPLEADO').order('nombre')
   if (error) throw error
   return data
+}
+
+// Auditoría de ediciones/borrados de tickets (solo admin por RLS)
+export async function getAuditoriaTickets(casetaId = null) {
+  let q = supabase
+    .from('ticket_auditoria')
+    .select('*, perfiles(nombre), casetas(nombre)')
+    .order('creado_en', { ascending: false })
+    .limit(300)
+  if (casetaId) q = q.eq('caseta_id', casetaId)
+  const { data, error } = await q
+  if (error) throw error
+  return data
+}
+
+// ─── DEVOLUCIONES / DEFECTUOSOS / BAJAS ───────────────────────
+export async function registrarDevolucion(cab, items, ctx = null) {
+  const { data, error } = await supabase.rpc('registrar_devolucion', { p_cab: cab, p_items: items })
+  if (error) throw error
+  const caseta = ctx?.nombreCaseta ? ` · ${ctx.nombreCaseta}` : ''
+  const quien  = ctx?.nombreEmpleado ? ` · ${ctx.nombreEmpleado}` : ''
+  const resumen = (items || []).map(i => `${i.nombre_producto} ×${i.cantidad}`).join(', ')
+  if (cab.tipo === 'BAJA') {
+    triggerAlerta('baja_producto', `📦 <b>Baja / rotura de producto</b>${caseta}${quien}\n${resumen}`)
+  } else {
+    const reemb = (+cab.importe_reembolsado > 0) ? `\nReembolso: <b>${(+cab.importe_reembolsado).toFixed(2)}€</b>` : ''
+    triggerAlerta('devolucion', `↩️ <b>${cab.tipo === 'COMPENSACION' ? 'Compensación (defectuoso)' : 'Devolución'}</b>${caseta}${quien}${reemb}\n${resumen}`)
+  }
+  return data
+}
+
+export async function getDevoluciones(casetaId = null) {
+  let q = supabase.from('devoluciones')
+    .select('*, perfiles(nombre), casetas(nombre), devolucion_items(*)')
+    .order('creado_en', { ascending: false })
+    .limit(300)
+  if (casetaId) q = q.eq('caseta_id', casetaId)
+  const { data, error } = await q
+  if (error) throw error
+  return data
+}
+
+export async function getDefectuosos(casetaId = null) {
+  let q = supabase.from('devolucion_items')
+    .select('*, devoluciones!inner(id, caseta_id, tipo, creado_en, casetas(nombre))')
+    .in('movimiento', ['DEVUELTO_DEFECTUOSO', 'BAJA'])
+    .order('creado_en', { foreignTable: 'devoluciones', ascending: false })
+  if (casetaId) q = q.eq('devoluciones.caseta_id', casetaId)
+  const { data, error } = await q
+  if (error) throw error
+  return data
+}
+
+export async function updateReclamacionItem(itemId, estado) {
+  const { error } = await supabase.from('devolucion_items').update({ reclamacion: estado }).eq('id', itemId)
+  if (error) throw error
+}
+
+export async function getTicketPorNumero(casetaId, numero) {
+  const raw = String(numero || '').trim()
+  if (!raw) return null
+  // Los escáneres con distribución de teclado distinta pueden convertir el guión
+  // en otro carácter (p.ej. ALZ-00003 → ALZ'00003). Normalizamos: cualquier
+  // separador no alfanumérico se trata como comodín en la búsqueda.
+  const pattern = raw.toUpperCase().replace(/[^A-Z0-9]+/g, '%')
+  const { data, error } = await supabase.from('tickets')
+    .select('*, numero_ticket, ticket_items(id, producto_id, nombre_producto, precio_unitario, cantidad, total_linea)')
+    .eq('caseta_id', casetaId).ilike('numero_ticket', pattern).limit(1)
+  if (error) throw error
+  return data && data[0] ? data[0] : null
 }
 
 export async function updateTicketNota(ticketId, notas, ctx = null) {
@@ -380,7 +461,7 @@ export async function getCajaAbierta(casetaId) {
 export async function getCajasAbiertas() {
   const { data, error } = await supabase
     .from('cajas')
-    .select('id, apertura_dinero, caseta_id, casetas(nombre), tickets(metodo_pago, total)')
+    .select('id, apertura_dinero, caseta_id, casetas(nombre), tickets(metodo_pago, total, pago_efectivo, pago_tarjeta)')
     .eq('estado', 'ABIERTA')
   if (error) throw error
   const cajas = data || []
@@ -398,20 +479,47 @@ export async function getCajasAbiertas() {
     }
   } catch (_) { /* tabla aún no existe, ignorar */ }
 
+  // Devoluciones en efectivo (salen de la caja, se restan igual que las retiradas)
+  const devolucionPorCaja = {}
+  try {
+    const ids = cajas.map(c => c.id)
+    if (ids.length > 0) {
+      const { data: devs } = await supabase
+        .from('devoluciones').select('caja_id, importe_reembolsado')
+        .eq('tipo', 'DEVOLUCION').eq('metodo', 'efectivo').in('caja_id', ids)
+      ;(devs || []).forEach(d => {
+        devolucionPorCaja[d.caja_id] = (devolucionPorCaja[d.caja_id] || 0) + (d.importe_reembolsado || 0)
+      })
+    }
+  } catch (_) { /* tabla aún no existe, ignorar */ }
+
   return cajas.map(c => {
-    const ventasEfectivo = (c.tickets || []).filter(t => t.metodo_pago === 'efectivo').reduce((s, t) => s + (t.total || 0), 0)
+    const ventasEfectivo = (c.tickets || []).reduce((s, t) => s + (t.pago_efectivo ?? (t.metodo_pago === 'efectivo' ? t.total : 0)), 0)
     const totalRetiradas = retiradaPorCaja[c.id] || 0
+    const totalDevoluciones = devolucionPorCaja[c.id] || 0
     return {
       casetaNombre: c.casetas?.nombre || '?',
       casetaId: c.caseta_id,
       apertura: c.apertura_dinero || 0,
       ventasEfectivo,
       totalRetiradas,
-      // totalEfectivo = solo ventas del día − retiradas (sin apertura, que no es dinero ganado hoy)
-      totalEfectivo: ventasEfectivo - totalRetiradas,
+      totalDevoluciones,
+      // totalEfectivo = ventas del día − retiradas − devoluciones (sin apertura, que no es dinero ganado hoy)
+      totalEfectivo: ventasEfectivo - totalRetiradas - totalDevoluciones,
       numTickets: (c.tickets || []).length,
     }
   })
+}
+
+// Devoluciones en efectivo de una caja concreta (para el cierre)
+export async function getDevolucionesEfectivoCaja(cajaId) {
+  try {
+    const { data, error } = await supabase
+      .from('devoluciones').select('importe_reembolsado')
+      .eq('caja_id', cajaId).eq('tipo', 'DEVOLUCION').eq('metodo', 'efectivo')
+    if (error) throw error
+    return (data || []).reduce((s, d) => s + (d.importe_reembolsado || 0), 0)
+  } catch (_) { return 0 }
 }
 
 export async function getRetiradas(cajaId) {
@@ -479,7 +587,7 @@ export async function cerrarCaja(cajaId, empleadoId, dineroContado, ctx = null) 
 
 export async function getResumenCaja(cajaId) {
   const { data, error } = await supabase
-    .from('tickets').select('metodo_pago, total, empleado_id, perfiles(nombre)').eq('caja_id', cajaId)
+    .from('tickets').select('metodo_pago, total, pago_efectivo, pago_tarjeta, empleado_id, perfiles(nombre)').eq('caja_id', cajaId)
   if (error) throw error
   return data
 }
@@ -496,6 +604,8 @@ export async function crearTicket(payload) {
     p_dinero_dado: payload.dineroDado,
     p_cambio:      payload.cambio,
     p_items:       payload.items,
+    p_pago_efectivo: payload.pagoEfectivo ?? null,
+    p_pago_tarjeta:  payload.pagoTarjeta ?? null,
   })
   if (error) throw error
   // Recuperar el número de ticket asignado
@@ -696,8 +806,32 @@ export async function updatePedidoItems(pedidoId, items) {
   if (e2) throw e2
 }
 
+// Aplica al stock un producto del pedido en el momento de revisarlo (recepción
+// progresiva). `delta` es la diferencia respecto a lo ya aplicado para ese item
+// y puede ser negativo (corrección). Devuelve el stock resultante (o null si no
+// hubo cambio). También persiste la cantidad recibida y la nota del item.
+export async function recibirItemPedido(itemId, productoId, casetaId, delta, cantidadRecibida, notas = null) {
+  let nuevaCantidad = null
+  if (delta !== 0) {
+    const { data, error } = await supabase.rpc('ajustar_stock', {
+      p_producto_id: productoId,
+      p_caseta_id:   casetaId,
+      p_delta:       delta,
+    })
+    if (error) throw error
+    nuevaCantidad = data
+  }
+  const { error: e2 } = await supabase.from('pedido_items')
+    .update({ cantidad_recibida: cantidadRecibida, notas_item: notas || null })
+    .eq('id', itemId)
+  if (e2) throw e2
+  return nuevaCantidad
+}
+
 export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibidos, notas = '', ctx = null) {
-  // Guarda cantidades recibidas e incidencias por item
+  // El stock ya se fue aplicando producto a producto al revisarlos
+  // (recepción progresiva, ver recibirItemPedido). Aquí solo persistimos los
+  // datos por si quedó algo sin guardar, fijamos el estado y avisamos.
   for (const item of itemsRecibidos) {
     await supabase.from('pedido_items')
       .update({ cantidad_recibida: item.cantidad_recibida, notas_item: item.notas_item || null })
@@ -716,18 +850,6 @@ export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibido
     notas: notas || null,
     actualizado_en: new Date().toISOString(),
   }).eq('id', pedidoId)
-
-  // Sumar stock recibido — usa RPC para evitar problemas de RLS
-  for (const item of itemsRecibidos) {
-    const cant = item.cantidad_recibida ?? item.cantidad
-    if (cant <= 0) continue
-    const { error: eRpc } = await supabase.rpc('incrementar_stock', {
-      p_producto_id: item.producto_id,
-      p_caseta_id:   casetaId,
-      p_cantidad:    cant,
-    })
-    if (eRpc) console.error('[recepcion] error RPC stock', item.nombre, eRpc)
-  }
 
   const caseta = ctx?.nombreCaseta  || ''
   const nombre = ctx?.nombreEmpleado || ''
@@ -751,9 +873,9 @@ export async function getInventarios(casetaId) {
   return data || []
 }
 
-export async function crearInventario(casetaId, empleadoId, items) {
+export async function crearInventario(casetaId, empleadoId, items, esFinal = false) {
   const { data: inv, error: e1 } = await supabase.from('inventarios')
-    .insert({ caseta_id: casetaId, empleado_id: empleadoId, estado: 'BORRADOR' })
+    .insert({ caseta_id: casetaId, empleado_id: empleadoId, estado: 'BORRADOR', es_final: esFinal })
     .select().single()
   if (e1) throw e1
 
@@ -770,50 +892,75 @@ export async function crearInventario(casetaId, empleadoId, items) {
   return inv
 }
 
-export async function confirmarInventario(inventarioId, ctx = null) {
-  const { error } = await supabase.rpc('aplicar_inventario', { p_inventario_id: inventarioId })
+export async function confirmarInventario(inventarioId, ctx = null, esFinal = false) {
+  const rpc = esFinal ? 'aplicar_inventario_final' : 'aplicar_inventario'
+  const { error } = await supabase.rpc(rpc, { p_inventario_id: inventarioId })
   if (error) throw error
   const caseta = ctx?.nombreCaseta  || ''
   const nombre = ctx?.nombreEmpleado || ''
   triggerAlerta('inventario_enviado',
-    `📋 <b>Inventario confirmado</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}`)
+    `📋 <b>Inventario ${esFinal ? 'final confirmado (caseta vaciada)' : 'confirmado'}</b>${caseta ? ` en ${caseta}` : ''}${nombre ? ` por ${nombre}` : ''}`)
+}
+
+// Ajuste de stock con registro (auditado). delta positivo suma, negativo resta.
+export async function ajustarStockAuditado(productoId, casetaId, delta, motivo = null) {
+  const { data, error } = await supabase.rpc('ajustar_stock_auditado', {
+    p_producto_id: productoId, p_caseta_id: casetaId, p_delta: delta, p_motivo: motivo || null,
+  })
+  if (error) throw error
+  return data
+}
+
+export async function getStockAuditoria(casetaId = null) {
+  let q = supabase.from('stock_auditoria')
+    .select('*, perfiles(nombre), casetas(nombre)')
+    .order('creado_en', { ascending: false })
+    .limit(300)
+  if (casetaId) q = q.eq('caseta_id', casetaId)
+  const { data, error } = await q
+  if (error) throw error
+  return data
 }
 
 // ─── STATS ADMIN ─────────────────────────────────────────────
 export async function getStatsAdmin() {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
-  const [ticketsRes, stockBajoRes, stockCeroRes, productosRes, casetasRes] = await Promise.all([
-    supabase.from('tickets').select('total, metodo_pago, casetas(nombre)').gte('creado_en', hoy.toISOString()),
-    supabase.from('stock').select('cantidad, productos!inner(nombre, categoria, activo), casetas(id, nombre)')
-      .eq('productos.activo', true).gt('cantidad', 0).lt('cantidad', 10),
-    supabase.from('stock').select('cantidad, productos!inner(nombre, categoria, activo), casetas(id, nombre)')
-      .eq('productos.activo', true).eq('cantidad', 0),
-    supabase.from('productos').select('id, nombre, categoria').eq('activo', true),
-    supabase.from('casetas').select('id, nombre'),
+  // Stock bajo/agotado: SOLO productos que la caseta gestiona (con stock_mínimo
+  // configurado) y SOLO casetas activas. «Bajo» = por debajo de su mínimo;
+  // «Agotado» = a 0. Los productos sin mínimo no alertan (la caseta no los sigue).
+  const sel = 'cantidad, stock_minimo, producto_id, productos!inner(nombre, categoria, activo), casetas!inner(id, nombre, activo)'
+  const [ticketsRes, stockBajoRes, stockCeroRes] = await Promise.all([
+    supabase.from('tickets').select('total, metodo_pago, pago_efectivo, pago_tarjeta, casetas(nombre)').gte('creado_en', hoy.toISOString()),
+    supabase.from('stock').select(sel)
+      .eq('productos.activo', true).eq('casetas.activo', true).gt('stock_minimo', 0).gt('cantidad', 0),
+    supabase.from('stock').select(sel)
+      .eq('productos.activo', true).eq('casetas.activo', true).gt('stock_minimo', 0).lte('cantidad', 0),
   ])
-  const { data: stockTodo } = await supabase.from('stock').select('producto_id, caseta_id')
-  const stockSet = new Set((stockTodo || []).map(s => `${s.producto_id}__${s.caseta_id}`))
-  const casetas = casetasRes.data || []
-  const productos = productosRes.data || []
-  const sinFila = []
-  for (const p of productos) {
-    for (const c of casetas) {
-      if (!stockSet.has(`${p.id}__${c.id}`)) {
-        sinFila.push({ cantidad: 0, productos: { nombre: p.nombre, categoria: p.categoria }, casetas: { id: c.id, nombre: c.nombre } })
-      }
-    }
-  }
+  // «Bajo»: por debajo del mínimo (la comparación entre columnas se filtra aquí).
+  const stockBajo = (stockBajoRes.data || []).filter(r => r.cantidad < r.stock_minimo)
+  const stockCero = stockCeroRes.data || []
+
+  // Devoluciones de hoy (reembolsos) — restan a las ventas. Guardado por si la
+  // tabla aún no existe (migración sin aplicar).
+  let devolucionesHoy = 0
+  try {
+    const { data: devs } = await supabase.from('devoluciones')
+      .select('importe_reembolsado').eq('tipo', 'DEVOLUCION').gte('creado_en', hoy.toISOString())
+    devolucionesHoy = (devs || []).reduce((s, d) => s + (d.importe_reembolsado || 0), 0)
+  } catch (_) { /* tabla aún no existe */ }
+
   return {
     tickets:   ticketsRes.data || [],
-    stockBajo: stockBajoRes.data || [],
-    stockCero: [...(stockCeroRes.data || []), ...sinFila],
+    stockBajo,
+    stockCero,
+    devolucionesHoy,
   }
 }
 
 export async function getVentasPorDia(casetaId, año, mes) {
   const desde = new Date(año, mes - 1, 1).toISOString()
   const hasta = new Date(año, mes, 0, 23, 59, 59).toISOString()
-  let q = supabase.from('tickets').select('total, metodo_pago, creado_en')
+  let q = supabase.from('tickets').select('total, metodo_pago, pago_efectivo, pago_tarjeta, creado_en')
     .gte('creado_en', desde).lte('creado_en', hasta)
   if (casetaId) q = q.eq('caseta_id', casetaId)
   const { data, error } = await q
@@ -823,8 +970,8 @@ export async function getVentasPorDia(casetaId, año, mes) {
     const dia = t.creado_en.slice(0, 10)
     if (!porDia[dia]) porDia[dia] = { efectivo: 0, tarjeta: 0, tickets: 0 }
     porDia[dia].tickets++
-    if (t.metodo_pago === 'efectivo') porDia[dia].efectivo += t.total
-    else porDia[dia].tarjeta += t.total
+    porDia[dia].efectivo += (t.pago_efectivo ?? (t.metodo_pago === 'efectivo' ? t.total : 0))
+    porDia[dia].tarjeta  += (t.pago_tarjeta  ?? (t.metodo_pago === 'tarjeta'  ? t.total : 0))
   })
   return porDia
 }
