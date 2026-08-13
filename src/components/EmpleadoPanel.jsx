@@ -1354,7 +1354,7 @@ function ModalAjustes({ modoRapido, onToggleModoRapido, noImprimir, onToggleNoIm
 }
 
 // ─── MODAL PEDIDO ─────────────────────────────────────────────
-function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedidosActivosProdIds = new Set(), itemsIniciales = null, onClose, onCreado, showToast }) {
+export function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedidosActivosProdIds = new Set(), itemsIniciales = null, onClose, onCreado, showToast }) {
   const [items, setItems] = useState(() => {
     // Si hay borrador guardado, usarlo directamente
     if (itemsIniciales && itemsIniciales.length > 0) return itemsIniciales
@@ -1540,8 +1540,11 @@ function ModalPedido({ caseta, perfil, productos, stock, stockMinimos = {}, pedi
                 const qtyUnit = enPedido > 0 ? Math.max(1, Math.round(enPedido / size)) : 0
                 return (
                   <div key={p.id} style={{
-                    padding: '9px 0', borderBottom: '1px solid var(--bd)',
-                    opacity: stockDisp === 0 ? .6 : 1,
+                    padding: '9px 8px', borderBottom: '1px solid var(--bd)', borderRadius: 'var(--rs)',
+                    // Atenuado solo si está agotado Y NO está en el pedido. Al añadirlo se ilumina.
+                    opacity: (stockDisp === 0 && enPedido === 0) ? .55 : 1,
+                    background: enPedido > 0 ? 'rgba(var(--ac-rgb),.08)' : 'transparent',
+                    borderLeft: enPedido > 0 ? '3px solid var(--ac)' : '3px solid transparent',
                   }}>
                     {/* Fila 1: nombre + botón/controles */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1808,7 +1811,7 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const ESTADO_LABEL = {PENDIENTE:'Pendiente', ACEPTADO:'Aceptado', EN_CAMINO:'En camino', RECIBIDO:'Recibido', INCIDENCIA:'Incidencia', RECHAZADO:'Rechazado'}
 
   return (
-    <div className="mo">
+    <div className="mo" style={recibiendo ? { background: 'transparent', backdropFilter: 'none' } : undefined}>
       <div className="mc wide" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
         <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-truck-side"/> Mis Pedidos</div>

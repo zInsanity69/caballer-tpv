@@ -4,6 +4,7 @@ import { imprimirTicket, ticketRowToDatos } from '../lib/ticket.js'
 import FacturaModal from './FacturaModal.jsx'
 import ModalEditTicket from './ModalEditTicket.jsx'
 import ModalClose from './ModalClose.jsx'
+import { ModalPedido } from './EmpleadoPanel.jsx'
 import Logo from './Logo.jsx'
 import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
@@ -16,7 +17,7 @@ import {
   getDevoluciones, getDefectuosos, updateReclamacionItem,
   setStock, ajustarStock, ajustarStockAuditado, getStockAuditoria, getStockCaseta, getStockMinimos, setStockMinimo,
   getVentasPorDia,
-  getPedidos, updatePedido, updatePedidoItems,
+  getPedidos, crearPedido, updatePedido, updatePedidoItems,
   getFichajesAdmin, editarFichaje, deleteFichaje, calcularTurnos, calcularEstado, fmtDuracion,
   getInventarios, confirmarInventario,
   getKgPolvora,
@@ -824,7 +825,55 @@ function ModalEditarPedido({ pedido, items, notasAdmin, saving, onChangeItems, o
   )
 }
 
-function PanelPedidos({ casetas, onPedidoAceptado }) {
+// ─── MODAL NUEVO PEDIDO (admin) — reutiliza el ModalPedido del empleado ───
+// Paso 1: elegir caseta. Paso 2: mismo catálogo/embalajes que usa el empleado.
+function ModalNuevoPedido({ casetas, perfil, onClose, onCreado, showToast }) {
+  const [casetaId,setCasetaId]=useState('')
+  const [productos,setProductos]=useState([])
+  const [stock,setStock]=useState({})
+  const [stockMinimos,setStockMinimos]=useState({})
+  const [cargando,setCargando]=useState(false)
+  const [listo,setListo]=useState(false)
+  const caseta=casetas.find(c=>c.id===casetaId)
+
+  const continuar=async()=>{
+    if(!casetaId){showToast('Elige una caseta','error');return}
+    setCargando(true)
+    try{
+      const [prods,stk,mins]=await Promise.all([
+        getProductos(), getStockCaseta(casetaId), getStockMinimos(casetaId).catch(()=>({})),
+      ])
+      setProductos(prods); setStock(stk||{}); setStockMinimos(mins||{}); setListo(true)
+    }catch(e){showToast(e.message,'error')}
+    setCargando(false)
+  }
+
+  // Paso 2: mismo modal que el empleado, ya con la caseta elegida
+  if(listo&&caseta){
+    return <ModalPedido caseta={caseta} perfil={perfil} productos={productos} stock={stock} stockMinimos={stockMinimos}
+      pedidosActivosProdIds={new Set()} showToast={showToast}
+      onClose={()=>onClose()} onCreado={()=>{ onCreado&&onCreado(); onClose() }} />
+  }
+
+  // Paso 1: elegir caseta
+  return(
+    <div className="mo"><div className="mc">
+      <ModalClose onClose={onClose}/>
+      <div className="mt-modal"><i className="fi fi-rr-truck-side"/> Nuevo pedido</div>
+      <div style={{fontSize:'.85rem',color:'var(--tx2)',marginBottom:14}}>Elige la caseta a la que va el pedido. Después verás el mismo catálogo que usa el empleado (con embalajes: unidad / envase / caja).</div>
+      <div className="fg"><label>Caseta</label>
+        <select value={casetaId} onChange={e=>setCasetaId(e.target.value)}>
+          <option value="">-- Elegir caseta --</option>
+          {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}{c.activo===false?' (inactiva)':''}</option>)}
+        </select>
+      </div>
+      <button className="btn-add" style={{width:'100%'}} disabled={cargando||!casetaId} onClick={continuar}>{cargando?'Cargando...':'Continuar'}</button>
+      <button className="btn-s" onClick={onClose}>Cancelar</button>
+    </div></div>
+  )
+}
+
+function PanelPedidos({ casetas, perfil, onPedidoAceptado }) {
   const [pedidos,setPedidos]=useState([])
   const [loading,setLoading]=useState(true)
   const [estadoFiltro,setEstadoFiltro]=useState('')
@@ -834,9 +883,11 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
   const [editItems,setEditItems]=useState([])
   const [notasAdmin,setNotasAdmin]=useState('')
   const [saving,setSaving]=useState(false)
+  const [showNuevo,setShowNuevo]=useState(false)
   const [toast,setToast]=useState(null)
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),2500) }
 
+  const recargar=()=>getPedidos({}).then(setPedidos).catch(()=>{})
   useEffect(()=>{ getPedidos({}).then(setPedidos).catch(e=>{ setPedidos([]); console.error('getPedidos:',e.message) }).finally(()=>setLoading(false)) },[])
 
   const imprimirPedidoPDF=(p,soloEmpresa=null)=>{
@@ -939,7 +990,10 @@ function PanelPedidos({ casetas, onPedidoAceptado }) {
           {casetas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         <span style={{fontSize:'.82rem',color:'var(--tx2)'}}>{filtrados.length} pedidos</span>
+        <button className="btn-add" style={{width:'auto',marginTop:0,marginLeft:'auto'}} onClick={()=>setShowNuevo(true)}><i className="fi fi-rr-plus"/> Nuevo pedido</button>
       </div>
+
+      {showNuevo&&<ModalNuevoPedido casetas={casetas} perfil={perfil} showToast={showToast} onCreado={recargar} onClose={()=>setShowNuevo(false)}/>}
 
       {filtrados.length===0?<div style={{textAlign:'center',color:'var(--tx2)',padding:40}}>Sin pedidos con estos filtros</div>
         :filtrados.map(p=>(
@@ -2561,7 +2615,7 @@ export default function AdminPanel({ perfil, casetas: casetasInit, onModoVenta }
         {tab==='auditoria'   && <PanelAuditoria casetas={casetas}/>}
         {tab==='devoluciones'&& <PanelDevoluciones casetas={casetas}/>}
         {tab==='defectuosos' && <PanelDefectuosos casetas={casetas}/>}
-        {tab==='pedidos'     && <PanelPedidos casetas={casetas} onPedidoAceptado={()=>setPedidosPend(n=>Math.max(0,n-1))}/>}
+        {tab==='pedidos'     && <PanelPedidos casetas={casetas} perfil={perfil} onPedidoAceptado={()=>setPedidosPend(n=>Math.max(0,n-1))}/>}
         {tab==='inventarios' && <PanelInventarios casetas={casetas}/>}
         {tab==='fichajes'     && <PanelFichajes casetas={casetas} adminId={perfil.id}/>}
         {tab==='productos'   && <GestionProductos/>}
