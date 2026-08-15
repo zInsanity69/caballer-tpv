@@ -3017,6 +3017,14 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
     return prod && KW_RAPIDOS.some(kw => prod.nombre.toLowerCase().includes(kw))
   }).slice(0, 4)
 
+  // Ofertas COMBINADAS frecuentes (varios productos a un precio). Aparecen solo
+  // si el NOMBRE de la propia oferta contiene una palabra clave (no sus productos
+  // internos: así "5 Mechas + Rasca" sale, pero "Caja de Madera" —que lleva mechas
+  // dentro— no). Un toque añade todos los productos de la combinada al ticket.
+  const combosRapidos = ofertas.filter(o => o.tipo === 'combinada' && o.activa !== false).filter(o =>
+    KW_RAPIDOS.some(kw => (o.etiqueta || o.nombre || '').toLowerCase().includes(kw))
+  ).slice(0, 4)
+
   const pctPolvora = kgLimite > 0 ? (kgPolvora / kgLimite) * 100 : 0
 
   return (
@@ -3359,7 +3367,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             )}
 
             {/* Botones rápidos */}
-            {(botonesRapidos.length > 0 || ofertasRapidas.length > 0) && !busq && tabTPV !== 'ofertas' && (
+            {(botonesRapidos.length > 0 || ofertasRapidas.length > 0 || combosRapidos.length > 0) && !busq && tabTPV !== 'ofertas' && (
               <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--bd)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '.67rem', color: 'var(--tx2)', alignSelf: 'center', marginRight: 2 }}><i className="fi fi-rr-bolt"/></span>
                 {botonesRapidos.map(p => (
@@ -3382,6 +3390,23 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                       background: 'rgba(var(--green-rgb),.12)', color: 'var(--green)', fontSize: '.73rem',
                       fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
                     }}><i className="fi fi-rr-label"/> {prod.nombre} ×{o.cantidad_pack}</button>
+                  )
+                })}
+                {combosRapidos.map(o => {
+                  const reqs = o.productos_requeridos || []
+                  return (
+                    <button key={'comb-' + o.id} onClick={() => {
+                      if (reqs.some(r => (stock[r.producto_id] ?? 0) < r.cantidad)) { showToast('Stock insuficiente', 'error'); return }
+                      reqs.forEach(r => {
+                        const prod = productos.find(p => p.id === r.producto_id)
+                        if (prod) agregar(prod, r.cantidad)
+                      })
+                      showToast(`✓ ${o.etiqueta || o.nombre || 'Oferta'} añadida`)
+                    }} style={{
+                      padding: '5px 11px', borderRadius: 20, border: '1px solid var(--green)',
+                      background: 'rgba(var(--green-rgb),.12)', color: 'var(--green)', fontSize: '.73rem',
+                      fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans',sans-serif",
+                    }}><i className="fi fi-rr-label"/> {o.etiqueta || o.nombre}</button>
                   )
                 })}
               </div>
