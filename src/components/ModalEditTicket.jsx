@@ -6,7 +6,7 @@ import ModalClose from './ModalClose.jsx'
 // Modal de edición de ticket — fuente única, reutilizado por el panel del
 // admin y el del empleado. onSave(ticketId, nuevoTotal, items) hace el guardado.
 export default function ModalEditTicket({ ticket: t, onClose, onSave }) {
-  const [items, setItems]     = useState(t.ticket_items.map(i=>({producto_id:i.producto_id,nombre:i.nombre_producto,precio:i.precio_unitario,cantidad:i.cantidad,total_linea:i.total_linea,con_oferta:i.con_oferta||false})))
+  const [items, setItems]     = useState(t.ticket_items.map(i=>({producto_id:i.producto_id,nombre:i.nombre_producto,precio:i.precio_unitario,cantidad:i.cantidad,total_linea:i.total_linea,con_oferta:i.con_oferta||false,regalo:i.detalle_oferta==='REGALO'||(i.precio_unitario===0&&i.total_linea===0)})))
   const [ofertas, setOfertas] = useState([])
   const [productos, setProductos] = useState([])
   const [busqAdd, setBusqAdd] = useState('')
@@ -18,12 +18,23 @@ export default function ModalEditTicket({ ticket: t, onClose, onSave }) {
 
   const recalcItem = (item, nuevaCantidad) => {
     const nq = Math.max(1, nuevaCantidad)
+    if (item.regalo) return { ...item, cantidad: nq, total_linea: 0, con_oferta: false }
     const { total } = calcularPrecio(item.producto_id, nq, item.precio, ofertas)
     return { ...item, cantidad: nq, total_linea: total, con_oferta: total < +(nq * item.precio).toFixed(2) }
   }
 
   const editQty = (idx, delta) => setItems(prev => prev.map((it, i) => i !== idx ? it : recalcItem(it, it.cantidad + delta)))
   const editDel = idx => setItems(prev => prev.filter((_, i) => i !== idx))
+  // Marcar/desmarcar línea como regalo (precio 0, el stock baja igual)
+  const toggleRegalo = idx => setItems(prev => prev.map((it, i) => {
+    if (i !== idx) return it
+    if (it.regalo) {
+      const precio = it.precio > 0 ? it.precio : (productos.find(p => p.id === it.producto_id)?.precio || 0)
+      const { total } = calcularPrecio(it.producto_id, it.cantidad, precio, ofertas)
+      return { ...it, regalo: false, precio, total_linea: total }
+    }
+    return { ...it, regalo: true, total_linea: 0, con_oferta: false }
+  }))
 
   const addProd = (prod) => {
     setItems(prev => {
@@ -38,15 +49,17 @@ export default function ModalEditTicket({ ticket: t, onClose, onSave }) {
     setBusqAdd('')
   }
 
-  // Total final con ofertas combinadas aplicadas al conjunto
-  const ticketParaCalculo = items.map(i => ({ id: i.producto_id, cantidad: i.cantidad, precio: i.precio }))
+  // Total final con ofertas combinadas aplicadas al conjunto (los regalos no suman)
+  const ticketParaCalculo = items.filter(i => !i.regalo).map(i => ({ id: i.producto_id, cantidad: i.cantidad, precio: i.precio }))
   const nuevoTotal = calcularTotalTicket(ticketParaCalculo, ofertas)
-  const ahorroTotal = items.reduce((s, i) => s + i.precio * i.cantidad, 0) - nuevoTotal
+  const ahorroTotal = items.reduce((s, i) => s + (i.regalo ? 0 : i.precio * i.cantidad), 0) - nuevoTotal
   const vacio = items.length === 0 || nuevoTotal <= 0
 
   const guardar = async () => {
     if (vacio) { alert('El ticket no puede quedar vacío ni a 0 €. Usa Eliminar o crea una incidencia.'); return }
-    const itemsConTotal = items.map(i => ({ ...i, total_linea: calcularPrecio(i.producto_id, i.cantidad, i.precio, ofertas).total }))
+    const itemsConTotal = items.map(i => i.regalo
+      ? { ...i, total_linea: 0, con_oferta: false, detalle_oferta: 'REGALO' }
+      : { ...i, total_linea: calcularPrecio(i.producto_id, i.cantidad, i.precio, ofertas).total, detalle_oferta: null })
     setSaving(true)
     try { await onSave(t.id, nuevoTotal, itemsConTotal); onClose() } catch(e) { alert(e.message) }
     setSaving(false)
@@ -82,12 +95,15 @@ export default function ModalEditTicket({ ticket: t, onClose, onSave }) {
             <div key={idx} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:'1px solid var(--bd)'}}>
               <div style={{flex:1,fontSize:'.85rem'}}>
                 {item.nombre}
-                {item.con_oferta&&<span style={{marginLeft:5,fontSize:'.65rem',color:'var(--green)',fontWeight:700}}>oferta</span>}
+                {item.regalo
+                  ? <span style={{marginLeft:5,fontSize:'.65rem',color:'var(--gold)',fontWeight:700}}>REGALO</span>
+                  : item.con_oferta&&<span style={{marginLeft:5,fontSize:'.65rem',color:'var(--green)',fontWeight:700}}>oferta</span>}
               </div>
               <button className="qb" onClick={()=>editQty(idx,-1)}>−</button>
               <span style={{minWidth:26,textAlign:'center',fontWeight:700}}>{item.cantidad}</span>
               <button className="qb" onClick={()=>editQty(idx,+1)}>+</button>
-              <span style={{minWidth:55,textAlign:'right',fontSize:'.85rem',color:'var(--ac)'}}>{fmt(item.total_linea)}</span>
+              <span style={{minWidth:55,textAlign:'right',fontSize:'.85rem',color:item.regalo?'var(--gold)':'var(--ac)'}}>{item.regalo?fmt(0):fmt(item.total_linea)}</span>
+              <button onClick={()=>toggleRegalo(idx)} title={item.regalo?'Quitar regalo':'Marcar como regalo'} style={{width:26,height:26,borderRadius:'50%',border:`1px solid ${item.regalo?'var(--gold)':'var(--bd)'}`,background:item.regalo?'rgba(var(--gold-rgb),.15)':'transparent',color:item.regalo?'var(--gold)':'var(--tx2)',cursor:'pointer',fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-gift"/></button>
               <button onClick={()=>editDel(idx)} style={{width:26,height:26,borderRadius:'50%',border:'1px solid rgba(var(--red-rgb),.3)',background:'rgba(var(--red-rgb),.1)',color:'var(--red)',cursor:'pointer',fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center'}}><i className="fi fi-rr-cross"/></button>
             </div>
           ))}

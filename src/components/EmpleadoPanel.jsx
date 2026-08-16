@@ -765,7 +765,7 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
 }
 
 // ─── MODAL HISTORIAL + EDICIÓN TICKETS ───────────────────────
-function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockChange, onClose }) {
+function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockChange, onVentasChange, onClose }) {
   const [tickets, setTickets]           = useState([])
   const [loading, setLoading]           = useState(true)
   const [expanded, setExpanded]         = useState(null)
@@ -812,6 +812,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
     try {
       await deleteTicket(id)
       setTickets(prev => prev.filter(t => t.id !== id))
+      onVentasChange?.()
     } catch (e) {
       alert(e.message || 'No se pudo eliminar el ticket.')
     }
@@ -827,6 +828,7 @@ function ModalHistorial({ cajaId, perfil, caseta, productos, ofertas, onStockCha
     setTickets(prev => prev.map(t => t.id === ticketId
       ? { ...t, total: nuevoTotal, ticket_items: items.map(i => ({ ...i, nombre_producto: i.nombre, precio_unitario: i.precio })) }
       : t))
+    onVentasChange?.()
   }
 
   const guardarIncidencia = async () => {
@@ -2965,16 +2967,23 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       } else if (noImprimir) {
         // Sin impresión: no abrimos popup ni imprimimos (p.ej. sin papel)
         showToast(`✓ Venta ${fmt(total)} · sin ticket`)
+        setTimeout(() => busqRef.current?.focus(), 60)
       } else if (modoRapido) {
         // Venta rápida: imprime el ticket automáticamente y a por la siguiente
         imprimirTicket(ticketData)
         showToast(`✓ Venta ${fmt(total)} · ticket impreso`)
+        setTimeout(() => busqRef.current?.focus(), 60)
       } else {
         // Normal: menú para elegir (ticket / factura / nueva venta)
         setShowOk(ticketData)
       }
     } catch (e) { showToast('Error al guardar venta: ' + e.message, 'error') }
   }
+
+  // Cierra el menú "Venta confirmada" y devuelve el foco al buscador para seguir vendiendo
+  const cerrarOk = () => { setShowOk(null); setTimeout(() => busqRef.current?.focus(), 60) }
+  // Cierra el selector de EAN duplicado y devuelve el foco al buscador
+  const cerrarEanPicker = () => { setEanPicker(null); setTimeout(() => busqRef.current?.focus(), 60) }
 
   const confirmarCierre = async (contado, esperadoCierre) => {
     try {
@@ -3681,7 +3690,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       {eanPicker && (
         <div className="mo">
           <div className="mc">
-            <ModalClose onClose={() => setEanPicker(null)} />
+            <ModalClose onClose={cerrarEanPicker} />
             <div className="mt-modal"><i className="fi fi-rr-interrogation"/> ¿Cuál es?</div>
             <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
               Varios productos coinciden. Elige el correcto.
@@ -3690,7 +3699,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               {eanPicker.map(p => {
                 const st = stock[p.id] ?? 0
                 return (
-                  <button key={p.id} onClick={() => { setEanPicker(null); añadirEscaneado(p) }} style={{
+                  <button key={p.id} onClick={() => { setEanPicker(null); añadirEscaneado(p); if (!modalAlEscanear) setTimeout(() => busqRef.current?.focus(), 60) }} style={{
                     width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10,
                     padding: '10px 12px', marginBottom: 6, borderRadius: 'var(--rs)',
                     background: 'var(--s2)', border: '1px solid var(--bd)', cursor: 'pointer',
@@ -3705,7 +3714,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                 )
               })}
             </div>
-            <button className="btn-s" onClick={() => setEanPicker(null)}>Cancelar</button>
+            <button className="btn-s" onClick={cerrarEanPicker}>Cancelar</button>
           </div>
         </div>
       )}
@@ -3761,6 +3770,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             })
             return next
           })}
+          onVentasChange={() => getResumenCaja(caja.id).then(setVentas).catch(() => {})}
           onClose={() => setShowHistorial(false)} />
       )}
       {showPedido && (
@@ -3816,7 +3826,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       {showOk && (
         <div className="mo">
           <div className="mc" style={{ textAlign: 'center' }}>
-            <ModalClose onClose={() => setShowOk(null)} />
+            <ModalClose onClose={cerrarOk} />
             <div style={{ fontSize: '2rem', marginBottom: 8, color: 'var(--green)' }}><i className="fi fi-rr-check-circle"/></div>
             <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: '1.8rem', color: 'var(--green)', marginBottom: 6 }}>¡Venta Confirmada!</div>
             <div style={{ fontSize: '.9rem', fontWeight: 700, color: 'var(--ac)', marginBottom: 4 }}>{fmt(showOk.total)}</div>
@@ -3825,7 +3835,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             </div>
             {/* Botones imprimir — ticket y factura, en fila y mismo color */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-              <button onClick={() => { imprimirTicket(showOk); setShowOk(null) }} style={{
+              <button onClick={() => { imprimirTicket(showOk); cerrarOk() }} style={{
                 flex: 1, padding: '11px 6px', borderRadius: 'var(--rs)',
                 background: 'var(--s2)', border: '1px solid var(--bd)',
                 color: 'var(--tx)', fontWeight: 700, cursor: 'pointer',
@@ -3844,7 +3854,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                 <i className="fi fi-rr-file-invoice"/> Imprimir factura
               </button>
             </div>
-            <button className="btn-p" onClick={() => setShowOk(null)}>Nueva Venta</button>
+            <button className="btn-p" onClick={cerrarOk}>Nueva Venta</button>
           </div>
         </div>
       )}
