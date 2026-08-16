@@ -9,10 +9,10 @@ import Logo from './Logo.jsx'
 import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
   getCategorias, crearCategoria, renombrarCategoria, eliminarCategoria,
-  getOfertas, upsertOferta, updateOferta, deleteOferta,
+  getOfertas, upsertOferta, updateOferta, deleteOferta, setTodasOfertasActivas,
   getPerfiles, updatePerfil, eliminarPerfil, crearUsuario, actualizarCredenciales,
   getCasetas, upsertCaseta, deleteCaseta, updateCaseta, updateAllPedidosAuto,
-  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy, guardarFacturaCliente,
+  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy, getVentasTotalesPorCaseta, guardarFacturaCliente,
   getAuditoriaTickets,
   getDevoluciones, getDefectuosos, updateReclamacionItem,
   setStock, ajustarStock, ajustarStockAuditado, getStockAuditoria, getStockCaseta, getStockMinimos, setStockMinimo,
@@ -73,11 +73,15 @@ function Dashboard({ casetas }) {
   const [tickets, setTickets] = useState([])
   const [cajas, setCajas] = useState([])
   const [retiradas, setRetiradas] = useState([])
+  const [ventasCasetaMes, setVentasCasetaMes] = useState([])
+  const [ventasCasetaHoy, setVentasCasetaHoy] = useState([])
+  const [periodoCaseta, setPeriodoCaseta] = useState(() => localStorage.getItem('admin_periodo_caseta') || 'mes') // 'mes' | 'hoy'
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     const hoy = new Date(); hoy.setHours(0,0,0,0)
-    Promise.all([getStatsAdmin(), getTicketsAdmin(hoy.toISOString(), null, null), getCajasAbiertas(), getRetiradasHoy().catch(()=>[])])
-      .then(([s, t, c, r]) => { setStats(s); setTickets(t); setCajas(c); setRetiradas(r) })
+    const mes = new Date(); mes.setDate(1); mes.setHours(0,0,0,0)
+    Promise.all([getStatsAdmin(), getTicketsAdmin(hoy.toISOString(), null, null), getCajasAbiertas(), getRetiradasHoy().catch(()=>[]), getVentasTotalesPorCaseta(mes.toISOString()).catch(()=>[]), getVentasTotalesPorCaseta(hoy.toISOString()).catch(()=>[])])
+      .then(([s, t, c, r, vm, vh]) => { setStats(s); setTickets(t); setCajas(c); setRetiradas(r); setVentasCasetaMes(vm); setVentasCasetaHoy(vh) })
       .finally(() => setLoading(false))
   }, [])
   if (loading) return <div className="loading-row"><div className="spin-sm" /> Cargando...</div>
@@ -87,8 +91,6 @@ function Dashboard({ casetas }) {
   const ventasNetas = totalHoy - devolucionesHoy
   const efectivoHoy = stats.tickets.reduce((s,t)=>s+(t.pago_efectivo ?? (t.metodo_pago==='efectivo'?t.total:0)),0)
   const tarjetaHoy = stats.tickets.reduce((s,t)=>s+(t.pago_tarjeta ?? (t.metodo_pago==='tarjeta'?t.total:0)),0)
-  const porCaseta = {}
-  stats.tickets.forEach(t => { const n=t.casetas?.nombre||'?'; if(!porCaseta[n]) porCaseta[n]=0; porCaseta[n]+=t.total })
   return (
     <>
       <div className="ag">
@@ -99,7 +101,7 @@ function Dashboard({ casetas }) {
         <div className="sc"><div className="sv">{fmt(efectivoHoy)}</div><div className="sl2">Efectivo hoy</div></div>
         <div className="sc"><div className="sv">{fmt(tarjetaHoy)}</div><div className="sl2">Tarjeta hoy</div></div>
         <div className="sc"><div className="sv" style={{color:(stats.stockBajo.length+stats.stockCero.length)>5?'var(--red)':'var(--ac)'}}>{stats.stockBajo.length+stats.stockCero.length}</div><div className="sl2">Stock bajo/agotado</div></div>
-        <div className="sc"><div className="sv">{casetas.length}</div><div className="sl2">Casetas</div></div>
+        <div className="sc"><div className="sv">{casetas.filter(c=>c.activo!==false).length}</div><div className="sl2">Casetas activas</div></div>
       </div>
       {cajas.length>0&&(<>
         <div className="stit">Efectivo en caja ahora</div>
@@ -114,6 +116,32 @@ function Dashboard({ casetas }) {
               {c.totalRetiradas>0&&<div style={{fontSize:'.7rem',color:'var(--gold)',marginTop:2}}>Retiradas −{fmt(c.totalRetiradas)}</div>}
               {c.totalDevoluciones>0&&<div style={{fontSize:'.7rem',color:'var(--red)',marginTop:2}}>Devoluciones −{fmt(c.totalDevoluciones)}</div>}
               <div style={{fontSize:'.7rem',color:'var(--tx2)',marginTop:2}}>{c.numTickets} tickets · Apertura {fmt(c.apertura)}</div>
+            </div>
+          ))}
+        </div>
+      </>)}
+      {(ventasCasetaMes.some(c=>Number(c.total_ventas)>0&&c.activo!==false)||ventasCasetaHoy.some(c=>Number(c.total_ventas)>0&&c.activo!==false))&&(<>
+        <div className="stit" style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <span>Ganado por caseta</span>
+          <div style={{display:'flex',gap:0,background:'var(--s2)',borderRadius:'var(--rs)',padding:3}}>
+            {[['mes','Este mes'],['hoy','Hoy']].map(([k,l])=>(
+              <button key={k} onClick={()=>{setPeriodoCaseta(k);localStorage.setItem('admin_periodo_caseta',k)}} style={{
+                padding:'4px 12px',borderRadius:'calc(var(--rs) - 2px)',border:'none',cursor:'pointer',
+                fontFamily:"'DM Sans',sans-serif",fontSize:'.75rem',fontWeight:700,
+                background:periodoCaseta===k?'var(--ac)':'transparent',color:periodoCaseta===k?'white':'var(--tx2)',
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10,marginBottom:22}}>
+          {(periodoCaseta==='mes'?ventasCasetaMes:ventasCasetaHoy).filter(c=>Number(c.total_ventas)>0&&c.activo!==false).slice(0,5).map((c,i)=>(
+            <div key={c.caseta_id} style={{background:'var(--s1)',border:'1px solid var(--bd)',borderRadius:'var(--r)',padding:'16px',position:'relative',overflow:'hidden'}}>
+              {i===0&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--gold)',background:'rgba(var(--gold-rgb),.12)',border:'1px solid rgba(var(--gold-rgb),.25)',borderRadius:20,padding:'1px 7px'}}>TOP 1</div>}
+              {i===1&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--tx2)',background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:20,padding:'1px 7px'}}>TOP 2</div>}
+              {i>=2&&<div style={{position:'absolute',top:8,right:10,fontSize:'.65rem',fontWeight:700,color:'var(--tx2)',borderRadius:20,padding:'1px 7px'}}>#{i+1}</div>}
+              <div style={{fontSize:'.7rem',color:'var(--tx2)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:4}}>{c.nombre.replace('Caballer ','')}</div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'2rem',color:'var(--ac)',letterSpacing:1}}>{fmt(Number(c.total_ventas))}</div>
+              <div style={{fontSize:'.7rem',color:'var(--tx2)',marginTop:2}}>{c.num_tickets} tickets</div>
             </div>
           ))}
         </div>
@@ -134,17 +162,6 @@ function Dashboard({ casetas }) {
             <span style={{color:'var(--tx2)'}}>Total retirado hoy</span>
             <span style={{color:'var(--gold)'}}>{fmt(retiradas.reduce((s,r)=>s+(r.cantidad||0),0))}</span>
           </div>
-        </div>
-      </>)}
-      {Object.keys(porCaseta).length>1&&(<>
-        <div className="stit">Ventas por caseta hoy</div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10,marginBottom:22}}>
-          {Object.entries(porCaseta).sort((a,b)=>b[1]-a[1]).map(([nombre,total])=>(
-            <div key={nombre} className="sc">
-              <div style={{fontSize:'.72rem',color:'var(--tx2)',marginBottom:4,textTransform:'uppercase',letterSpacing:'.5px'}}>{nombre.replace('Caballer ','')}</div>
-              <div className="sv" style={{fontSize:'1.4rem'}}>{fmt(total)}</div>
-            </div>
-          ))}
         </div>
       </>)}
       <div className="stit">Últimos tickets</div>
@@ -1214,7 +1231,7 @@ function GestionProductos() {
     }
   }
   const eaCl=m=>m===0?'cp':m===12?'cg':m===16?'cb2':'cr'
-  const eaLbl=m=>m===0?'T1':m+'+'
+  const eaLbl=m=>m===0?'T1':m===12?'F1 · 12+':m===16?'F2 · 16+':'F3 · 18+'
   const empresasDinamicas=['Todas',...new Set(productos.map(p=>p.empresa).filter(Boolean).sort())]
   const prods=productos.filter(p=>{
     if(soloActivos&&!p.activo) return false
@@ -1248,7 +1265,7 @@ function GestionProductos() {
           </div>
           <div className="fg"><label>Edad mínima</label>
             <select value={form.edad_minima} onChange={e=>setForm({...form,edad_minima:e.target.value})}>
-              <option value="0">T1</option><option value="12">12+</option><option value="16">16+</option><option value="18">18+</option>
+              <option value="0">T1</option><option value="12">F1 · 12+</option><option value="16">F2 · 16+</option><option value="18">F3 · 18+</option>
             </select>
           </div>
           <div className="fg">
@@ -1563,6 +1580,8 @@ function GestionOfertas() {
   const [formPack,setFormPack]=useState(F0pack)
   const F0comb={etiqueta:'',precio_pack:'',lineas:[{producto_id:'',cantidad:'1'},{producto_id:'',cantidad:'1'}]}
   const [formComb,setFormComb]=useState(F0comb)
+  const [busq,setBusq]=useState('')
+  const [filtroTipo,setFiltroTipo]=useState('todas') // todas | pack | combinada
   const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
 
   useEffect(()=>{ Promise.all([getOfertas(false),getProductos()]).then(([o,p])=>{setOfertas(o);setProductos(p)}).finally(()=>setLoading(false)) },[])
@@ -1573,6 +1592,16 @@ function GestionOfertas() {
       await updateOferta(o.id,{activa:!activa})
       setOfertas(prev=>prev.map(x=>x.id===o.id?{...x,activa:!activa}:x))
       showToast(activa?'Oferta desactivada — no se aplica en las ventas':'Oferta activada ✓')
+    }catch(e){showToast(e.message,'error')}
+  }
+
+  const toggleTodas=async activa=>{
+    if(ofertas.length===0){showToast('No hay ofertas',' error');return}
+    if(!confirm(activa?'¿Activar TODAS las ofertas?':'¿Desactivar TODAS las ofertas? No se aplicarán en las ventas hasta que las vuelvas a activar.'))return
+    try{
+      await setTodasOfertasActivas(activa)
+      setOfertas(prev=>prev.map(x=>({...x,activa})))
+      showToast(activa?'Todas las ofertas activadas ✓':'Todas las ofertas desactivadas')
     }catch(e){showToast(e.message,'error')}
   }
 
@@ -1609,6 +1638,16 @@ function GestionOfertas() {
   const prodSel=productos.find(p=>p.id===formPack.producto_id)
   const precioU=formPack.cantidad_pack&&formPack.precio_pack?parseFloat(formPack.precio_pack)/parseInt(formPack.cantidad_pack):0
   if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
+
+  const ofertasFiltradas=ofertas.filter(o=>{
+    if(filtroTipo==='pack'&&o.tipo==='combinada')return false
+    if(filtroTipo==='combinada'&&o.tipo!=='combinada')return false
+    if(!busq)return true
+    const b=busq.toLowerCase()
+    if((o.etiqueta||o.nombre||'').toLowerCase().includes(b))return true
+    if(o.tipo==='combinada')return (o.productos_requeridos||[]).some(r=>(r.nombre||productos.find(p=>p.id===r.producto_id)?.nombre||'').toLowerCase().includes(b))
+    return productos.find(p=>p.id===o.producto_id)?.nombre.toLowerCase().includes(b)
+  })
 
   return(
     <>
@@ -1652,12 +1691,26 @@ function GestionOfertas() {
           <div style={{display:'flex',gap:9}}><button className="btn-add" onClick={guardarCombinada}>{editId?'Guardar':'Añadir combinada'}</button>{editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setFormComb(F0comb)}}>Cancelar</button>}</div>
         </div>
       )}
-      <div className="stit">Ofertas ({ofertas.length})</div>
+      <div className="stit" style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <span>Ofertas ({busq||filtroTipo!=='todas'?`${ofertasFiltradas.length}/${ofertas.length}`:ofertas.length})</span>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={()=>toggleTodas(true)} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(var(--green-rgb),.12)',border:'1px solid rgba(var(--green-rgb),.3)',color:'var(--green)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-check"/> Activar todas</button>
+          <button onClick={()=>toggleTodas(false)} style={{padding:'5px 12px',borderRadius:'var(--rs)',background:'rgba(var(--red-rgb),.08)',border:'1px solid rgba(var(--red-rgb),.25)',color:'var(--red)',fontWeight:600,cursor:'pointer',fontSize:'.76rem',fontFamily:"'DM Sans',sans-serif"}}><i className="fi fi-rr-square"/> Desactivar todas</button>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap'}}>
+        <input value={busq} onChange={e=>setBusq(e.target.value)} placeholder="Buscar oferta o producto..." style={{flex:1,minWidth:180,background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem'}}/>
+        <select value={filtroTipo} onChange={e=>setFiltroTipo(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'8px 12px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",fontSize:'.85rem'}}>
+          <option value="todas">Todos los tipos</option>
+          <option value="pack">Solo packs</option>
+          <option value="combinada">Solo combinadas</option>
+        </select>
+      </div>
       <div className="tw"><table>
         <thead><tr><th>Tipo</th><th>Descripción</th><th>Precio</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
-          {ofertas.length===0?<tr><td colSpan={5} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>Sin ofertas</td></tr>
-            :ofertas.map(o=>{
+          {ofertasFiltradas.length===0?<tr><td colSpan={5} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>{ofertas.length===0?'Sin ofertas':'Ninguna oferta coincide con el filtro'}</td></tr>
+            :ofertasFiltradas.map(o=>{
             const esComb=o.tipo==='combinada'; const p=!esComb&&productos.find(x=>x.id===o.producto_id)
             const activa=o.activa!==false
             return(

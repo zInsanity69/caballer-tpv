@@ -231,6 +231,12 @@ export async function deleteOferta(id) {
   if (error) throw error
 }
 
+// Activa o desactiva TODAS las ofertas de golpe (para épocas sin ofertas).
+export async function setTodasOfertasActivas(activa) {
+  const { error } = await supabase.from('ofertas').update({ activa }).not('id', 'is', null)
+  if (error) throw error
+}
+
 // ─── CASETAS ─────────────────────────────────────────────────
 export async function getCasetas() {
   const { data, error } = await supabase.from('casetas').select('*').order('nombre')
@@ -543,6 +549,13 @@ export async function getRetiradasHoy() {
   return data || []
 }
 
+// Ganado por caseta desde una fecha (desde=null → histórico). Ordenado de mayor a menor.
+export async function getVentasTotalesPorCaseta(desde = null) {
+  const { data, error } = await supabase.rpc('ventas_totales_por_caseta', { p_desde: desde })
+  if (error) throw error
+  return data || []
+}
+
 export async function registrarRetirada(cajaId, casetaId, empleadoId, cantidad, motivo, ctx = null) {
   const { error } = await supabase
     .from('retiradas_caja')
@@ -736,6 +749,18 @@ export function toggleFavorito(productoId) {
   const idx = favs.indexOf(productoId)
   if (idx >= 0) favs.splice(idx, 1); else favs.unshift(productoId)
   localStorage.setItem('tpv_favoritos', JSON.stringify(favs.slice(0, 20)))
+  return favs
+}
+
+// Favoritos de OFERTAS (packs y combinadas). Almacén paralelo por id de oferta.
+export function getFavoritosOfertas() {
+  try { return JSON.parse(localStorage.getItem('tpv_favoritos_ofertas') || '[]') } catch { return [] }
+}
+export function toggleFavoritoOferta(ofertaId) {
+  const favs = getFavoritosOfertas()
+  const idx = favs.indexOf(ofertaId)
+  if (idx >= 0) favs.splice(idx, 1); else favs.unshift(ofertaId)
+  localStorage.setItem('tpv_favoritos_ofertas', JSON.stringify(favs.slice(0, 20)))
   return favs
 }
 

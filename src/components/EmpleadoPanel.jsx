@@ -6,7 +6,7 @@ import {
   getProductos, getStockCaseta, getOfertas,
   getCajaAbierta, abrirCaja, cerrarCaja,
   getResumenCaja, getRetiradas, registrarRetirada, getDevolucionesEfectivoCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
-  getFavoritos, toggleFavorito,
+  getFavoritos, toggleFavorito, getFavoritosOfertas, toggleFavoritoOferta,
   getPedidos, crearPedido, confirmarRecepcionPedido, recibirItemPedido, getStockMinimos,
   crearInventario, getInventarios, confirmarInventario,
   getLimitePolvora, getNECDetalle,
@@ -164,9 +164,9 @@ function useLongPress(onTap, onLong, ms = 500) {
 // ─── BADGE EDAD ──────────────────────────────────────────────
 function EaBadge({ edad }) {
   if (edad === 0)  return <span className="pea et1">T1</span>
-  if (edad === 12) return <span className="pea e12">12+</span>
-  if (edad === 16) return <span className="pea e16">16+</span>
-  return <span className="pea e18">18+</span>
+  if (edad === 12) return <span className="pea e12">F1 · 12+</span>
+  if (edad === 16) return <span className="pea e16">F2 · 16+</span>
+  return <span className="pea e18">F3 · 18+</span>
 }
 
 // Clave única de línea de ticket: permite el mismo producto pagado y de regalo a la vez
@@ -245,7 +245,7 @@ function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong,
       <button data-nobubble="1" onClick={(e) => { e.stopPropagation(); onFav(p.id) }} style={{
         position: 'absolute', top: 5, left: 5, background: 'transparent', border: 'none',
         cursor: 'pointer', fontSize: '.85rem', padding: 0, lineHeight: 1,
-      color: esFav ? 'var(--gold)' : 'rgba(255,255,255,.3)',
+      color: esFav ? 'var(--gold)' : 'rgba(var(--gold-rgb),.4)',
       }}><i className={`fi ${esFav ? 'fi-sr-star' : 'fi-rr-star'}`}/></button>
       <div className="pn">{p.nombre}</div>
       <div className="pp2">{fmt(p.precio)}</div>
@@ -261,7 +261,18 @@ function TarjetaProducto({ p, stockDisp, enT, tieneOferta, esFav, onTap, onLong,
 // ─── TARJETA OFERTA PACK ─────────────────────────────────────
 // Tap → toggle (añade el pack o lo retira si ya está). Mantener pulsado →
 // abre el modal de cantidad para añadir varias de golpe.
-function TarjetaOfertaPack({ oferta, prod, stockDisp, qtyEnTicket, onTap, onLong }) {
+function StarOferta({ esFav, onFav }) {
+  if (!onFav) return null
+  return (
+    <button onClick={e => { e.stopPropagation(); onFav() }} onPointerDown={e => e.stopPropagation()}
+      title={esFav ? 'Quitar de favoritos' : 'Añadir a favoritos'}
+      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, color: esFav ? 'var(--gold)' : 'rgba(var(--gold-rgb),.4)', fontSize: '1rem' }}>
+      <i className={`fi ${esFav ? 'fi-sr-star' : 'fi-rr-star'}`}/>
+    </button>
+  )
+}
+
+function TarjetaOfertaPack({ oferta, prod, stockDisp, qtyEnTicket, onTap, onLong, esFav, onFav }) {
   const sinStock = stockDisp < oferta.cantidad_pack
   const yaAnadida = qtyEnTicket >= oferta.cantidad_pack
   const lp = useLongPress(onTap, onLong)
@@ -280,7 +291,10 @@ function TarjetaOfertaPack({ oferta, prod, stockDisp, qtyEnTicket, onTap, onLong
           <i className="fi fi-rr-box" style={{ color: 'var(--gold)' }}/> {prod.nombre}
           {yaAnadida && <span style={{ marginLeft: 6, fontSize: '.62rem', color: 'var(--green)', fontWeight: 700 }}>✓ en ticket</span>}
         </span>
-        <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(oferta.precio_pack)}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <StarOferta esFav={esFav} onFav={onFav} />
+          <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(oferta.precio_pack)}</span>
+        </span>
       </div>
       <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
         {oferta.etiqueta || oferta.nombre} · {oferta.cantidad_pack} uds · Stock: {stockDisp}
@@ -291,7 +305,7 @@ function TarjetaOfertaPack({ oferta, prod, stockDisp, qtyEnTicket, onTap, onLong
 
 // Oferta combinada en la pestaña Ofertas. Tap → toggle. Mantener pulsado →
 // modal para añadir varias combinaciones de golpe.
-function TarjetaOfertaComb({ oferta, productos, sinStock, yaAnadida, onTap, onLong }) {
+function TarjetaOfertaComb({ oferta, productos, sinStock, yaAnadida, onTap, onLong, esFav, onFav }) {
   const reqs = oferta.productos_requeridos || []
   const bloqueada = sinStock && !yaAnadida
   const lp = useLongPress(onTap, onLong)
@@ -310,7 +324,10 @@ function TarjetaOfertaComb({ oferta, productos, sinStock, yaAnadida, onTap, onLo
           <i className="fi fi-rr-gift" style={{ color: 'var(--blue)' }}/> {oferta.etiqueta || oferta.nombre}
           {yaAnadida && <span style={{ marginLeft: 6, fontSize: '.62rem', color: 'var(--green)', fontWeight: 700 }}>✓ en ticket</span>}
         </span>
-        <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(oferta.precio_pack)}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <StarOferta esFav={esFav} onFav={onFav} />
+          <span style={{ fontWeight: 800, color: 'var(--ac)', fontSize: '1.1rem' }}>{fmt(oferta.precio_pack)}</span>
+        </span>
       </div>
       <div style={{ fontSize: '.74rem', color: 'var(--tx2)' }}>
         {reqs.map(r => `${r.cantidad}× ${r.nombre || productos.find(p => p.id === r.producto_id)?.nombre || '?'}`).join(' + ')}
@@ -1291,7 +1308,9 @@ function ModalAjusteStock({ caseta, perfil, productos, stock, onClose, onDone, s
 
   return (
     <div className="mo">
-      <div className="mc">
+      {/* overflow visible: el desplegable del buscador es absolute y, con el
+          overflow-y:auto por defecto de .mc, generaba un scrollbar interno raro */}
+      <div className="mc" style={{ overflow: 'visible' }}>
         <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-refresh"/> Ajustar stock</div>
         <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 10 }}>{caseta.nombre} · corrige el stock real de un producto</div>
@@ -2615,6 +2634,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const [cat2,           setCat2]           = useState(() => sessionStorage.getItem('tpv_cat') || 'Todos')
 
   const [favoritos,      setFavoritos]      = useState(() => getFavoritos())
+  const [favOfertas,     setFavOfertas]     = useState(() => getFavoritosOfertas())
   const [prodModal,      setProdModal]      = useState(null)
   const [combModal,      setCombModal]      = useState(null)
   // Persistir panel abierto (pedidos/inventario) para que al volver no pierdan su posición
@@ -3002,7 +3022,14 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   if (busq) prodsFiltrados = prodsFiltrados.filter(p =>
     p.nombre.toLowerCase().includes(busq.toLowerCase()) || p.codigo_ean?.includes(busq)
   )
-  prodsFiltrados = [...prodsFiltrados].sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'))
+  // Orden: primero los que tienen stock (alfabético), y los AGOTADOS al final
+  // (también alfabéticos), para que no estorben en la venta.
+  prodsFiltrados = [...prodsFiltrados].sort((a, b) => {
+    const agA = (stock[a.id] ?? 0) <= 0
+    const agB = (stock[b.id] ?? 0) <= 0
+    if (agA !== agB) return agA ? 1 : -1
+    return a.nombre.localeCompare(b.nombre, 'es')
+  })
 
   const KW_RAPIDOS = ['mecha', 'bolsa', 'cebador']
   const botonesRapidos = productos.filter(p =>
@@ -3024,6 +3051,62 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const combosRapidos = ofertas.filter(o => o.tipo === 'combinada' && o.activa !== false).filter(o =>
     KW_RAPIDOS.some(kw => (o.etiqueta || o.nombre || '').toLowerCase().includes(kw))
   ).slice(0, 4)
+
+  const toggleFavOferta = (id) => setFavOfertas([...toggleFavoritoOferta(id)])
+  const _paidQty = id => ticket.filter(i => i.id === id && !i.regalo).reduce((s, i) => s + i.cantidad, 0)
+
+  // Render de una oferta (compartido entre la pestaña Ofertas y la de Favs)
+  const renderOfertaComb = (o) => {
+    const reqs = o.productos_requeridos || []
+    const sinStock = reqs.some(r => (stock[r.producto_id] ?? 0) < r.cantidad)
+    const yaAnadida = reqs.length > 0 && reqs.every(r => _paidQty(r.producto_id) >= r.cantidad)
+    return (
+      <TarjetaOfertaComb key={o.id} oferta={o} productos={productos}
+        sinStock={sinStock} yaAnadida={yaAnadida}
+        esFav={favOfertas.includes(o.id)} onFav={() => toggleFavOferta(o.id)}
+        onTap={() => {
+          if (yaAnadida) {
+            reqs.forEach(r => { const prod = productos.find(p => p.id === r.producto_id); if (prod) quitar(prod, r.cantidad) })
+            showToast(`✕ ${o.etiqueta || o.nombre} retirada`, 'error'); return
+          }
+          if (sinStock) { showToast('Stock insuficiente', 'error'); return }
+          reqs.forEach(r => { const prod = productos.find(p => p.id === r.producto_id); if (prod) agregar(prod, r.cantidad) })
+          showToast(`✓ ${o.etiqueta || o.nombre} añadida`)
+        }}
+        onLong={() => {
+          if (!puedeOperar) { showToast(enDescanso ? 'Termina el descanso para vender' : 'Ficha tu entrada antes de vender', 'error'); setShowFichajes(true); return }
+          if (!caja) { showToast('Abre la caja antes de vender', 'error'); setShowAperturaCaja(true); return }
+          setCombModal(o)
+        }} />
+    )
+  }
+  const renderOfertaPack = (o) => {
+    const prod = productos.find(p => p.id === o.producto_id)
+    if (!prod) return null
+    const stockDisp = stock[prod.id] ?? 0
+    const qtyEnTicket = ticket.filter(i => i.id === prod.id && !i.regalo).reduce((s, i) => s + i.cantidad, 0)
+    return (
+      <TarjetaOfertaPack key={o.id} oferta={o} prod={prod}
+        stockDisp={stockDisp} qtyEnTicket={qtyEnTicket}
+        esFav={favOfertas.includes(o.id)} onFav={() => toggleFavOferta(o.id)}
+        onTap={() => {
+          if (qtyEnTicket >= o.cantidad_pack) { quitar(prod, o.cantidad_pack); showToast(`✕ ${o.etiqueta || o.nombre} retirada`, 'error') }
+          else if (stockDisp < o.cantidad_pack) { showToast('Stock insuficiente', 'error') }
+          else { agregar(prod, o.cantidad_pack); showToast(`✓ ${o.etiqueta || o.nombre} añadido`) }
+        }}
+        onLong={() => abrirModalCantidad(prod, o.cantidad_pack, o.etiqueta || o.nombre)} />
+    )
+  }
+  const renderProducto = (p) => (
+    <TarjetaProducto
+      key={p.id} p={p}
+      stockDisp={stock[p.id] ?? 0} enT={ticket.find(i => i.id === p.id)}
+      tieneOferta={ofertas.some(o => o.producto_id === p.id)} esFav={favoritos.includes(p.id)}
+      onTap={() => agregar(p, 1, false, true)}
+      onLong={() => abrirModalCantidad(p)}
+      onFav={(id) => setFavoritos([...toggleFavorito(id)])}
+    />
+  )
 
   const pctPolvora = kgLimite > 0 ? (kgPolvora / kgLimite) * 100 : 0
 
@@ -3344,8 +3427,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--bd)' }}>
               {[
                 ['todos',     <><i className="fi fi-rr-grid"/>{' '}Todos</>,                                          'var(--ac)'],
-                ['favoritos', <><i className="fi fi-rr-star" style={{color:'var(--gold)'}}/>{' '}Favs ({favoritos.length})</>, 'var(--gold)'],
-                ['ofertas',   <><i className="fi fi-rr-label" style={{color:'var(--green)'}}/>{' '}Ofertas ({ofertas.length})</>, 'var(--green)'],
+                ['favoritos', <><i className="fi fi-rr-star" style={{color:'var(--gold)'}}/>{' '}Favs</>, 'var(--gold)'],
+                ['ofertas',   <><i className="fi fi-rr-label" style={{color:'var(--green)'}}/>{' '}Ofertas</>, 'var(--green)'],
               ].map(([k, l, color]) => (
                 <button key={k} onClick={() => setTabTPV(k)} style={{
                   flex: 1, padding: '9px 4px', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer',
@@ -3412,33 +3495,48 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               </div>
             )}
 
-            {/* Grid productos */}
-            <div className="pg" style={{ display: tabTPV === 'ofertas' ? 'none' : undefined }}>
-              {prodsFiltrados.map(p => {
-                const stockDisp = stock[p.id] ?? 0
-                const enT = ticket.find(i => i.id === p.id)
-                const tieneOferta = ofertas.some(o => o.producto_id === p.id)
-                const esFav = favoritos.includes(p.id)
-                return (
-                  <TarjetaProducto
-                    key={p.id} p={p}
-                    stockDisp={stockDisp} enT={enT}
-                    tieneOferta={tieneOferta} esFav={esFav}
-                    onTap={() => agregar(p, 1, false, true)}
-                    onLong={() => abrirModalCantidad(p)}
-                    onFav={(id) => {
-                      const nuevos = toggleFavorito(id)
-                      setFavoritos([...nuevos])
-                    }}
-                  />
-                )
-              })}
-              {tabTPV === 'favoritos' && favoritos.length === 0 && (
-                <div style={{ gridColumn: '1/-1', textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
-                  Pulsa <i className="fi fi-rr-star" style={{color:'var(--gold)'}}/> en cualquier producto para añadirlo a favoritos
+            {/* Grid productos (pestañas Todos / Ofertas-oculto) */}
+            {tabTPV !== 'favoritos' && (
+              <div className="pg" style={{ display: tabTPV === 'ofertas' ? 'none' : undefined }}>
+                {prodsFiltrados.map(renderProducto)}
+              </div>
+            )}
+
+            {/* Favs: 50/50 — productos arriba, ofertas abajo, cada mitad con scroll propio */}
+            {tabTPV === 'favoritos' && (
+              favoritos.length === 0 && favOfertas.length === 0 ? (
+                <div className="pg">
+                  <div style={{ gridColumn: '1/-1', textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>
+                    Pulsa <i className="fi fi-rr-star" style={{color:'var(--gold)'}}/> en cualquier producto u oferta para añadirlo a favoritos
+                  </div>
                 </div>
-              )}
-            </div>
+              ) : (
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  {favoritos.length > 0 && (
+                    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: favOfertas.length > 0 ? '1px solid var(--bd)' : 'none' }}>
+                      <div style={{ padding: '12px 12px 6px', fontSize: '.72rem', fontWeight: 700, color: 'var(--tx2)', textTransform: 'uppercase', letterSpacing: '.5px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <i className="fi fi-rr-star" style={{ color: 'var(--gold)' }}/> Productos favoritos
+                      </div>
+                      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 12px 12px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gridAutoRows: '110px', gap: 10 }}>
+                          {prodsFiltrados.map(renderProducto)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {favOfertas.length > 0 && (
+                    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ padding: '12px 12px 6px', fontSize: '.72rem', fontWeight: 700, color: 'var(--tx2)', textTransform: 'uppercase', letterSpacing: '.5px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <i className="fi fi-rr-star" style={{ color: 'var(--gold)' }}/> Ofertas favoritas
+                      </div>
+                      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {ofertas.filter(o => favOfertas.includes(o.id)).map(o => o.tipo === 'combinada' ? renderOfertaComb(o) : renderOfertaPack(o))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
 
             {/* Tab ofertas */}
             {tabTPV === 'ofertas' && (
@@ -3448,68 +3546,13 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                   const b = busq.toLowerCase()
                   if ((o.etiqueta || o.nombre || '').toLowerCase().includes(b)) return true
                   return (o.productos_requeridos || []).some(r => productos.find(p => p.id === r.producto_id)?.nombre.toLowerCase().includes(b))
-                }).map(o => {
-                  const reqs = o.productos_requeridos || []
-                  const sinStock = reqs.some(r => (stock[r.producto_id] ?? 0) < r.cantidad)
-                  const paidQty = id => ticket.filter(i => i.id === id && !i.regalo).reduce((s, i) => s + i.cantidad, 0)
-                  const yaAnadida = reqs.length > 0 && reqs.every(r => paidQty(r.producto_id) >= r.cantidad)
-                  return (
-                    <TarjetaOfertaComb
-                      key={o.id} oferta={o} productos={productos}
-                      sinStock={sinStock} yaAnadida={yaAnadida}
-                      onTap={() => {
-                        if (yaAnadida) {
-                          reqs.forEach(r => {
-                            const prod = productos.find(p => p.id === r.producto_id)
-                            if (prod) quitar(prod, r.cantidad)
-                          })
-                          showToast(`✕ ${o.etiqueta || o.nombre} retirada`, 'error')
-                          return
-                        }
-                        if (sinStock) { showToast('Stock insuficiente', 'error'); return }
-                        reqs.forEach(r => {
-                          const prod = productos.find(p => p.id === r.producto_id)
-                          if (prod) agregar(prod, r.cantidad)
-                        })
-                        showToast(`✓ ${o.etiqueta || o.nombre} añadida`)
-                      }}
-                      onLong={() => {
-                        if (!puedeOperar) { showToast(enDescanso ? 'Termina el descanso para vender' : 'Ficha tu entrada antes de vender', 'error'); setShowFichajes(true); return }
-                        if (!caja) { showToast('Abre la caja antes de vender', 'error'); setShowAperturaCaja(true); return }
-                        setCombModal(o)
-                      }}
-                    />
-                  )
-                })}
+                }).map(renderOfertaComb)}
                 {[...new Map(ofertas.filter(o => !o.tipo || o.tipo === 'pack').map(o => [o.producto_id, o])).values()].filter(o => {
                   if (!busq) return true
                   const b = busq.toLowerCase()
                   const prod = productos.find(p => p.id === o.producto_id)
                   return (prod?.nombre.toLowerCase().includes(b)) || (o.etiqueta || o.nombre || '').toLowerCase().includes(b)
-                }).map(o => {
-                  const prod = productos.find(p => p.id === o.producto_id)
-                  if (!prod) return null
-                  const stockDisp = stock[prod.id] ?? 0
-                  const qtyEnTicket = ticket.filter(i => i.id === prod.id && !i.regalo).reduce((s, i) => s + i.cantidad, 0)
-                  return (
-                    <TarjetaOfertaPack
-                      key={o.producto_id} oferta={o} prod={prod}
-                      stockDisp={stockDisp} qtyEnTicket={qtyEnTicket}
-                      onTap={() => {
-                        if (qtyEnTicket >= o.cantidad_pack) {
-                          quitar(prod, o.cantidad_pack)
-                          showToast(`✕ ${o.etiqueta || o.nombre} retirada`, 'error')
-                        } else if (stockDisp < o.cantidad_pack) {
-                          showToast('Stock insuficiente', 'error')
-                        } else {
-                          agregar(prod, o.cantidad_pack)
-                          showToast(`✓ ${o.etiqueta || o.nombre} añadido`)
-                        }
-                      }}
-                      onLong={() => abrirModalCantidad(prod, o.cantidad_pack, o.etiqueta || o.nombre)}
-                    />
-                  )
-                })}
+                }).map(renderOfertaPack)}
               </div>
             )}
           </div>
