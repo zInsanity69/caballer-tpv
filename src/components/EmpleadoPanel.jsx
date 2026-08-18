@@ -13,7 +13,7 @@ import {
   getUltimoFichaje, fichar, getFichajesEmpleado, calcularTurnos, calcularEstado, fmtDuracion,
   getEmpleadosActivosCaseta, obtenerUbicacion, verificarUbicacion,
   guardarFacturaCliente,
-  registrarDevolucion, getTicketPorNumero, ajustarStockAuditado,
+  registrarDevolucion, getTicketPorNumero, ajustarStockAuditado, getRascas,
 } from '../lib/api.js'
 import ModalEditTicket from './ModalEditTicket.jsx'
 import ModalClose from './ModalClose.jsx'
@@ -495,6 +495,32 @@ function ModalPago({ total, onConfirm, onClose }) {
     (metodo === 'mixto' && recibidoNum > 0 && recibidoNum < total)
   )
 
+  const confirmar = async () => {
+    if (!puedeConfirmar || loading) return
+    setLoading(true)
+    const pagoEfectivo = metodo === 'efectivo' ? total : metodo === 'tarjeta' ? 0 : recibidoNum
+    const pagoTarjeta  = metodo === 'efectivo' ? 0 : metodo === 'tarjeta' ? total : tarjetaMixto
+    const dineroDado   = metodo === 'efectivo' ? (recibidoNum || total) : metodo === 'mixto' ? recibidoNum : 0
+    await onConfirm({ metodo, pagoEfectivo, pagoTarjeta, dineroDado, cambio, cliente })
+    setLoading(false)
+  }
+
+  // Atajos de teclado del pago: E/T/M eligen método, Enter confirma.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (showFact) return
+      if (e.key === 'Enter') { e.preventDefault(); confirmar(); return }
+      // E/T/M eligen método. Interceptamos siempre (preventDefault) porque en el
+      // input de importe la "e" se colaría como carácter de exponente.
+      const k = e.key.toLowerCase()
+      if (k === 'e') { e.preventDefault(); setMetodo('efectivo') }
+      else if (k === 't') { e.preventDefault(); setMetodo('tarjeta') }
+      else if (k === 'm') { e.preventDefault(); setMetodo('mixto'); setRecibido('') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showFact, puedeConfirmar, loading, metodo, recibido, cliente])
+
   return (
     <div className="mo">
       <div className="mc">
@@ -552,14 +578,7 @@ function ModalPago({ total, onConfirm, onClose }) {
             <i className="fi fi-rr-file-invoice"/> Hacer factura (datos del cliente)
           </button>
         )}
-        <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={async () => {
-          setLoading(true)
-          const pagoEfectivo = metodo === 'efectivo' ? total : metodo === 'tarjeta' ? 0 : recibidoNum
-          const pagoTarjeta  = metodo === 'efectivo' ? 0 : metodo === 'tarjeta' ? total : tarjetaMixto
-          const dineroDado   = metodo === 'efectivo' ? (recibidoNum || total) : metodo === 'mixto' ? recibidoNum : 0
-          await onConfirm({ metodo, pagoEfectivo, pagoTarjeta, dineroDado, cambio, cliente })
-          setLoading(false)
-        }}>
+        <button className="btn-p" disabled={!puedeConfirmar || loading} onClick={confirmar}>
           {loading ? 'Procesando...' : cliente ? '✓ Confirmar y facturar' : '✓ Confirmar Venta'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
@@ -1798,16 +1817,15 @@ function ModalMisPedidos({ caseta, perfil, productos, onClose, showToast, onReci
   const confirmarRec = async () => {
     setSaving(true)
     try {
-      // Reconcilia cualquier cantidad editada que no se llegara a aplicar
-      // (p.ej. una diferencia escrita sin salir del campo).
-      for (const it of recItems) {
-        const delta = it.cantidad_recibida - (it.cantidad_aplicada ?? 0)
-        if (delta !== 0) {
-          const nueva = await recibirItemPedido(it.id, it.producto_id, caseta.id, delta, it.cantidad_recibida, it.notas_item)
-          if (nueva !== null && nueva !== undefined) onStock && onStock(it.producto_id, nueva)
-        }
-      }
+      // Una sola llamada: la función de la BD aplica el stock que falte, guarda
+      // las líneas y cierra el pedido (migración 020). Sin bucles por producto.
       await confirmarRecepcionPedido(recibiendo.id, caseta.id, recItems, notasRec, { nombreEmpleado: perfil.nombre, nombreCaseta: caseta.nombre })
+      // Refleja en el stock local del TPV el delta que la función acaba de sumar
+      // de cada línea (lo que aún no se había aplicado por el camino).
+      recItems.forEach(it => {
+        const delta = it.cantidad_recibida - (it.cantidad_aplicada ?? 0)
+        if (delta !== 0) onStock && onStock(it.producto_id, delta, true)
+      })
       const hayIncidencia = notasRec?.trim() ||
         recItems.some(i => i.estado === 'no_llegado' || i.estado === 'diferencia' || i.notas_item?.trim())
       showToast(hayIncidencia ? 'Recepción con incidencias — stock actualizado' : 'Recepción confirmada, stock actualizado')
@@ -2612,11 +2630,18 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const [descuento,      setDescuento]      = useState(0)
   const [busq,           setBusq]           = useState('')
   const busqRef                             = useRef(null)
+  const tisRef                              = useRef(null)   // lista de líneas del ticket (para auto-scroll)
+  const prevTicketLen                       = useRef(0)
+  const eanSelRef                           = useRef(0)     // índice resaltado del selector "¿Cuál es?"
   const [cat,            setCat]            = useState('Todos')
   const [showScan,       setShowScan]       = useState(false)
   const [eanPicker,      setEanPicker]      = useState(null)   // productos que comparten EAN
+  const [rascas,         setRascas]         = useState([])     // mapeo EAN rasca -> producto premiado
+  const [rascaSustituto, setRascaSustituto] = useState(null)   // premio agotado → elegir sustituto
+  const [eanSel,         setEanSel]         = useState(0)       // opción resaltada en "¿Cuál es?"
   const [showAjustes,    setShowAjustes]    = useState(false)
   const [showPago,       setShowPago]       = useState(false)
+  const [showAtajos,     setShowAtajos]     = useState(false)
   const [showCierre,       setShowCierre]       = useState(false)
   const [showRetirada,     setShowRetirada]     = useState(false)
   const [showAperturaCaja, setShowAperturaCaja] = useState(false)
@@ -2629,8 +2654,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const [toast,          setToast]          = useState(null)
   const [apertura,       setApertura]       = useState('')
   // ── Persistidos en sessionStorage para sobrevivir a cambios de página ──
-  const [modoRapido,     setModoRapido]     = useState(() => sessionStorage.getItem('tpv_rapido') === '1')
-  const [noImprimir,     setNoImprimir]     = useState(() => sessionStorage.getItem('tpv_noimprimir') === '1') // por defecto SÍ se imprime
+  const [modoRapido,     setModoRapido]     = useState(() => localStorage.getItem('tpv_rapido') === '1')
+  const [noImprimir,     setNoImprimir]     = useState(() => localStorage.getItem('tpv_noimprimir') === '1') // por defecto SÍ se imprime
   const [modalAlEscanear, setModalAlEscanear] = useState(() => localStorage.getItem('tpv_modal_escanear') === '1') // por defecto: escanear añade 1 directo
   const [tabTPV,         setTabTPV]         = useState(() => sessionStorage.getItem('tpv_tab') || 'todos')
   const [cat2,           setCat2]           = useState(() => sessionStorage.getItem('tpv_cat') || 'Todos')
@@ -2688,8 +2713,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   }
 
   // Persistir estado simple en sessionStorage
-  useEffect(() => { sessionStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
-  useEffect(() => { sessionStorage.setItem('tpv_noimprimir', noImprimir ? '1' : '0') }, [noImprimir])
+  useEffect(() => { localStorage.setItem('tpv_rapido', modoRapido ? '1' : '0') }, [modoRapido])
+  useEffect(() => { localStorage.setItem('tpv_noimprimir', noImprimir ? '1' : '0') }, [noImprimir])
   useEffect(() => { localStorage.setItem('tpv_modal_escanear', modalAlEscanear ? '1' : '0') }, [modalAlEscanear])
   useEffect(() => { sessionStorage.setItem('tpv_tab', tabTPV) }, [tabTPV])
   useEffect(() => { sessionStorage.setItem('tpv_cat', cat2) }, [cat2])
@@ -2704,10 +2729,11 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       getNECDetalle(caseta.id), getLimitePolvora(caseta.id),
       getPedidos({ casetaId: caseta.id, activos: true }).catch(() => []),
       getStockMinimos(caseta.id).catch(() => {}),
-    ]).then(([prods, stk, ofs, cajaAbierta, nec, limite, peds, mins]) => {
+      getRascas().catch(() => []),
+    ]).then(([prods, stk, ofs, cajaAbierta, nec, limite, peds, mins, rasc]) => {
       setProductos(prods); setStock(stk); setOfertas(ofs)
       setKgPolvora(nec.total); setNecDetalle(nec); setKgLimite(limite)
-      setStockMinimos(mins || {})
+      setStockMinimos(mins || {}); setRascas(rasc || [])
       const pedsArr = peds || []
       setPedidosPend(pedsArr.filter(p => p.estado === 'EN_CAMINO').length)
       setPedidoActivo(pedsArr.some(p => ['PENDIENTE','ACEPTADO','EN_CAMINO'].includes(p.estado)))
@@ -2867,6 +2893,17 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
     else agregar(prod, 1)
   }
 
+  // Canjea un rasca: añade el premio como REGALO. Si está agotado, pide sustituto.
+  const canjearRasca = (rasca) => {
+    const premio = productos.find(p => p.id === rasca.producto_id)
+    if (!premio) { showToast('El premio de este rasca ya no existe', 'error'); return }
+    if ((stock[premio.id] ?? 0) <= 0) { setRascaSustituto({ premio }); return }
+    agregar(premio, 1, true)
+    showToast(`🎁 Premio: ${premio.nombre} (regalo)`)
+  }
+  // Devuelve el rasca cuyo EAN coincide con el término, si lo hay
+  const rascaPorEan = (term) => rascas.find(r => r.ean === term && r.activo !== false)
+
   // Resta `cantidad` unidades de la línea pagada de un producto. Si llega a 0, la elimina.
   const quitar = (prod, cantidad = 1) => setTicket(prev => {
     const idx = prev.findIndex(i => i.id === prod.id && !i.regalo)
@@ -2984,6 +3021,67 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const cerrarOk = () => { setShowOk(null); setTimeout(() => busqRef.current?.focus(), 60) }
   // Cierra el selector de EAN duplicado y devuelve el foco al buscador
   const cerrarEanPicker = () => { setEanPicker(null); setTimeout(() => busqRef.current?.focus(), 60) }
+  // Elige una opción del selector de EAN duplicado (click o tecla numérica)
+  const elegirEanItem = (p) => {
+    setEanPicker(null)
+    añadirEscaneado(p)
+    if (!modalAlEscanear) setTimeout(() => busqRef.current?.focus(), 60)
+  }
+  // Selector "¿Cuál es?" con teclado: ↑/↓ mueven, Enter elige, 1-9 atajo directo.
+  // El Enter se "arma" un instante después para no capturar el mismo Enter con
+  // el que se abrió el selector (si no, elegiría la primera opción sin querer).
+  useEffect(() => {
+    if (!eanPicker) return
+    setEanSel(0); eanSelRef.current = 0
+    let armado = false
+    const t = setTimeout(() => { armado = true }, 150)
+    const onKey = (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); const s = Math.min(eanPicker.length - 1, eanSelRef.current + 1); eanSelRef.current = s; setEanSel(s) }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); const s = Math.max(0, eanSelRef.current - 1); eanSelRef.current = s; setEanSel(s) }
+      else if (e.key === 'Enter') { if (!armado) return; e.preventDefault(); elegirEanItem(eanPicker[eanSelRef.current]) }
+      else { const n = parseInt(e.key, 10); if (n >= 1 && n <= eanPicker.length) { e.preventDefault(); elegirEanItem(eanPicker[n - 1]) } }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => { clearTimeout(t); window.removeEventListener('keydown', onKey) }
+  }, [eanPicker, modalAlEscanear])
+
+  // Abrir el cobro (mismo camino que el botón "Finalizar venta")
+  const cobrar = () => {
+    if (ticket.length === 0) return
+    if (!puedeOperar) { showToast(enDescanso ? 'Termina el descanso para cobrar' : 'Ficha tu entrada para cobrar', 'error'); setShowFichajes(true); return }
+    if (!caja) { showToast('Abre la caja antes de cobrar', 'error'); setShowAperturaCaja(true); return }
+    setShowPago(true)
+  }
+
+  // Atajos de teclado globales del TPV (F1 ayuda, F2 cobrar). Usamos teclas F
+  // para no interferir con el buscador ni con el escáner.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'F1') { e.preventDefault(); setShowAtajos(v => !v); return }
+      if (document.querySelector('.mo')) return // hay un modal abierto → mandan sus atajos
+      if (e.key === 'F2') { e.preventDefault(); cobrar(); return }
+      const el = document.activeElement
+      const escribiendo = el?.tagName === 'INPUT' && el.value // no pisar mientras se teclea
+      // Quitar la última línea del ticket
+      if (e.key === 'F8' || (e.key === 'Delete' && !escribiendo)) {
+        e.preventDefault(); setTicket(p => p.slice(0, -1)); return
+      }
+      // +/− cantidad de la última línea (si no estás tecleando en el buscador)
+      if ((e.key === '+' || e.key === '-') && !escribiendo && ticket.length) {
+        e.preventDefault(); cambiarQty(lineKey(ticket[ticket.length - 1]), e.key === '+' ? 1 : -1)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [ticket, caja, puedeOperar, enDescanso])
+
+  // Al añadir un producto nuevo al ticket, baja la lista para ver la última línea
+  useEffect(() => {
+    if (ticket.length > prevTicketLen.current && tisRef.current) {
+      tisRef.current.scrollTo({ top: tisRef.current.scrollHeight, behavior: 'smooth' })
+    }
+    prevTicketLen.current = ticket.length
+  }, [ticket.length])
 
   const confirmarCierre = async (contado, esperadoCierre) => {
     try {
@@ -3413,9 +3511,13 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               <input ref={busqRef} className="si" placeholder="Buscar producto o EAN..."
                 value={busq} onChange={e => setBusq(e.target.value)}
                 onKeyDown={e => {
+                  if (e.key === 'Escape' && busq) { e.preventDefault(); setBusq(''); return }
                   if (e.key !== 'Enter') return
                   const term = busq.trim()
                   if (!term) return
+                  // ¿EAN de un rasca? → canjear el premio como regalo
+                  const rasca = rascaPorEan(term)
+                  if (rasca) { setBusq(''); canjearRasca(rasca); return }
                   // EAN exacto → esos productos; si no, lo que coincide por nombre en la pestaña
                   const porEan = productos.filter(p => p.codigo_ean === term)
                   const candidatos = porEan.length >= 1 ? porEan : prodsFiltrados
@@ -3572,7 +3674,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               <div className="tt"><i className="fi fi-rr-receipt"/> Ticket</div>
               <div className="tm">{perfil.nombre} · {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</div>
             </div>
-            <div className="tis">
+            <div className="tis" ref={tisRef}>
               {ticket.length === 0
                 ? <div className="te"><span style={{ fontSize: '2rem', opacity: .35, color: 'var(--tx2)' }}><i className="fi fi-rr-shopping-cart"/></span><span>Ticket vacío</span></div>
                 : ticket.map(item => (
@@ -3625,15 +3727,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               </div>
               <button className="bfin"
                 disabled={ticket.length === 0 || !puedeOperar || !caja}
-                onClick={() => {
-                  if (!puedeOperar) {
-                    showToast(enDescanso ? 'Termina el descanso para cobrar' : 'Ficha tu entrada para cobrar', 'error')
-                    setShowFichajes(true)
-                    return
-                  }
-                  if (!caja) { showToast('Abre la caja antes de cobrar', 'error'); setShowAperturaCaja(true); return }
-                  setShowPago(true)
-                }}>
+                onClick={cobrar}>
                 {!puedeOperar
                   ? (enDescanso ? 'En descanso' : 'Ficha para vender')
                   : !caja ? 'Abre la caja'
@@ -3693,18 +3787,22 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             <ModalClose onClose={cerrarEanPicker} />
             <div className="mt-modal"><i className="fi fi-rr-interrogation"/> ¿Cuál es?</div>
             <div style={{ fontSize: '.8rem', color: 'var(--tx2)', marginBottom: 12 }}>
-              Varios productos coinciden. Elige el correcto.
+              Varios productos coinciden. Muévete con ↑ ↓ y pulsa Enter (o su número).
             </div>
             <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
-              {eanPicker.map(p => {
+              {eanPicker.map((p, i) => {
                 const st = stock[p.id] ?? 0
+                const sel = i === eanSel
                 return (
-                  <button key={p.id} onClick={() => { setEanPicker(null); añadirEscaneado(p); if (!modalAlEscanear) setTimeout(() => busqRef.current?.focus(), 60) }} style={{
+                  <button key={p.id} onClick={() => elegirEanItem(p)}
+                    ref={sel ? (el => el?.scrollIntoView({ block: 'nearest' })) : null} style={{
                     width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10,
                     padding: '10px 12px', marginBottom: 6, borderRadius: 'var(--rs)',
-                    background: 'var(--s2)', border: '1px solid var(--bd)', cursor: 'pointer',
+                    background: sel ? 'rgba(var(--ac-rgb),.14)' : 'var(--s2)',
+                    border: `1px solid ${sel ? 'var(--ac)' : 'var(--bd)'}`, cursor: 'pointer',
                     color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif", opacity: st > 0 ? 1 : .5,
                   }}>
+                    {i < 9 && <kbd style={{ flexShrink: 0, minWidth: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, background: 'var(--s3)', border: '1px solid var(--bd)', fontSize: '.75rem', fontWeight: 700 }}>{i + 1}</kbd>}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: '.88rem' }}>{p.nombre}</div>
                       <div style={{ fontSize: '.72rem', color: 'var(--tx2)' }}>{p.empresa ? `${p.empresa} · ` : ''}{p.categoria} · {fmt(p.precio)}</div>
@@ -3786,7 +3884,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
         <ModalMisPedidos caseta={caseta} perfil={perfil} productos={productos}
           showToast={showToast}
           onRecibido={refrescarTras}
-          onStock={(pid, cant) => setStock(prev => ({ ...prev, [pid]: cant }))}
+          onStock={(pid, cant, relativo) => setStock(prev => ({ ...prev, [pid]: relativo ? (prev[pid] ?? 0) + cant : cant }))}
           onClose={() => { setShowMisPedidos(false); sessionStorage.removeItem('tpv_panel'); refrescarTras() }} />
       )}
       {showInventario && (
@@ -3855,6 +3953,51 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               </button>
             </div>
             <button className="btn-p" onClick={cerrarOk}>Nueva Venta</button>
+          </div>
+        </div>
+      )}
+      {rascaSustituto && (
+        <div className="mo">
+          <div className="mc" style={{ overflow: 'visible' }}>
+            <ModalClose onClose={() => setRascaSustituto(null)} />
+            <div className="mt-modal"><i className="fi fi-rr-gift"/> Premio agotado</div>
+            <div style={{ fontSize: '.82rem', color: 'var(--tx2)', marginBottom: 12 }}>
+              <strong style={{ color: 'var(--gold)' }}>{rascaSustituto.premio.nombre}</strong> está agotado. Elige un producto de sustituto para dárselo como regalo.
+            </div>
+            <ProductoBuscador productos={productos} stock={stock} autoFocus
+              placeholder="Escanea o busca el producto sustituto..."
+              onPick={(p) => {
+                if ((stock[p.id] ?? 0) <= 0) { showToast('Ese producto también está agotado', 'error'); return }
+                setRascaSustituto(null)
+                agregar(p, 1, true)
+                showToast(`🎁 Regalo (sustituto): ${p.nombre}`)
+              }} />
+            <button className="btn-s" onClick={() => setRascaSustituto(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      {showAtajos && (
+        <div className="mo" onClick={() => setShowAtajos(false)}>
+          <div className="mc" onClick={e => e.stopPropagation()}>
+            <ModalClose onClose={() => setShowAtajos(false)} />
+            <div className="mt-modal"><i className="fi fi-rr-keyboard"/> Atajos de teclado</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '.86rem' }}>
+              {[
+                ['F2', 'Cobrar / finalizar venta'],
+                ['Enter', 'Añadir el producto buscado · confirmar en el cobro'],
+                ['E / T / M', 'En el cobro: Efectivo / Tarjeta / Mixto'],
+                ['+ / −', 'Subir / bajar cantidad de la última línea'],
+                ['Supr / F8', 'Quitar la última línea del ticket'],
+                ['Esc', 'Cerrar ventana o limpiar el buscador'],
+                ['F1', 'Mostrar / ocultar esta ayuda'],
+              ].map(([k, d]) => (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <kbd style={{ minWidth: 74, textAlign: 'center', padding: '4px 8px', borderRadius: 6, background: 'var(--s2)', border: '1px solid var(--bd)', fontWeight: 700, fontSize: '.8rem', flexShrink: 0 }}>{k}</kbd>
+                  <span style={{ color: 'var(--tx2)' }}>{d}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: '.75rem', color: 'var(--tx2)', marginTop: 12 }}>El buscador siempre listo: escanea con la pistola o teclea y pulsa Enter.</div>
           </div>
         </div>
       )}

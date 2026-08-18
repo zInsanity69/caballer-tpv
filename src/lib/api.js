@@ -237,6 +237,23 @@ export async function setTodasOfertasActivas(activa) {
   if (error) throw error
 }
 
+// ─── RASCAS ──────────────────────────────────────────────────
+// Mapeo EAN del rasca -> producto premiado (se regala al escanear).
+export async function getRascas() {
+  const { data, error } = await supabase.from('rascas').select('*, productos(nombre)').order('created_at')
+  if (error) throw error
+  return data || []
+}
+export async function upsertRasca(rasca) {
+  const { data, error } = await supabase.from('rascas').upsert(rasca, { onConflict: 'id' }).select().single()
+  if (error) throw error
+  return data
+}
+export async function deleteRasca(id) {
+  const { error } = await supabase.from('rascas').delete().eq('id', id)
+  if (error) throw error
+}
+
 // ─── CASETAS ─────────────────────────────────────────────────
 export async function getCasetas() {
   const { data, error } = await supabase.from('casetas').select('*').order('nombre')
@@ -854,15 +871,6 @@ export async function recibirItemPedido(itemId, productoId, casetaId, delta, can
 }
 
 export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibidos, notas = '', ctx = null) {
-  // El stock ya se fue aplicando producto a producto al revisarlos
-  // (recepción progresiva, ver recibirItemPedido). Aquí solo persistimos los
-  // datos por si quedó algo sin guardar, fijamos el estado y avisamos.
-  for (const item of itemsRecibidos) {
-    await supabase.from('pedido_items')
-      .update({ cantidad_recibida: item.cantidad_recibida, notas_item: item.notas_item || null })
-      .eq('id', item.id)
-  }
-
   const hayIncidencia =
     (notas && notas.trim() !== '') ||
     itemsRecibidos.some(i =>
@@ -870,11 +878,19 @@ export async function confirmarRecepcionPedido(pedidoId, casetaId, itemsRecibido
       (i.cantidad_recibida !== undefined && i.cantidad_recibida !== i.cantidad)
     )
 
-  await supabase.from('pedidos').update({
-    estado: hayIncidencia ? 'INCIDENCIA' : 'RECIBIDO',
-    notas: notas || null,
-    actualizado_en: new Date().toISOString(),
-  }).eq('id', pedidoId)
+  // Una sola llamada: aplica el stock que falte, guarda las líneas y cierra el
+  // pedido, todo en una transacción en el servidor (ver migración 020).
+  const { error } = await supabase.rpc('confirmar_recepcion', {
+    p_pedido_id: pedidoId,
+    p_caseta_id: casetaId,
+    p_items: itemsRecibidos.map(i => ({
+      id: i.id, producto_id: i.producto_id,
+      cantidad_recibida: i.cantidad_recibida, notas_item: i.notas_item || null,
+    })),
+    p_estado: hayIncidencia ? 'INCIDENCIA' : 'RECIBIDO',
+    p_notas: notas || null,
+  })
+  if (error) throw error
 
   const caseta = ctx?.nombreCaseta  || ''
   const nombre = ctx?.nombreEmpleado || ''

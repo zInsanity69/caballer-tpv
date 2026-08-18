@@ -10,6 +10,7 @@ import {
   getProductos, upsertProducto, toggleProducto, deleteProducto,
   getCategorias, crearCategoria, renombrarCategoria, eliminarCategoria,
   getOfertas, upsertOferta, updateOferta, deleteOferta, setTodasOfertasActivas,
+  getRascas, upsertRasca, deleteRasca,
   getPerfiles, updatePerfil, eliminarPerfil, crearUsuario, actualizarCredenciales,
   getCasetas, upsertCaseta, deleteCaseta, updateCaseta, updateAllPedidosAuto,
   getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy, getVentasTotalesPorCaseta, guardarFacturaCliente,
@@ -40,6 +41,7 @@ const TABS = [
   ['productos',   'fi-rr-box',             'Productos'],
   ['stock',       'fi-rr-list',            'Stock'],
   ['ofertas',     'fi-rr-label',           'Ofertas'],
+  ['rascas',      'fi-rr-ticket',          'Rascas'],
   ['casetas',     'fi-rr-shop',            'Casetas'],
   ['usuarios',    'fi-rr-users',           'Usuarios'],
   ['alertas',     'fi-rr-bell',            'Alertas'],
@@ -1732,6 +1734,92 @@ function GestionOfertas() {
   )
 }
 
+// ─── GESTIÓN RASCAS ──────────────────────────────────────────
+// Mapeo EAN del rasca -> producto premiado. Al escanear ese EAN en caja, el
+// producto se añade al ticket como regalo (0 €, descuenta stock).
+function GestionRascas() {
+  const [rascas,setRascas]=useState([])
+  const [productos,setProductos]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [toast,setToast]=useState(null)
+  const [ean,setEan]=useState('')
+  const [prodId,setProdId]=useState('')
+  const [editId,setEditId]=useState(null)
+  const showToast=(msg,type='ok')=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3000) }
+
+  useEffect(()=>{ Promise.all([getRascas(),getProductos()]).then(([r,p])=>{setRascas(r);setProductos(p)}).finally(()=>setLoading(false)) },[])
+
+  const guardar=async()=>{
+    const e=ean.trim()
+    if(!e||!prodId){ showToast('Pon el EAN del rasca y elige el premio','error'); return }
+    try{
+      const data=await upsertRasca({...(editId?{id:editId}:{}),ean:e,producto_id:prodId,activo:true})
+      const prod=productos.find(p=>p.id===prodId)
+      const fila={...data,productos:{nombre:prod?.nombre}}
+      setRascas(prev=>editId?prev.map(x=>x.id===editId?fila:x):[...prev,fila])
+      setEan('');setProdId('');setEditId(null)
+      showToast(editId?'Rasca actualizado ✓':'Rasca añadido ✓')
+    }catch(err){ showToast(err.message?.includes('duplicate')?'Ese EAN ya está registrado':err.message,'error') }
+  }
+  const toggleActivo=async r=>{
+    try{ await upsertRasca({id:r.id,ean:r.ean,producto_id:r.producto_id,activo:!r.activo}); setRascas(prev=>prev.map(x=>x.id===r.id?{...x,activo:!r.activo}:x)) }
+    catch(e){ showToast(e.message,'error') }
+  }
+  const eliminar=async id=>{ if(!window.confirm('¿Eliminar este rasca?'))return; try{await deleteRasca(id);setRascas(prev=>prev.filter(r=>r.id!==id));showToast('Eliminado')}catch(e){showToast(e.message,'error')} }
+  const editar=r=>{ setEditId(r.id);setEan(r.ean);setProdId(r.producto_id) }
+
+  if(loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
+
+  return(
+    <>
+      {toast&&<div className={`toast ${toast.type}`}>{toast.msg}</div>}
+      <div className="card" style={{marginBottom:18}}>
+        <div style={{fontSize:'.82rem',color:'var(--tx2)',marginBottom:12}}>
+          <i className="fi fi-rr-info"/> Cada rasca lleva un EAN (uno por premio). Al escanearlo en caja, el premio se añade al ticket <strong style={{color:'var(--gold)'}}>como regalo</strong> y descuenta stock. Si el premio está agotado, el empleado elige un sustituto.
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="fg" style={{flex:1,minWidth:160,marginBottom:0}}>
+            <label>EAN del rasca</label>
+            <input value={ean} onChange={e=>setEan(e.target.value)} placeholder="Escanea o teclea el EAN del rasca"/>
+          </div>
+          <div className="fg" style={{flex:2,minWidth:200,marginBottom:0}}>
+            <label>Producto premiado</label>
+            <select value={prodId} onChange={e=>setProdId(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bd)',borderRadius:'var(--rs)',padding:'9px 10px',color:'var(--tx)',fontFamily:"'DM Sans',sans-serif",width:'100%'}}>
+              <option value="">-- Elige el premio --</option>
+              {[...productos.filter(p=>p.activo)].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+          </div>
+          <button className="btn-add" style={{width:'auto',marginTop:0}} onClick={guardar}>{editId?'Guardar':'Añadir'}</button>
+          {editId&&<button className="btn-s" style={{width:'auto',marginTop:0}} onClick={()=>{setEditId(null);setEan('');setProdId('')}}>Cancelar</button>}
+        </div>
+      </div>
+      <div className="stit">Rascas ({rascas.length})</div>
+      <div className="tw"><table>
+        <thead><tr><th>EAN del rasca</th><th>Premio</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {rascas.length===0?<tr><td colSpan={4} style={{textAlign:'center',color:'var(--tx2)',padding:24}}>Sin rascas configurados</td></tr>
+            :rascas.map(r=>{
+            const activo=r.activo!==false
+            const prod=productos.find(p=>p.id===r.producto_id)
+            return(
+              <tr key={r.id} style={{opacity:activo?1:.5}}>
+                <td style={{fontFamily:'monospace',fontWeight:700}}>{r.ean}</td>
+                <td style={{fontWeight:600}}>{r.productos?.nombre||prod?.nombre||<span style={{color:'var(--red)'}}>Eliminado</span>}</td>
+                <td><span className={`chip ${activo?'cg':'cr'}`}>{activo?'Activo':'Inactivo'}</span></td>
+                <td><div className="acell">
+                  <button className="btn-edit" onClick={()=>editar(r)}>Editar</button>
+                  <button className="btn-tog" style={{color:activo?'var(--gold)':'var(--green)'}} onClick={()=>toggleActivo(r)}>{activo?'Desactivar':'Activar'}</button>
+                  <button className="btn-del" onClick={()=>eliminar(r.id)}>Eliminar</button>
+                </div></td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table></div>
+    </>
+  )
+}
+
 // ─── GESTIÓN CASETAS ─────────────────────────────────────────
 export function GestionCasetas({ casetas, setCasetas }) {
   const [toast,setToast]=useState(null)
@@ -2674,6 +2762,7 @@ export default function AdminPanel({ perfil, casetas: casetasInit, onModoVenta }
         {tab==='productos'   && <GestionProductos/>}
         {tab==='stock'       && <GestionStock casetas={casetas}/>}
         {tab==='ofertas'     && <GestionOfertas/>}
+        {tab==='rascas'      && <GestionRascas/>}
         {tab==='casetas'     && <GestionCasetas casetas={casetas} setCasetas={setCasetas}/>}
         {tab==='usuarios'    && <GestionUsuarios casetas={casetas}/>}
         {tab==='alertas'     && <GestionAlertas/>}
