@@ -3060,6 +3060,18 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
       if (e.key === 'F1') { e.preventDefault(); setShowAtajos(v => !v); return }
       if (document.querySelector('.mo')) return // hay un modal abierto → mandan sus atajos
       if (e.key === 'F2') { e.preventDefault(); cobrar(); return }
+      if (e.key === 'F3') { // añadir 1 Mecha de Algodón
+        e.preventDefault()
+        const mecha = productos.find(p => p.nombre.toLowerCase().includes('mecha de algod'))
+        if (mecha) agregar(mecha, 1)
+        else showToast('No encuentro "Mecha de Algodón" en el catálogo', 'error')
+        return
+      }
+      if (e.key === 'F4') { // marcar la última línea del ticket como regalo
+        e.preventDefault()
+        if (ticket.length) toggleRegalo(lineKey(ticket[ticket.length - 1]))
+        return
+      }
       const el = document.activeElement
       const escribiendo = el?.tagName === 'INPUT' && el.value // no pisar mientras se teclea
       // Quitar la última línea del ticket
@@ -3073,7 +3085,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ticket, caja, puedeOperar, enDescanso])
+  }, [ticket, caja, puedeOperar, enDescanso, agregar, productos])
 
   // Al añadir un producto nuevo al ticket, baja la lista para ver la última línea
   useEffect(() => {
@@ -3561,7 +3573,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             )}
 
             {/* Botones rápidos */}
-            {(botonesRapidos.length > 0 || ofertasRapidas.length > 0 || combosRapidos.length > 0) && !busq && tabTPV !== 'ofertas' && (
+            {(botonesRapidos.length > 0 || ofertasRapidas.length > 0 || combosRapidos.length > 0) && tabTPV !== 'ofertas' && (
               <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--bd)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '.67rem', color: 'var(--tx2)', alignSelf: 'center', marginRight: 2 }}><i className="fi fi-rr-bolt"/></span>
                 {botonesRapidos.map(p => (
@@ -3984,6 +3996,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '.86rem' }}>
               {[
                 ['F2', 'Cobrar / finalizar venta'],
+                ['F3', 'Añadir una Mecha de Algodón'],
+                ['F4', 'Marcar la última línea como regalo'],
                 ['Enter', 'Añadir el producto buscado · confirmar en el cobro'],
                 ['E / T / M', 'En el cobro: Efectivo / Tarjeta / Mixto'],
                 ['+ / −', 'Subir / bajar cantidad de la última línea'],
