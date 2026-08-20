@@ -14,7 +14,13 @@ export default function App() {
   const [casetas, setCasetas]   = useState([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
-  const [ventaCaseta, setVentaCaseta] = useState(null) // admin en modo venta → caseta elegida
+  const [ventaCaseta, setVentaCaseta] = useState(() => localStorage.getItem('admin_venta_caseta') || null) // admin en modo venta → caseta elegida (se recuerda al recargar)
+
+  // Recordar el modo venta del admin entre recargas
+  useEffect(() => {
+    if (ventaCaseta) localStorage.setItem('admin_venta_caseta', ventaCaseta)
+    else localStorage.removeItem('admin_venta_caseta')
+  }, [ventaCaseta])
 
   // Escuchar cambios de sesión
   useEffect(() => {
@@ -75,8 +81,8 @@ export default function App() {
   )
 
   if (perfil.rol === 'ADMIN') {
-    if (ventaCaseta) {
-      const cs = casetas.find(c => c.id === ventaCaseta)
+    const cs = ventaCaseta ? casetas.find(c => c.id === ventaCaseta) : null
+    if (ventaCaseta && cs) {
       return <EmpleadoPanel
         key={ventaCaseta}
         perfil={{ ...perfil, caseta_id: ventaCaseta, casetas: cs }}

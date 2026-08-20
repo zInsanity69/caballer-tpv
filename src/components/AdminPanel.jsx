@@ -13,13 +13,13 @@ import {
   getRascas, upsertRasca, deleteRasca,
   getPerfiles, updatePerfil, eliminarPerfil, crearUsuario, actualizarCredenciales,
   getCasetas, upsertCaseta, deleteCaseta, updateCaseta, updateAllPedidosAuto,
-  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, updateTicketNota, getRetiradasHoy, getVentasTotalesPorCaseta, guardarFacturaCliente,
+  getStatsAdmin, getTicketsAdmin, deleteTicket, updateTicket, getCajasAbiertas, getCierresCaja, updateTicketNota, getRetiradasHoy, getVentasTotalesPorCaseta, guardarFacturaCliente,
   getAuditoriaTickets,
   getDevoluciones, getDefectuosos, updateReclamacionItem,
   setStock, ajustarStock, ajustarStockAuditado, getStockAuditoria, getStockCaseta, getStockMinimos, setStockMinimo,
   getVentasPorDia,
   getPedidos, crearPedido, updatePedido, updatePedidoItems,
-  getFichajesAdmin, editarFichaje, deleteFichaje, calcularTurnos, calcularEstado, fmtDuracion,
+  getFichajesAdmin, editarFichaje, deleteFichaje, registrarSalidaAuto, calcularTurnos, calcularEstado, fmtDuracion,
   getInventarios, confirmarInventario,
   getKgPolvora,
   getAlertasConfig, updateAlertaConfig,
@@ -31,6 +31,7 @@ import ThemeToggle from './ThemeToggle.jsx'
 const TABS = [
   ['dashboard',   'fi-rr-chart-histogram', 'Dashboard'],
   ['ventas',      'fi-rr-coins',           'Ventas'],
+  ['cierres',     'fi-rr-lock',            'Cierres'],
   ['tickets',     'fi-rr-receipt',         'Tickets'],
   ['auditoria',   'fi-rr-time-past',       'Cambios'],
   ['devoluciones','fi-rr-undo',            'Devoluc.'],
@@ -224,6 +225,77 @@ function StockAlerta({ stockBajo, stockCero, casetas }) {
           </tbody>
         </table>
       </div>
+    </>
+  )
+}
+
+// ─── PANEL CIERRES DE CAJA ───────────────────────────────────
+const DENOMS_ADMIN = [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
+function PanelCierres({ casetas }) {
+  const [cierres, setCierres] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [casetaSel, setCasetaSel] = useState('')
+  const [exp, setExp] = useState(null)
+  useEffect(() => { setLoading(true); getCierresCaja(casetaSel || null).then(setCierres).finally(() => setLoading(false)) }, [casetaSel])
+
+  if (loading) return <div className="loading-row"><div className="spin-sm"/>Cargando...</div>
+
+  return (
+    <>
+      <div className="stit" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <span>Cierres de caja ({cierres.length})</span>
+        <select value={casetaSel} onChange={e => setCasetaSel(e.target.value)} style={{ background: 'var(--s2)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)', padding: '7px 10px', color: 'var(--tx)', fontFamily: "'DM Sans',sans-serif", fontSize: '.82rem' }}>
+          <option value="">Todas las casetas</option>
+          {casetas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+      </div>
+      {cierres.length === 0
+        ? <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>Sin cierres registrados</div>
+        : <div className="tw"><table>
+          <thead><tr><th>Fecha</th><th>Caseta</th><th>Cerró</th><th>Contado</th><th>Esperado</th><th>Descuadre</th><th>Sobre</th><th>Cambio</th><th></th></tr></thead>
+          <tbody>
+            {cierres.map(c => {
+              const abierto = exp === c.id
+              return (
+                <React.Fragment key={c.id}>
+                  <tr style={{ cursor: 'pointer' }} onClick={() => setExp(abierto ? null : c.id)}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{c.cerrada_en ? new Date(c.cerrada_en).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                    <td style={{ color: 'var(--tx2)' }}>{c.casetas?.nombre?.replace('Caballer ', '') || '—'}</td>
+                    <td style={{ color: 'var(--tx2)' }}>{c.cierra?.nombre || '—'}</td>
+                    <td style={{ fontWeight: 700 }}>{fmt(c.dinero_contado ?? 0)}</td>
+                    <td style={{ color: 'var(--tx2)' }}>{c.esperado != null ? fmt(c.esperado) : '—'}</td>
+                    <td style={{ fontWeight: 700, color: c.descuadre == null ? 'var(--tx2)' : Math.abs(c.descuadre) < 0.01 ? 'var(--green)' : c.descuadre < 0 ? 'var(--red)' : 'var(--gold)' }}>{c.descuadre != null ? (Math.abs(c.descuadre) < 0.01 ? '✓' : `${c.descuadre > 0 ? '+' : ''}${fmt(c.descuadre)}`) : '—'}</td>
+                    <td style={{ color: 'var(--green)', fontWeight: 700 }}>{c.sobre != null ? fmt(c.sobre) : '—'}</td>
+                    <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{c.cambio_dejado != null ? fmt(c.cambio_dejado) : '—'}</td>
+                    <td><i className={`fi ${abierto ? 'fi-rr-angle-up' : 'fi-rr-angle-down'}`}/></td>
+                  </tr>
+                  {abierto && (
+                    <tr><td colSpan={9} style={{ background: 'var(--s2)' }}>
+                      <div style={{ padding: '10px 6px', display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: '.82rem' }}>
+                        <div>
+                          <div style={{ color: 'var(--tx2)', fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4 }}>Resumen</div>
+                          <div>Apertura (fondo): <strong>{fmt(c.apertura_dinero ?? 0)}</strong></div>
+                          <div>Abrió: <strong>{c.abre?.nombre || '—'}</strong></div>
+                          <div>Billetes: <strong style={{ color: 'var(--green)' }}>{c.total_billetes != null ? fmt(c.total_billetes) : '—'}</strong> · Monedas: <strong>{c.total_monedas != null ? fmt(c.total_monedas) : '—'}</strong></div>
+                        </div>
+                        {c.desglose_efectivo && (
+                          <div style={{ flex: 1, minWidth: 200 }}>
+                            <div style={{ color: 'var(--tx2)', fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4 }}>Desglose</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(72px,1fr))', gap: 4 }}>
+                              {DENOMS_ADMIN.filter(v => c.desglose_efectivo[v] > 0).map(v => (
+                                <span key={v} style={{ fontSize: '.74rem', background: 'var(--s3)', borderRadius: 6, padding: '2px 6px', textAlign: 'center' }}>{v >= 1 ? `${v}€` : `${v * 100}c`} ×{c.desglose_efectivo[v]}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </tbody>
+        </table></div>}
     </>
   )
 }
@@ -2209,6 +2281,16 @@ export function PanelFichajes({ casetas, adminId }) {
     } catch(e) { showToast(e.message,'error') }
   }
 
+  // Añadir la salida a un turno que quedó abierto (se registra ahora; el admin
+  // ajusta la hora con el botón de editar salida si hace falta).
+  const añadirSalida = async t => {
+    try {
+      const row = await registrarSalidaAuto(t.entrada.empleado_id, t.entrada.caseta_id, null, 'Salida añadida por admin')
+      setFichajes(prev=>[...prev, row]); showToast('Salida registrada ✓ — ajusta la hora si hace falta')
+    } catch(e) { showToast('Error: '+e.message,'error') }
+  }
+  const TURNO_LARGO_MIN = 14*60  // aviso si el turno supera 14 h trabajadas
+
   // Agrupar fichajes por empleado y calcular turnos
   const porEmpleado = {}
   fichajes.forEach(f=>{
@@ -2327,13 +2409,18 @@ export function PanelFichajes({ casetas, adminId }) {
                             {t.salida.notas&&<div style={{fontSize:'.68rem',color:'var(--tx2)',fontStyle:'italic'}}>{t.salida.notas}</div>}</>
                           ):<span style={{color:t.enDescanso?'var(--gold)':'var(--green)',fontSize:'.75rem',fontWeight:700}}>{t.enDescanso?<><i className="fi fi-rr-mug-hot"/> Descanso</>:'En curso'}</span>}
                         </td>
-                        <td style={{fontWeight:700,color:t.enCurso?'var(--green)':'var(--ac)'}}>{fmtDuracion(t.minutosTrabajados)}</td>
+                        <td style={{fontWeight:700,color:t.minutosTrabajados>TURNO_LARGO_MIN?'var(--red)':t.enCurso?'var(--green)':'var(--ac)'}}>
+                          {fmtDuracion(t.minutosTrabajados)}
+                          {t.minutosTrabajados>TURNO_LARGO_MIN&&<span title="Turno muy largo — revisa si falta la salida" style={{marginLeft:5,fontSize:'.6rem',fontWeight:700,color:'var(--red)',background:'rgba(var(--red-rgb),.14)',border:'1px solid rgba(var(--red-rgb),.4)',borderRadius:6,padding:'0 5px'}}><i className="fi fi-rr-triangle-warning"/> revisar</span>}
+                        </td>
                         <td style={{color:t.minutosDescanso>0?'var(--gold)':'var(--tx2)',fontSize:'.82rem'}}>
                           {t.minutosDescanso>0?<><i className="fi fi-rr-mug-hot"/> {fmtDuracion(t.minutosDescanso)}</>:<span style={{opacity:.4}}>—</span>}
                         </td>
                         <td><div className="acell">
                           <button className="btn-edit" onClick={()=>abrirEdicion(t.entrada)}><i className="fi fi-rr-pencil"/> Ent.</button>
-                          {t.salida&&<button className="btn-edit" onClick={()=>abrirEdicion(t.salida)}><i className="fi fi-rr-pencil"/> Sal.</button>}
+                          {t.salida
+                            ? <button className="btn-edit" onClick={()=>abrirEdicion(t.salida)}><i className="fi fi-rr-pencil"/> Sal.</button>
+                            : <button className="btn-tog" style={{color:'var(--green)'}} onClick={()=>añadirSalida(t)}><i className="fi fi-rr-sign-out-alt"/> + Salida</button>}
                           <button className="btn-del" onClick={()=>eliminar(t.entrada)}><i className="fi fi-rr-cross"/></button>
                         </div></td>
                       </tr>
@@ -2752,6 +2839,7 @@ export default function AdminPanel({ perfil, casetas: casetasInit, onModoVenta }
       <div className="cnt">
         {tab==='dashboard'   && <Dashboard casetas={casetas}/>}
         {tab==='ventas'      && <PanelVentas casetas={casetas} onVerDia={irATickets}/>}
+        {tab==='cierres'     && <PanelCierres casetas={casetas}/>}
         {tab==='tickets'     && <PanelTickets casetas={casetas} filtroInicial={ticketFiltro}/>}
         {tab==='auditoria'   && <PanelAuditoria casetas={casetas}/>}
         {tab==='devoluciones'&& <PanelDevoluciones casetas={casetas}/>}

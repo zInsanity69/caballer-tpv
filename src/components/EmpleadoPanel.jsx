@@ -4,7 +4,7 @@ import { imprimirTicket, ticketRowToDatos } from '../lib/ticket.js'
 import Logo from './Logo.jsx'
 import {
   getProductos, getStockCaseta, getOfertas,
-  getCajaAbierta, abrirCaja, cerrarCaja,
+  getCajaAbierta, abrirCaja, cerrarCaja, getUltimoCambio,
   getResumenCaja, getRetiradas, registrarRetirada, getDevolucionesEfectivoCaja, crearTicket, getTicketsTurno, deleteTicket, updateTicket, updateTicketNota,
   getFavoritos, toggleFavorito, getFavoritosOfertas, toggleFavoritoOferta,
   getPedidos, crearPedido, confirmarRecepcionPedido, recibirItemPedido, getStockMinimos,
@@ -12,6 +12,7 @@ import {
   getLimitePolvora, getNECDetalle,
   getUltimoFichaje, fichar, getFichajesEmpleado, calcularTurnos, calcularEstado, fmtDuracion,
   getEmpleadosActivosCaseta, obtenerUbicacion, verificarUbicacion,
+  getFichajesAbiertosCaseta, registrarSalidaAuto,
   guardarFacturaCliente,
   registrarDevolucion, getTicketPorNumero, ajustarStockAuditado, getRascas,
 } from '../lib/api.js'
@@ -173,36 +174,43 @@ function EaBadge({ edad }) {
 const lineKey = (i) => `${i.id}${i.regalo ? '_R' : ''}`
 
 // ─── TICKET ITEM ─────────────────────────────────────────────
-function TicketItem({ item, ofertas, onQty, onDel, onSetQty, onRegalo }) {
+function TicketItem({ item, ofertas, onQty, onDel, onSetQty, onRegalo, enComb = 0 }) {
   const [open, setOpen] = useState(false)
   const lk = lineKey(item)
   const esRegalo = !!item.regalo
-  const { total: totalCalc, desglose } = calcularPrecio(item.id, item.cantidad, item.precio, ofertas)
-  const hayOferta = !esRegalo && !!desglose
-  const total = esRegalo ? 0 : totalCalc
+  // Unidades que NO están en una combinada → sobre ellas se aplica pack/normal.
+  // Las que sí (enComb) van a precio normal aquí (su ahorro sale en el footer).
+  const libres = Math.max(0, item.cantidad - enComb)
+  const { total: totalLibres, desglose } = calcularPrecio(item.id, libres, item.precio, ofertas)
+  const hayOferta = !esRegalo && !!desglose && libres > 0
+  const total = esRegalo ? 0 : totalLibres + enComb * item.precio
   return (
     <div className="titem">
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="tin">{item.nombre}{esRegalo && <span style={{ marginLeft: 6, fontSize: '.62rem', background: 'rgba(var(--green-rgb),.18)', color: 'var(--green)', border: '1px solid var(--green)', borderRadius: 6, padding: '0 5px', fontWeight: 700 }}>REGALO</span>}</div>
+        <div className="tin" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600 }}>{item.nombre}</span>
+          {esRegalo && <span style={{ fontSize: '.62rem', background: 'rgba(var(--green-rgb),.18)', color: 'var(--green)', border: '1px solid var(--green)', borderRadius: 6, padding: '0 5px', fontWeight: 700 }}>REGALO</span>}
+          {hayOferta && (
+            <span className="ob" style={{ cursor: 'pointer', margin: 0 }} onClick={() => setOpen(!open)}>OFERTA {open ? '▲' : '▼'}</span>
+          )}
+          {!esRegalo && enComb > 0 && (
+            <span title="Unidades incluidas en una oferta combinada" style={{ fontSize: '.6rem', fontWeight: 700, color: 'var(--blue)', background: 'rgba(var(--blue-rgb),.14)', border: '1px solid rgba(var(--blue-rgb),.35)', borderRadius: 6, padding: '1px 5px', whiteSpace: 'nowrap' }}>{enComb} en combo</span>
+          )}
+        </div>
         <div className="tc">
           <button className="qb" onClick={() => onQty(lk, -1)}>−</button>
           <input type="number" min="1" defaultValue={item.cantidad} key={item.cantidad}
             onFocus={e => e.target.select()}
             onBlur={e => onSetQty(lk, e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
-            style={{ width: 38, textAlign: 'center', background: 'var(--s3)', border: '1px solid var(--bd)', borderRadius: 6, color: 'var(--tx)', fontWeight: 700, fontFamily: "'DM Sans',sans-serif", padding: '3px 2px', fontSize: '.88rem' }}
+            style={{ width: 42, textAlign: 'center', background: 'var(--s3)', border: '1px solid var(--bd)', borderRadius: 6, color: 'var(--tx)', fontWeight: 700, fontFamily: "'DM Sans',sans-serif", padding: '4px 2px', fontSize: '.9rem' }}
             inputMode="numeric" />
           <button className="qb" onClick={() => onQty(lk, +1)}>+</button>
           <button data-nobubble="1" onClick={() => onRegalo(lk)} title="Marcar como regalo"
-            style={{ width: 26, height: 26, borderRadius: '50%', border: `1px solid ${esRegalo ? 'var(--green)' : 'var(--bd)'}`, background: esRegalo ? 'rgba(var(--green-rgb),.18)' : 'transparent', color: esRegalo ? 'var(--green)' : 'var(--tx2)', cursor: 'pointer', fontSize: '.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            style={{ width: 28, height: 28, borderRadius: '50%', border: `1px solid ${esRegalo ? 'var(--green)' : 'var(--bd)'}`, background: esRegalo ? 'rgba(var(--green-rgb),.18)' : 'transparent', color: esRegalo ? 'var(--green)' : 'var(--tx2)', cursor: 'pointer', fontSize: '.82rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <i className="fi fi-rr-gift"/>
           </button>
-          {hayOferta && (
-            <span className="ob" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
-              OFERTA {open ? '▲' : '▼'}
-            </span>
-          )}
-          <div className="tp2">
+          <div className="tp2" style={{ marginLeft: 'auto' }}>
             <div className="tpu">{esRegalo ? 'regalo' : hayOferta ? 'con oferta' : `${fmt(item.precio)}/u.`}</div>
             <div className="tpt" style={esRegalo ? { color: 'var(--green)' } : undefined}>{esRegalo ? 'REGALO' : fmt(total)}</div>
           </div>
@@ -716,8 +724,17 @@ function ModalRetirada({ caja, perfil, caseta, onClose, onDone }) {
 }
 
 // ─── MODAL CIERRE CAJA ────────────────────────────────────────
+// Denominaciones de € (billetes y monedas)
+const DENOMS_CIERRE = [
+  { v: 500, t: 'b' }, { v: 200, t: 'b' }, { v: 100, t: 'b' }, { v: 50, t: 'b' }, { v: 20, t: 'b' }, { v: 10, t: 'b' }, { v: 5, t: 'b' },
+  { v: 2, t: 'm' }, { v: 1, t: 'm' }, { v: 0.5, t: 'm' }, { v: 0.2, t: 'm' }, { v: 0.1, t: 'm' }, { v: 0.05, t: 'm' }, { v: 0.02, t: 'm' }, { v: 0.01, t: 'm' },
+]
+const r2 = x => Math.round(x * 100) / 100
+
 function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
-  const [contado,   setContado]   = useState('')
+  const [conteo,    setConteo]    = useState({})     // { "50": 3, "0.5": 12, ... }
+  const [cambio,    setCambio]    = useState('')      // fondo que se queda (editable)
+  const [cambioTocado, setCambioTocado] = useState(false)
   const [loading,   setLoading]   = useState(false)
   const [retiradas, setRetiradas] = useState([])
   const [devolucionesEf, setDevolucionesEf] = useState(0)
@@ -730,52 +747,107 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
   const totalEfectivo  = ventas.reduce((s, v) => s + (v.pago_efectivo ?? (v.metodo_pago === 'efectivo' ? v.total : 0)), 0)
   const totalTarjeta   = ventas.reduce((s, v) => s + (v.pago_tarjeta ?? (v.metodo_pago === 'tarjeta' ? v.total : 0)), 0)
   const totalRetiradas = retiradas.reduce((s, r) => s + (r.cantidad || 0), 0)
-  const esperado       = (caja.apertura_dinero || 0) + totalEfectivo - totalRetiradas - devolucionesEf
-  const diferencia     = (parseFloat(contado) || 0) - esperado
+  const esperado       = r2((caja.apertura_dinero || 0) + totalEfectivo - totalRetiradas - devolucionesEf)
+
+  const totalBilletes = r2(DENOMS_CIERRE.filter(d => d.t === 'b').reduce((s, d) => s + d.v * (conteo[d.v] || 0), 0))
+  const totalMonedas  = r2(DENOMS_CIERRE.filter(d => d.t === 'm').reduce((s, d) => s + d.v * (conteo[d.v] || 0), 0))
+  const totalContado  = r2(totalBilletes + totalMonedas)
+  const diferencia    = r2(totalContado - esperado)
+  // Cambio (fondo) que se queda para mañana: por defecto todas las monedas; editable
+  const cambioNum     = cambioTocado ? (parseFloat(cambio) || 0) : totalMonedas
+  const sobre         = r2(Math.max(0, totalContado - cambioNum))
+  const sobreLlevaMonedas = cambioNum < totalMonedas - 0.005   // el sobre debería ser solo billetes
+
+  const setQ = (v, val) => setConteo(prev => ({ ...prev, [v]: Math.max(0, parseInt(val) || 0) }))
+  const fmtDen = v => v >= 1 ? `${v} €` : `${(v * 100)} cts`
 
   const filas = [
-    ['Apertura',        fmt(caja.apertura_dinero || 0), 'var(--tx)'],
-    ['Ventas efectivo', `+${fmt(totalEfectivo)}`,        'var(--green)'],
-    ['Ventas tarjeta',  fmt(totalTarjeta),               'var(--blue)'],
-    ['Total tickets',   String(ventas.length),           'var(--tx)'],
+    ['Apertura (fondo)', fmt(caja.apertura_dinero || 0), 'var(--tx)'],
+    ['Ventas efectivo',  `+${fmt(totalEfectivo)}`,        'var(--green)'],
+    ['Ventas tarjeta',   fmt(totalTarjeta),               'var(--blue)'],
+    ['Total tickets',    String(ventas.length),           'var(--tx)'],
     ...(totalRetiradas > 0 ? [['Retiradas de caja', `−${fmt(totalRetiradas)}`, 'var(--gold)']] : []),
     ...(devolucionesEf > 0 ? [['Devoluciones efectivo', `−${fmt(devolucionesEf)}`, 'var(--red)']] : []),
   ]
 
+  const confirmar = async () => {
+    setLoading(true)
+    const detalle = { desglose: conteo, billetes: totalBilletes, monedas: totalMonedas, cambio: cambioNum, sobre, esperado, descuadre: diferencia }
+    await onCerrar(totalContado, esperado, detalle)
+    setLoading(false)
+  }
+
   return (
     <div className="mo">
-      <div className="mc wide">
+      <div className="mc wide" style={{ maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
         <ModalClose onClose={onClose} />
         <div className="mt-modal"><i className="fi fi-rr-lock"/> Cierre de Caja</div>
-        <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 13, marginBottom: 16, fontSize: '.83rem' }}>
-          {filas.map(([l, v, c]) => (
-            <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--bd)' }}>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+        <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 13, marginBottom: 14, fontSize: '.83rem' }}>
+          {filas.map(([l, v, c], i) => (
+            <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: i < filas.length - 1 ? '1px solid var(--bd)' : 'none' }}>
               <span style={{ color: 'var(--tx2)' }}>{l}</span>
               <span style={{ color: c, fontWeight: 600 }}>{v}</span>
             </div>
           ))}
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0', fontWeight: 700 }}>
-            <span>Esperado en caja</span>
-            <span style={{ color: 'var(--ac)' }}>{fmt(esperado)}</span>
-          </div>
         </div>
-        <div className="fg">
-          <label>Dinero contado físicamente</label>
-          <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }}
-            value={contado} onChange={e => setContado(e.target.value)}
-            placeholder="0,00" min="0" step=".01" autoFocus inputMode="decimal" />
+
+        {/* Conteo por denominaciones */}
+        <div style={{ fontSize: '.78rem', color: 'var(--tx2)', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px' }}>Cuenta el efectivo de la caja</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8, marginBottom: 12 }}>
+          {DENOMS_CIERRE.map(d => {
+            const q = conteo[d.v] || 0
+            return (
+              <div key={d.v} style={{ background: 'var(--s2)', border: `1px solid ${d.t === 'b' ? 'rgba(var(--green-rgb),.35)' : 'var(--bd)'}`, borderRadius: 'var(--rs)', padding: '7px 9px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
+                  <span style={{ fontSize: '.82rem', fontWeight: 800, color: d.t === 'b' ? 'var(--green)' : 'var(--tx)' }}>{fmtDen(d.v)}</span>
+                  <span style={{ fontSize: '.7rem', color: 'var(--tx2)', fontWeight: 700 }}>{q > 0 ? fmt(r2(d.v * q)) : ''}</span>
+                </div>
+                <input type="number" min="0" inputMode="numeric" value={q || ''} placeholder="0"
+                  onFocus={e => e.target.select()} onChange={e => setQ(d.v, e.target.value)}
+                  style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', background: 'var(--s3)', border: '1px solid var(--bd)', borderRadius: 8, color: 'var(--tx)', fontWeight: 700, textAlign: 'center', padding: '8px 4px', fontFamily: "'DM Sans',sans-serif", fontSize: '1.05rem' }} />
+              </div>
+            )
+          })}
         </div>
-        {contado && (
-          <div className="cbox">
-            <div className="clbl">{diferencia >= 0 ? 'Sobra en caja' : 'Falta en caja'}</div>
-            <div className="camt" style={{ color: diferencia < 0 ? 'var(--red)' : 'var(--green)' }}>
-              {diferencia >= 0 ? '+' : ''}{fmt(Math.abs(diferencia))}
-            </div>
-          </div>
+
+        {/* Totales del conteo */}
+        <div style={{ background: 'var(--s2)', borderRadius: 'var(--rs)', padding: 12, marginBottom: 12, fontSize: '.85rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: 'var(--tx2)' }}>Billetes</span><span style={{ fontWeight: 700, color: 'var(--green)' }}>{fmt(totalBilletes)}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: 'var(--tx2)' }}>Monedas</span><span style={{ fontWeight: 700 }}>{fmt(totalMonedas)}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: 'var(--tx2)' }}>Esperado en caja</span><span style={{ fontWeight: 700 }}>{fmt(esperado)}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 0', borderTop: '1px solid var(--bd)', marginTop: 4, fontWeight: 800 }}><span>Total contado</span><span style={{ color: 'var(--ac)' }}>{fmt(totalContado)}</span></div>
+          {(() => {
+            const cuadra = Math.abs(diferencia) < 0.01
+            const col = cuadra ? 'var(--green)' : diferencia < 0 ? 'var(--red)' : 'var(--gold)'
+            return (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', marginTop: 6, borderRadius: 'var(--rs)', background: `rgba(${cuadra ? 'var(--green-rgb)' : diferencia < 0 ? 'var(--red-rgb)' : 'var(--gold-rgb)'},.12)`, border: `1px solid ${col}`, fontWeight: 800 }}>
+                <span style={{ color: col }}><i className={`fi ${cuadra ? 'fi-rr-check' : 'fi-rr-triangle-warning'}`}/> Descuadre</span>
+                <span style={{ color: col }}>{cuadra ? 'Cuadra ✓' : `${diferencia > 0 ? '+' : ''}${fmt(diferencia)} (${diferencia < 0 ? 'falta' : 'sobra'})`}</span>
+              </div>
+            )
+          })()}
+        </div>
+
+        {/* Cambio que se queda + sobre */}
+        <div className="fg" style={{ marginBottom: 8 }}>
+          <label>Cambio que se queda en la caja (fondo para mañana)</label>
+          <input type="number" className="bi" style={{ marginBottom: 0 }} min="0" step=".01" inputMode="decimal"
+            value={cambioTocado ? cambio : (totalMonedas || '')} placeholder="0,00"
+            onFocus={e => e.target.select()}
+            onChange={e => { setCambioTocado(true); setCambio(e.target.value) }} />
+          <div style={{ fontSize: '.72rem', color: 'var(--tx2)', marginTop: 4 }}>Sugerido: todas las monedas ({fmt(totalMonedas)}). Súbelo si quieres retener billetes para cambios.</div>
+        </div>
+        <div className="cbox" style={{ background: 'rgba(var(--green-rgb),.1)', border: '1px solid rgba(var(--green-rgb),.4)' }}>
+          <div className="clbl"><i className="fi fi-rr-envelope"/> Para el sobre (a depositar)</div>
+          <div className="camt" style={{ color: 'var(--green)' }}>{fmt(sobre)}</div>
+        </div>
+        {sobreLlevaMonedas && (
+          <div style={{ fontSize: '.76rem', color: 'var(--gold)', marginTop: 6 }}><i className="fi fi-rr-triangle-warning"/> Dejas menos que las monedas: el sobre incluiría monedas. Normalmente al sobre solo van billetes.</div>
         )}
-        <button className="btn-p" disabled={loading}
-          onClick={async () => { setLoading(true); await onCerrar(parseFloat(contado) || 0, esperado); setLoading(false) }}>
-          {loading ? 'Cerrando...' : 'Confirmar cierre'}
+        </div>
+        <button className="btn-p" disabled={loading || totalContado <= 0} onClick={confirmar} style={{ marginTop: 12 }}>
+          {loading ? 'Cerrando...' : '✓ Confirmar cierre'}
         </button>
         <button className="btn-s" onClick={onClose}>Cancelar</button>
       </div>
@@ -1345,7 +1417,7 @@ function ModalAjusteStock({ caseta, perfil, productos, stock, onClose, onDone, s
             </div>
             <div className="fg">
               <label>Stock real (corregido)</label>
-              <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }} value={nueva} min={0} inputMode="numeric" autoFocus onChange={e => setNueva(e.target.value)} />
+              <input type="number" className="bi" style={{ fontSize: '1.4rem', marginBottom: 0 }} value={nueva} min={0} inputMode="numeric" autoFocus onFocus={e => e.target.select()} onChange={e => setNueva(e.target.value)} />
             </div>
             {delta !== 0 && <div style={{ fontSize: '.8rem', color: delta > 0 ? 'var(--green)' : 'var(--red)', margin: '4px 0', fontWeight: 700 }}>{delta > 0 ? `+${delta}` : delta} respecto al sistema</div>}
             <div className="fg" style={{ marginTop: 8 }}>
@@ -2653,6 +2725,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const [showFactura,    setShowFactura]    = useState(false)
   const [toast,          setToast]          = useState(null)
   const [apertura,       setApertura]       = useState('')
+  const [ultimoCambio,   setUltimoCambio]   = useState(null)   // cambio dejado en el último cierre (fondo sugerido)
   // ── Persistidos en sessionStorage para sobrevivir a cambios de página ──
   const [modoRapido,     setModoRapido]     = useState(() => localStorage.getItem('tpv_rapido') === '1')
   const [noImprimir,     setNoImprimir]     = useState(() => localStorage.getItem('tpv_noimprimir') === '1') // por defecto SÍ se imprime
@@ -2953,6 +3026,24 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
   const descuentoImporte = Math.round(totalBruto * descuento) / 100
   const total = Math.max(0, totalBruto - descuentoImporte)
 
+  // Unidades de cada producto que se lleva alguna oferta COMBINADA (mismo orden
+  // que el motor). La línea del ticket solo aplica pack/normal a lo que sobra;
+  // así el desglose por línea cuadra con el total (el ahorro de la combinada va
+  // en el footer y sus unidades van a precio normal en la línea).
+  const consumidasComb = (() => {
+    const restante = new Map(ticket.filter(i => !i.regalo).map(i => [i.id, i.cantidad]))
+    const consumidas = new Map()
+    for (const o of ofertas.filter(x => x.tipo === 'combinada' && x.activa !== false)) {
+      const veces = vecesAplicables(o, restante)
+      if (veces <= 0) continue
+      for (const req of o.productos_requeridos) {
+        restante.set(req.producto_id, (restante.get(req.producto_id) || 0) - req.cantidad * veces)
+        consumidas.set(req.producto_id, (consumidas.get(req.producto_id) || 0) + req.cantidad * veces)
+      }
+    }
+    return consumidas
+  })()
+
   const confirmarVenta = async ({ metodo, dineroDado, cambio, cliente, pagoEfectivo, pagoTarjeta }) => {
     // Doble check en el momento de ejecutar (no en el render)
     if (!caja) { showToast('La caja está cerrada — no se puede registrar la venta', 'error'); return }
@@ -3095,9 +3186,30 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
     prevTicketLen.current = ticket.length
   }, [ticket.length])
 
-  const confirmarCierre = async (contado, esperadoCierre) => {
+  // Al abrir la caja, sugerir como fondo el cambio dejado en el último cierre
+  useEffect(() => {
+    if (showAperturaCaja && caseta) getUltimoCambio(caseta.id).then(setUltimoCambio).catch(() => {})
+  }, [showAperturaCaja, caseta])
+
+  const confirmarCierre = async (contado, esperadoCierre, detalle = null) => {
     try {
-      await cerrarCaja(caja.id, perfil.id, contado, { nombreCaseta: caseta.nombre, esperado: esperadoCierre })
+      // Fichajes que siguen abiertos → ofrecer registrar su salida (hora del cierre)
+      try {
+        const abiertos = await getFichajesAbiertosCaseta(caseta.id)
+        if (abiertos.length > 0) {
+          const nombres = abiertos.map(a => a.nombre + (a.tipo === 'INICIO_DESCANSO' ? ' (en descanso)' : '')).join(', ')
+          if (window.confirm(`Estos empleados siguen fichados:\n${nombres}.\n\n¿Registrar su salida ahora al cerrar la caja?`)) {
+            for (const a of abiertos) {
+              if (a.tipo === 'INICIO_DESCANSO') {
+                await registrarSalidaAuto(a.empleado_id, caseta.id, a.timestamp, 'Salida automática al cerrar caja (estaba en descanso — revisar)').catch(() => {})
+              } else {
+                await registrarSalidaAuto(a.empleado_id, caseta.id, null, 'Salida automática al cerrar caja').catch(() => {})
+              }
+            }
+          }
+        }
+      } catch { /* si falla, no bloquea el cierre */ }
+      await cerrarCaja(caja.id, perfil.id, contado, { nombreCaseta: caseta.nombre, esperado: esperadoCierre }, detalle)
       // Cerrar modales y resetear caja inmediatamente
       setShowCierre(false)
       setShowFichajes(false)
@@ -3661,23 +3773,44 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
               )
             )}
 
-            {/* Tab ofertas */}
-            {tabTPV === 'ofertas' && (
-              <div style={{ padding: 12, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {ofertas.filter(o => o.tipo === 'combinada').filter(o => {
-                  if (!busq) return true
-                  const b = busq.toLowerCase()
-                  if ((o.etiqueta || o.nombre || '').toLowerCase().includes(b)) return true
-                  return (o.productos_requeridos || []).some(r => productos.find(p => p.id === r.producto_id)?.nombre.toLowerCase().includes(b))
-                }).map(renderOfertaComb)}
-                {[...new Map(ofertas.filter(o => !o.tipo || o.tipo === 'pack').map(o => [o.producto_id, o])).values()].filter(o => {
-                  if (!busq) return true
-                  const b = busq.toLowerCase()
-                  const prod = productos.find(p => p.id === o.producto_id)
-                  return (prod?.nombre.toLowerCase().includes(b)) || (o.etiqueta || o.nombre || '').toLowerCase().includes(b)
-                }).map(renderOfertaPack)}
-              </div>
-            )}
+            {/* Tab ofertas: 50/50 — combinadas arriba, packs abajo, cada mitad con scroll */}
+            {tabTPV === 'ofertas' && (() => {
+              const b = busq.toLowerCase()
+              const combs = ofertas.filter(o => o.tipo === 'combinada').filter(o => {
+                if (!busq) return true
+                if ((o.etiqueta || o.nombre || '').toLowerCase().includes(b)) return true
+                return (o.productos_requeridos || []).some(r => productos.find(p => p.id === r.producto_id)?.nombre.toLowerCase().includes(b))
+              })
+              const packs = [...new Map(ofertas.filter(o => !o.tipo || o.tipo === 'pack').map(o => [o.producto_id, o])).values()].filter(o => {
+                if (!busq) return true
+                const prod = productos.find(p => p.id === o.producto_id)
+                return (prod?.nombre.toLowerCase().includes(b)) || (o.etiqueta || o.nombre || '').toLowerCase().includes(b)
+              })
+              const hdr = { padding: '11px 12px 6px', fontSize: '.72rem', fontWeight: 700, color: 'var(--tx2)', textTransform: 'uppercase', letterSpacing: '.5px', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }
+              return (
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  {combs.length > 0 && (
+                    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: packs.length > 0 ? '1px solid var(--bd)' : 'none' }}>
+                      {packs.length > 0 && <div style={hdr}><i className="fi fi-rr-gift" style={{ color: 'var(--blue)' }}/> Ofertas combinadas</div>}
+                      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: packs.length > 0 ? '0 12px 12px' : '12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {combs.map(renderOfertaComb)}
+                      </div>
+                    </div>
+                  )}
+                  {packs.length > 0 && (
+                    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                      {combs.length > 0 && <div style={hdr}><i className="fi fi-rr-box" style={{ color: 'var(--gold)' }}/> Packs</div>}
+                      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: combs.length > 0 ? '0 12px 12px' : '12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {packs.map(renderOfertaPack)}
+                      </div>
+                    </div>
+                  )}
+                  {combs.length === 0 && packs.length === 0 && (
+                    <div style={{ textAlign: 'center', color: 'var(--tx2)', padding: 30, fontSize: '.85rem' }}>Sin ofertas</div>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           {/* Panel ticket */}
@@ -3692,6 +3825,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                 : ticket.map(item => (
                   <TicketItem key={lineKey(item)} item={item} ofertas={ofertas} onQty={cambiarQty}
                     onSetQty={fijarQty} onRegalo={toggleRegalo}
+                    enComb={item.regalo ? 0 : (consumidasComb.get(item.id) || 0)}
                     onDel={key => setTicket(p => p.filter(i => lineKey(i) !== key))} />
                 ))
               }
@@ -3720,7 +3854,10 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                     </div>
                   )
                 }
-                return rows
+                // Si hay muchas combinadas, se limita la altura con scroll propio
+                // para que no se coman el ticket ni empujen el total.
+                if (rows.length === 0) return null
+                return <div style={{ maxHeight: rows.length > 4 ? 132 : undefined, overflowY: rows.length > 4 ? 'auto' : 'visible' }}>{rows}</div>
               })()}
                 {ticket.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0', borderTop: '1px dashed rgba(255,255,255,.1)', margin: '2px 0' }}>
@@ -3850,6 +3987,12 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
             <div style={{ fontSize: '.85rem', color: 'var(--tx2)', marginBottom: 16 }}>
               Hola <strong style={{ color: 'var(--tx)' }}>{perfil.nombre}</strong> · {caseta?.nombre}
             </div>
+            {ultimoCambio != null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(var(--ac-rgb),.1)', border: '1px solid rgba(var(--ac-rgb),.3)', borderRadius: 'var(--rs)', padding: '9px 12px', marginBottom: 12, fontSize: '.8rem' }}>
+                <span style={{ color: 'var(--tx2)', flex: 1 }}>Cambio del último cierre: <strong style={{ color: 'var(--tx)' }}>{fmt(ultimoCambio)}</strong></span>
+                <button onClick={() => setApertura(String(ultimoCambio))} style={{ padding: '4px 10px', borderRadius: 'var(--rs)', background: 'var(--ac)', border: 'none', color: 'white', fontWeight: 700, fontSize: '.74rem', cursor: 'pointer', fontFamily: "'DM Sans',sans-serif" }}>Usar</button>
+              </div>
+            )}
             <div className="fg">
               <label>Dinero inicial en caja</label>
               <input className="bi" type="number" placeholder="0,00" value={apertura}

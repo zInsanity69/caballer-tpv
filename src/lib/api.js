@@ -599,10 +599,23 @@ export async function abrirCaja(casetaId, empleadoId, aperturaDinero, ctx = null
   return cajaCon || data
 }
 
-export async function cerrarCaja(cajaId, empleadoId, dineroContado, ctx = null) {
-  const { error } = await supabase.from('cajas')
-    .update({ estado: 'CERRADA', cerrada_por: empleadoId, cerrada_en: new Date().toISOString(), dinero_contado: dineroContado })
-    .eq('id', cajaId)
+export async function cerrarCaja(cajaId, empleadoId, dineroContado, ctx = null, detalle = null) {
+  const upd = { estado: 'CERRADA', cerrada_por: empleadoId, cerrada_en: new Date().toISOString(), dinero_contado: dineroContado }
+  if (detalle) {
+    // Se guardan aparte por si la migración 022 aún no está aplicada (no rompe el cierre)
+    try {
+      await supabase.from('cajas').update({
+        desglose_efectivo: detalle.desglose || null,
+        total_billetes:    detalle.billetes ?? null,
+        total_monedas:     detalle.monedas ?? null,
+        cambio_dejado:     detalle.cambio ?? null,
+        sobre:             detalle.sobre ?? null,
+        esperado:          detalle.esperado ?? null,
+        descuadre:         detalle.descuadre ?? null,
+      }).eq('id', cajaId)
+    } catch { /* columnas nuevas aún no existen */ }
+  }
+  const { error } = await supabase.from('cajas').update(upd).eq('id', cajaId)
   if (error) throw error
   if (ctx?.esperado !== undefined) {
     const descuadre = dineroContado - ctx.esperado
@@ -613,6 +626,29 @@ export async function cerrarCaja(cajaId, empleadoId, dineroContado, ctx = null) 
         `💰 <b>Descuadre de caja</b>${caseta ? ` en ${caseta}` : ''}\nEsperado: <b>${ctx.esperado.toFixed(2)}€</b> · Contado: <b>${dineroContado.toFixed(2)}€</b> · Diferencia: <b>${signo}${descuadre.toFixed(2)}€</b>`)
     }
   }
+}
+
+// Último cambio dejado en una caseta (= apertura sugerida del día siguiente).
+export async function getUltimoCambio(casetaId) {
+  const { data } = await supabase.from('cajas')
+    .select('cambio_dejado')
+    .eq('caseta_id', casetaId).eq('estado', 'CERRADA')
+    .order('cerrada_en', { ascending: false }).limit(1)
+  return data?.[0]?.cambio_dejado ?? null
+}
+
+// Cierres de caja (para el panel de admin). Rango opcional por fecha.
+export async function getCierresCaja(casetaId = null, desde = null, hasta = null) {
+  let q = supabase.from('cajas')
+    .select('*, casetas(nombre), abre:abierta_por(nombre), cierra:cerrada_por(nombre)')
+    .eq('estado', 'CERRADA')
+    .order('cerrada_en', { ascending: false })
+  if (casetaId) q = q.eq('caseta_id', casetaId)
+  if (desde) q = q.gte('cerrada_en', desde)
+  if (hasta) q = q.lte('cerrada_en', hasta)
+  const { data, error } = await q.limit(200)
+  if (error) throw error
+  return data || []
 }
 
 export async function getResumenCaja(cajaId) {
@@ -1226,6 +1262,32 @@ export async function getEmpleadosActivosCaseta(casetaId, empleadoId) {
     .map(([empId]) => empId)
 
   return activos
+}
+
+// Empleados que siguen fichados en una caseta (último fichaje ≠ SALIDA), con
+// nombre, tipo y hora, para ofrecer registrar su salida al cerrar la caja.
+export async function getFichajesAbiertosCaseta(casetaId) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
+  const { data } = await supabase.from('fichajes')
+    .select('empleado_id, tipo, timestamp, perfiles(nombre)')
+    .eq('caseta_id', casetaId)
+    .gte('timestamp', new Date(hoy.getTime() - 8 * 60 * 60 * 1000).toISOString())
+    .order('timestamp', { ascending: false })
+  const porEmp = {}
+  for (const f of (data || [])) if (!porEmp[f.empleado_id]) porEmp[f.empleado_id] = f
+  return Object.values(porEmp)
+    .filter(f => f.tipo !== 'SALIDA')
+    .map(f => ({ empleado_id: f.empleado_id, nombre: f.perfiles?.nombre || '—', tipo: f.tipo, timestamp: f.timestamp }))
+}
+
+// Registrar una SALIDA (opcionalmente con timestamp e incidencia). Se usa al
+// cerrar la caja para cerrar los fichajes que quedaron abiertos.
+export async function registrarSalidaAuto(empleadoId, casetaId, timestampISO = null, notas = null) {
+  const fila = { empleado_id: empleadoId, caseta_id: casetaId, tipo: 'SALIDA', notas: notas || null }
+  if (timestampISO) fila.timestamp = timestampISO
+  const { data, error } = await supabase.from('fichajes').insert(fila).select().single()
+  if (error) throw error
+  return data
 }
 
 // Calcular estado actual a partir del último fichaje

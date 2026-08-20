@@ -175,7 +175,9 @@ tr:hover td { background: var(--s2); }
 .frow .fg { margin-bottom: 0; }
 
 /* ─── MODAL ──────────────────────────────────────────── */
-.mo { position: fixed; inset: 0; background: rgba(0,0,0,.82); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); }
+.mo { position: fixed; inset: 0; background: rgba(0,0,0,.82); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); overscroll-behavior: contain; }
+/* Con un modal abierto, bloquea el scroll del contenido de detrás */
+body:has(.mo) { overflow: hidden; }
 .mc { position: relative; background: var(--s1); border: 1px solid var(--bd); border-radius: 20px; padding: 28px; width: 100%; max-width: 460px; max-height: 92vh; overflow-y: auto; }
 .mc.wide { max-width: 640px; }
 .mt-modal { font-family: 'Bebas Neue', sans-serif; font-size: 1.65rem; margin-bottom: 16px; letter-spacing: 1px; padding-right: 34px; }

@@ -10,6 +10,14 @@ export default function ModalClose({ onClose }) {
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
 
+  // Al abrir el modal, quitar el foco de lo que hubiera detrás (p. ej. el
+  // buscador) para que las teclas no se cuelen al fondo. El bloqueo de scroll
+  // del fondo lo hace el CSS (body:has(.mo){overflow:hidden}).
+  useEffect(() => {
+    const el = document.activeElement
+    if (el && typeof el.blur === 'function') el.blur()
+  }, [])
+
   return (
     <button type="button" className="modal-x" onClick={onClose} aria-label="Cerrar" title="Cerrar (Esc)">
       <i className="fi fi-rr-cross-small" />
