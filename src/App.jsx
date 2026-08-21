@@ -6,6 +6,7 @@ import AdminPanel from './components/AdminPanel.jsx'
 import EmpleadoPanel from './components/EmpleadoPanel.jsx'
 import RRHHPanel from './components/RRHHPanel.jsx'
 import Logo from './components/Logo.jsx'
+import { comprobarAgente } from './lib/printAgent.js'
 import './styles.css'
 
 export default function App() {
@@ -21,6 +22,21 @@ export default function App() {
     if (ventaCaseta) localStorage.setItem('admin_venta_caseta', ventaCaseta)
     else localStorage.removeItem('admin_venta_caseta')
   }, [ventaCaseta])
+
+  // Comprobar si hay agente de impresión local (Linux). Se cachea para decidir
+  // la vía de impresión sin romper el gesto del clic. Sondea SOLO hasta que lo
+  // encuentra (una petición diminuta a localhost); en cuanto está, deja de
+  // sondear (no sobrecarga nada).
+  useEffect(() => {
+    let stop = false, timer = null
+    const check = async () => {
+      if (stop) return
+      const ok = await comprobarAgente()
+      if (!ok && !stop) timer = setTimeout(check, 60000)
+    }
+    check()
+    return () => { stop = true; if (timer) clearTimeout(timer) }
+  }, [])
 
   // Escuchar cambios de sesión
   useEffect(() => {

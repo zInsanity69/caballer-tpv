@@ -5,6 +5,7 @@
 // (solo negro/blanco), así que un SVG de alto contraste sale nítido en pantalla
 // y en papel. Va inline (?raw) para no depender de cargar una imagen externa.
 import logoSVG from '../assets/logo_caballer_monoV2.svg?raw'
+import { agenteEstaActivo, imprimirHtmlPorAgente, svgToPng } from './printAgent.js'
 
 // Configuración fiscal de la empresa (emisor)
 export const CONFIG_EMPRESA = {
@@ -205,7 +206,7 @@ export function generarTicketHTML(datos, opts = {}) {
 <body>
 
   <!-- LOGO (blanco y negro) -->
-  <div class="logo">${logoSVG}</div>
+  <div class="logo">${opts.logoImg ? `<img src="${opts.logoImg}" alt="logo" style="width:28mm;display:block;margin:0 auto"/>` : logoSVG}</div>
   <hr class="sep-solid">
 
   <!-- EMPRESA / FACTURA -->
@@ -268,7 +269,7 @@ export function generarTicketHTML(datos, opts = {}) {
   <hr class="sep-dash">
 
   <!-- CÓDIGO DE BARRAS (localizar el ticket con la pistola) -->
-  ${barcode ? `<div class="barcode">${barcode}<div class="barcode-num">${esc(ticketNum)}</div></div>` : ''}
+  ${barcode ? `<div class="barcode">${opts.barcodeImg ? `<img src="${opts.barcodeImg}" alt="barcode" style="width:60mm;max-width:92%;height:13mm;display:block;margin:0 auto"/>` : barcode}<div class="barcode-num">${esc(ticketNum)}</div></div>` : ''}
 
   <!-- TEXTO LEGAL -->
   <div class="legal">${esc(CONFIG_EMPRESA.textoLegal)}</div>
@@ -290,6 +291,34 @@ export function generarTicketHTML(datos, opts = {}) {
  * @param {object} [opts] { esFactura, cliente, autoPrint }
  */
 export function imprimirTicket(datos, opts = {}) {
+  // Vía A (Linux): si el agente local está activo, renderizamos el ticket a
+  // imagen y lo mandamos en ESC/POS crudo (salta el driver que falla). La
+  // decisión es síncrona (flag cacheado al arrancar) para no perder el gesto.
+  if (agenteEstaActivo()) {
+    imprimirPorAgente(datos, opts).catch(err => {
+      console.warn('Agente de impresión falló:', err)
+      alert('No se pudo imprimir por el agente. Revisa la impresora o el agente de impresión.')
+    })
+    return
+  }
+  // Vía B (Windows y donde no haya agente): ventana del navegador + window.print()
+  imprimirPorNavegador(datos, opts)
+}
+
+// Vía A — imprime a través del agente local (ESC/POS raster de la imagen)
+async function imprimirPorAgente(datos, opts) {
+  const ticketNum = datos.ticketNum || datos.numero_ticket || ''
+  // Logo y barcode a PNG para que html2canvas los rasterice bien
+  const [logoPng, barcodePng] = await Promise.all([
+    svgToPng(logoSVG, 300),
+    ticketNum ? svgToPng(barcodeSVG(ticketNum), 480) : Promise.resolve(null),
+  ])
+  const html = generarTicketHTML(datos, { ...opts, autoPrint: false, logoImg: logoPng || undefined, barcodeImg: barcodePng || undefined })
+  await imprimirHtmlPorAgente(html)
+}
+
+// Vía B — ventana del navegador (comportamiento de siempre)
+function imprimirPorNavegador(datos, opts = {}) {
   // Por defecto se imprime directo: al pulsar "imprimir" la orden sale sola a la
   // impresora conectada sin que el usuario tenga que pulsar nada más.
   const autoPrint = opts.autoPrint ?? true

@@ -524,6 +524,7 @@ function ModalPago({ total, onConfirm, onClose }) {
       if (k === 'e') { e.preventDefault(); setMetodo('efectivo') }
       else if (k === 't') { e.preventDefault(); setMetodo('tarjeta') }
       else if (k === 'm') { e.preventDefault(); setMetodo('mixto'); setRecibido('') }
+      else if (k === 'f' && !cliente) { e.preventDefault(); setShowFact(true) } // hacer factura
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -732,9 +733,16 @@ const DENOMS_CIERRE = [
 const r2 = x => Math.round(x * 100) / 100
 
 function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
-  const [conteo,    setConteo]    = useState({})     // { "50": 3, "0.5": 12, ... }
-  const [cambio,    setCambio]    = useState('')      // fondo que se queda (editable)
-  const [cambioTocado, setCambioTocado] = useState(false)
+  // Se recuerda lo tecleado por si se cierra el modal sin querer (no hay que
+  // recontar). Se guarda por caja y se limpia al confirmar el cierre.
+  const CKEY = `cierre_conteo_${caja.id}`
+  const guardado = (() => { try { return JSON.parse(sessionStorage.getItem(CKEY) || '{}') } catch { return {} } })()
+  const [conteo,    setConteo]    = useState(guardado.conteo || {})     // { "50": 3, "0.5": 12, ... }
+  const [cambio,    setCambio]    = useState(guardado.cambio || '')      // fondo que se queda (editable)
+  const [cambioTocado, setCambioTocado] = useState(!!guardado.cambioTocado)
+  useEffect(() => {
+    sessionStorage.setItem(CKEY, JSON.stringify({ conteo, cambio, cambioTocado }))
+  }, [conteo, cambio, cambioTocado])
   const [loading,   setLoading]   = useState(false)
   const [retiradas, setRetiradas] = useState([])
   const [devolucionesEf, setDevolucionesEf] = useState(0)
@@ -774,6 +782,7 @@ function ModalCierreCaja({ caja, caseta, ventas, onClose, onCerrar }) {
     setLoading(true)
     const detalle = { desglose: conteo, billetes: totalBilletes, monedas: totalMonedas, cambio: cambioNum, sobre, esperado, descuadre: diferencia }
     await onCerrar(totalContado, esperado, detalle)
+    sessionStorage.removeItem(CKEY)   // cierre hecho → olvidar lo tecleado
     setLoading(false)
   }
 
@@ -3186,6 +3195,20 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
     prevTicketLen.current = ticket.length
   }, [ticket.length])
 
+  // Atajos del menú "Venta confirmada": Enter = nueva venta · I = imprimir ticket · F = factura
+  useEffect(() => {
+    if (!showOk) return
+    const onKey = (e) => {
+      if (showFactura) return
+      const k = e.key.toLowerCase()
+      if (e.key === 'Enter') { e.preventDefault(); cerrarOk() }
+      else if (k === 'i') { e.preventDefault(); imprimirTicket(showOk); cerrarOk() }
+      else if (k === 'f') { e.preventDefault(); abrirFactura() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showOk, showFactura])
+
   // Al abrir la caja, sugerir como fondo el cambio dejado en el último cierre
   useEffect(() => {
     if (showAperturaCaja && caseta) getUltimoCambio(caseta.id).then(setUltimoCambio).catch(() => {})
@@ -3966,7 +3989,7 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
         </div>
       )}
       {showPago && (
-        <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => setShowPago(false)} />
+        <ModalPago total={total} onConfirm={confirmarVenta} onClose={() => { setShowPago(false); setTimeout(() => busqRef.current?.focus(), 60) }} />
       )}
       {showCierre && (
         <ModalCierreCaja caja={caja} caseta={caseta?.nombre} ventas={ventas}
@@ -4143,6 +4166,8 @@ export default function EmpleadoPanel({ perfil, casetas, onSalirVenta }) {
                 ['F4', 'Marcar la última línea como regalo'],
                 ['Enter', 'Añadir el producto buscado · confirmar en el cobro'],
                 ['E / T / M', 'En el cobro: Efectivo / Tarjeta / Mixto'],
+                ['F', 'En el cobro: hacer factura'],
+                ['Enter / I / F', 'Venta confirmada: Nueva venta / Imprimir ticket / Factura'],
                 ['+ / −', 'Subir / bajar cantidad de la última línea'],
                 ['Supr / F8', 'Quitar la última línea del ticket'],
                 ['Esc', 'Cerrar ventana o limpiar el buscador'],
