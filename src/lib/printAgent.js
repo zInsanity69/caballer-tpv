@@ -79,8 +79,9 @@ function canvasAEscpos(canvas) {
     for (let k = 0; k < bh * bpr; k++) out.push(raster[off + k])
   }
   // Avanzar antes de cortar para que la ÚLTIMA línea pase la cuchilla (hay
-  // ~1,5 cm entre el cabezal y el cutter; si no, corta el final del ticket).
-  out.push(0x1b, 0x4a, 0x78)             // ESC J 120 → avanza 120 puntos (~15 mm)
+  // ~1,5 cm entre el cabezal y el cutter). Usamos saltos de línea, que en esta
+  // impresora avanzan de forma fiable. Sube/baja este número para ajustar.
+  for (let i = 0; i < 6; i++) out.push(0x0a)  // 6 saltos de línea
   out.push(0x1d, 0x56, 0x00)             // corte total
   return new Uint8Array(out)
 }
