@@ -78,7 +78,10 @@ function canvasAEscpos(canvas) {
     const off = y0 * bpr
     for (let k = 0; k < bh * bpr; k++) out.push(raster[off + k])
   }
-  out.push(0x0a, 0x0a, 0x0a, 0x1d, 0x56, 0x00) // avance + corte
+  // Avanzar antes de cortar para que la ÚLTIMA línea pase la cuchilla (hay
+  // ~1,5 cm entre el cabezal y el cutter; si no, corta el final del ticket).
+  out.push(0x1b, 0x4a, 0x78)             // ESC J 120 → avanza 120 puntos (~15 mm)
+  out.push(0x1d, 0x56, 0x00)             // corte total
   return new Uint8Array(out)
 }
 
